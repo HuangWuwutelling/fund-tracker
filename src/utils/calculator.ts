@@ -16,20 +16,33 @@ export function calcShares(transactions: Transaction[]): number {
   }, 0);
 }
 
-/** 计算某只基金的持仓成本 */
+/** 计算某只基金的持仓成本（卖出时按成本比例扣减） */
 export function calcCost(transactions: Transaction[]): number {
-  return transactions.reduce((sum, tx) => {
+  let totalCost = 0;
+  let totalShares = 0;
+
+  for (const tx of transactions) {
     switch (tx.type) {
       case 'buy':
-        return sum + tx.amount + tx.fee;
-      case 'sell':
-        return sum - (tx.amount - tx.fee);
+        totalCost += tx.amount + tx.fee;
+        totalShares += tx.shares;
+        break;
+      case 'sell': {
+        // 按平均成本比例扣减
+        if (totalShares > 0) {
+          const avgCost = totalCost / totalShares;
+          totalCost -= avgCost * tx.shares;
+          totalShares -= tx.shares;
+        }
+        break;
+      }
       case 'dividend':
-        return sum;
-      default:
-        return sum;
+        totalShares += tx.shares;
+        break;
     }
-  }, 0);
+  }
+
+  return Math.max(0, totalCost);
 }
 
 /** 计算当前市值 */

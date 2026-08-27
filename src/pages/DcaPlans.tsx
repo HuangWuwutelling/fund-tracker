@@ -17,15 +17,21 @@ export default function DcaPlans() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
 
-  // DCA statistics
+  // DCA statistics: count each fund only once, use only DCA-linked amounts
   const stats = useMemo(() => {
+    const seenFundIds = new Set<string>();
     let totalInvested = 0;
     let totalMarketValue = 0;
 
     for (const plan of dcaPlans) {
       const fund = funds.find((f) => f.id === plan.fundId);
-      if (!fund) continue;
-      const planTxs = transactions.filter((t) => t.fundId === plan.fundId && t.type === 'buy');
+      if (!fund || seenFundIds.has(plan.fundId)) continue;
+      seenFundIds.add(plan.fundId);
+
+      // Only count buy transactions that match the DCA amount (approximate DCA buys)
+      const planTxs = transactions.filter(
+        (t) => t.fundId === plan.fundId && t.type === 'buy' && Math.abs(t.amount - plan.amount) < 1
+      );
       const shares = calcShares(planTxs);
       const cost = calcCost(planTxs);
       const marketValue = calcMarketValue(shares, fund.currentNav);
@@ -43,6 +49,7 @@ export default function DcaPlans() {
       const values = await form.validateFields();
       const frequency = values.frequency as DcaPlan['frequency'];
 
+      const existing = editingId ? dcaPlans.find((p) => p.id === editingId) : null;
       const plan: DcaPlan = {
         id: editingId ?? uuid(),
         fundId: values.fundId as string,
@@ -50,7 +57,7 @@ export default function DcaPlans() {
         frequency,
         dayOfWeek: frequency === 'weekly' || frequency === 'biweekly' ? (values.dayOfWeek as number) : undefined,
         dayOfMonth: frequency === 'monthly' ? (values.dayOfMonth as number) : undefined,
-        active: true,
+        active: existing?.active ?? true,
         startDate: (values.startDate as dayjs.Dayjs).format('YYYY-MM-DD'),
       };
 

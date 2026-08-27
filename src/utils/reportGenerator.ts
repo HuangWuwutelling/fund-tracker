@@ -145,7 +145,14 @@ export function generateWeeklyReport(
     if (plan.frequency === 'weekly') {
       dcaExpected += 1;
     } else if (plan.frequency === 'biweekly') {
-      dcaExpected += 1; // simplified
+      // Check if this week falls on a DCA week based on start date
+      const start = new Date(plan.startDate);
+      const weekMonday = new Date(weekStart);
+      const diffDays = Math.round((weekMonday.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      const diffWeeks = Math.floor(diffDays / 7);
+      if (diffWeeks >= 0 && diffWeeks % 2 === 0) {
+        dcaExpected += 1;
+      }
     } else if (plan.frequency === 'monthly') {
       const planDay = plan.dayOfMonth ?? 1;
       const weekDays = Array.from({ length: 7 }, (_, i) => {

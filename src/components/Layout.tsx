@@ -24,11 +24,18 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Determine selected key from path
-  const selectedKey = menuItems.find((item) => {
-    if (item.key === '/') return location.pathname === '/';
-    return location.pathname.startsWith(item.key);
-  })?.key ?? '/';
+  // Determine selected key from path (match exactly or by top-level segment)
+  const selectedKey = (() => {
+    const path = location.pathname;
+    // Exact match first
+    const exact = menuItems.find((item) => item.key === path);
+    if (exact) return exact.key;
+    // For /funds/:id, highlight /funds
+    if (path.startsWith('/funds/')) return '/funds';
+    // Match top-level segment
+    const top = '/' + path.split('/').filter(Boolean)[0];
+    return menuItems.find((item) => item.key === top)?.key ?? '/';
+  })();
 
   return (
     <Layout style={{ minHeight: '100vh' }}>

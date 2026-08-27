@@ -41,22 +41,22 @@ export default function FundList() {
       const values = await form.validateFields();
       const code = values.id as string;
 
-      // Fetch latest NAV
+      // Check duplicate
+      if (funds.some((f) => f.id === code)) {
+        message.warning('该基金已存在');
+        return;
+      }
+
+      // Re-fetch latest NAV (user may have waited after initial query)
       const estimate = await fetchFundEstimate(code);
       const fund: Fund = {
         id: code,
         name: values.name as string,
         platformId: values.platformId as string,
         type: values.type as Fund['type'],
-        currentNav: estimate?.lastNav ?? 0,
+        currentNav: estimate?.lastNav ?? (values.currentNav as number) ?? 0,
         navDate: estimate?.navDate ?? '',
       };
-
-      // Check duplicate
-      if (funds.some((f) => f.id === code)) {
-        message.warning('该基金已存在');
-        return;
-      }
 
       addFund(fund);
       message.success('添加成功');

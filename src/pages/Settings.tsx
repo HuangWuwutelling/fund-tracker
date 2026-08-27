@@ -38,8 +38,8 @@ export default function Settings() {
     reader.onload = (ev) => {
       try {
         const data = JSON.parse(ev.target?.result as string);
-        if (!data.funds || !data.platforms) {
-          message.error('无效的备份文件格式');
+        if (!data.funds || !data.platforms || !Array.isArray(data.transactions) || !Array.isArray(data.dcaPlans)) {
+          message.error('无效的备份文件格式：缺少必要字段');
           return;
         }
         importData(data);

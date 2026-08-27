@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord } from '../types';
 import * as storage from '../utils/storage';
+import { generateSnapshot } from '../utils/snapshot';
 
 interface FundTrackerState {
   // Data
@@ -98,7 +99,13 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     const dcaPlans = get().dcaPlans.filter((p) => p.fundId !== id);
     storage.saveDcaPlans(dcaPlans);
     localStorage.removeItem(`fund-tracker:nav:${id}`);
-    set({ funds, transactions, dcaPlans });
+
+    // Regenerate today's snapshot to reflect the removal
+    const newSnapshot = generateSnapshot(funds, transactions);
+    const snapshots = [...get().snapshots.filter((s) => s.date !== newSnapshot.date), newSnapshot];
+    storage.saveSnapshots(snapshots);
+
+    set({ funds, transactions, dcaPlans, snapshots });
   },
 
   getFundById: (id) => get().funds.find((f) => f.id === id),
