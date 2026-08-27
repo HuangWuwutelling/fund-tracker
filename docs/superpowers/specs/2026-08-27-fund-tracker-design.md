@@ -53,9 +53,10 @@ interface Fund {
   type: 'index' | 'bond' | 'qdii' | 'mixed';
   currentNav: number;      // 最新单位净值
   navDate: string;         // 净值日期（YYYY-MM-DD）
-  navHistory: NavRecord[]; // 净值历史
 }
 ```
+
+净值历史独立存储，不嵌套在 Fund 内（见 localStorage 键设计）。
 
 ### NavRecord（净值记录）
 
@@ -76,6 +77,7 @@ interface Transaction {
   type: 'buy' | 'sell' | 'dividend';
   date: string;            // 交易日期 YYYY-MM-DD
   amount: number;          // 金额（元）
+  fee: number;             // 手续费（元），默认 0
   shares: number;          // 份额
   nav: number;             // 成交净值
   note?: string;           // 备注
@@ -107,15 +109,32 @@ interface Settings {
 }
 ```
 
+### DailySnapshot（日终快照）
+
+```typescript
+interface DailySnapshot {
+  date: string;            // YYYY-MM-DD
+  totalValue: number;      // 当日总市值
+  totalCost: number;       // 当日总持仓成本
+}
+```
+
+每天打开页面时自动生成，用于收益走势图和周报/月报计算。
+
 ### localStorage 键设计
 
 ```
-fund-tracker:platforms    → Platform[]
-fund-tracker:funds        → Fund[]
-fund-tracker:transactions → Transaction[]
-fund-tracker:dca-plans    → DcaPlan[]
-fund-tracker:settings     → Settings
+fund-tracker:version       → number（数据版本号，当前为 1）
+fund-tracker:platforms     → Platform[]
+fund-tracker:funds         → Fund[]
+fund-tracker:transactions  → Transaction[]
+fund-tracker:dca-plans     → DcaPlan[]
+fund-tracker:snapshots     → DailySnapshot[]
+fund-tracker:settings      → Settings
+fund-tracker:nav:{fundCode} → NavRecord[]（每只基金的净值历史独立存储）
 ```
+
+应用启动时检查 `version`，若低于当前代码版本则执行数据迁移。
 
 ## 页面设计
 
@@ -174,7 +193,7 @@ fund-tracker:settings     → Settings
 - 操作：编辑、删除
 
 **添加交易表单（Ant Design Modal）：**
-- 选择基金 → 类型 → 日期 → 金额（自动根据净值算份额，或手动输入净值反算）
+- 选择基金 → 类型 → 日期 → 金额 → 手续费（默认 0）→ 自动根据净值算份额，或手动输入净值反算
 - 备注（可选）
 
 ### 定投计划页
@@ -232,7 +251,7 @@ fund-tracker:settings     → Settings
 
 ```
 持有份额 = Σ(买入份额) - Σ(卖出份额) + Σ(分红再投份额)
-持仓成本 = Σ(买入金额) - Σ(卖出回款金额)
+持仓成本 = Σ(买入金额 + 买入手续费) - Σ(卖出回款金额 - 卖出手续费)
 当前市值 = 持有份额 × 最新净值
 总收益   = 当前市值 - 持仓成本
 收益率   = (总收益 / 持仓成本) × 100%
@@ -242,19 +261,31 @@ fund-tracker:settings     → Settings
 ### 买入份额计算
 
 ```
-份额 = 金额 / 净值
+份额 = (金额 - 手续费) / 净值
 ```
 
-用户录入交易时：输入金额 → 自动用当天净值算份额；或输入净值 → 反算份额。
+用户录入交易时：输入金额 → 输入手续费（默认 0）→ 自动用当天净值算份额；或输入净值 → 反算份额。
 
 ### 周报/月报计算
 
+从 `snapshots` 中取对应日期的 `totalValue`，无需重新推算历史持仓：
+
 ```
-周收益 = 周末市值 - 周初市值 + 本周卖出回款 - 本周买入金额
-周收益率 = 周收益 / 周初市值 × 100%
+周收益 = 周末快照.totalValue - 周初快照.totalValue + 本周卖出回款 - 本周买入金额
+周收益率 = 周收益 / 周初快照.totalValue × 100%
 ```
 
-月报同理，以月为单位。
+月报同理，从月内快照序列绘制总资产变化曲线。
+
+### 当日盈亏计算
+
+从基金的 `fund-tracker:nav:{fundCode}` 中取最近两条净值记录：
+
+```
+当日盈亏 = 持有份额 × (今日净值 - 昨日净值)
+```
+
+如昨日净值缺失（如周末/节假日），则当日盈亏显示为 "—"。
 
 ## API 集成
 
@@ -328,8 +359,10 @@ src/
 ├── types/
 │   └── index.ts              # TypeScript 类型定义
 ├── utils/
-│   ├── calculator.ts         # 收益/份额计算
+│   ├── calculator.ts         # 收益/份额计算（含手续费）
 │   ├── formatter.ts          # 金额/日期/百分比格式化
+│   ├── snapshot.ts           # 日终快照生成与管理
+│   ├── migration.ts          # localStorage 数据版本迁移
 │   └── reportGenerator.ts   # 周报/月报数据生成
 ├── App.tsx
 ├── main.tsx
