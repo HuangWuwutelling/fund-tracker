@@ -53,22 +53,24 @@ function loadPingzhongScript(fundCode: string): Promise<Record<string, unknown>>
     script.onload = () => {
       const w = window as unknown as Record<string, unknown>;
       const result: Record<string, unknown> = {};
-      // Read the global variables set by the script
       for (const key of PINGZHONG_GLOBALS) {
         result[key] = w[key];
       }
-      // Also grab the nav trend data
       result['Data_netWorthTrend'] = w['Data_netWorthTrend'];
+      console.log('[fundApi] Script loaded for', fundCode, 'name:', result['fS_name']);
       cleanup();
       resolve(result);
     };
 
-    script.onerror = () => {
+    script.onerror = (e) => {
+      console.error('[fundApi] Script load error for', fundCode, e);
       cleanup();
       reject(new Error(`Script load failed: ${fundCode}`));
     };
 
     script.src = `https://fund.eastmoney.com/pingzhongdata/${fundCode}.js?v=${Date.now()}`;
+    script.setAttribute('charset', 'utf-8');
+    script.setAttribute('referrerpolicy', 'no-referrer');
     document.head.appendChild(script);
   });
 }
