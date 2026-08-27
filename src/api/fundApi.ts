@@ -1,34 +1,10 @@
 import type { NavRecord } from '../types';
 
-let jsonpCounter = 0;
+// --- Fund info + NAV history via pingzhongdata API ---
+// This API returns a JS script with global variables:
+//   fS_name, fS_code, Data_netWorthTrend, etc.
+// We load the script and read the globals.
 
-/** Generic JSONP for APIs that support custom callback parameter */
-function jsonpText(url: string, callbackParam = 'callback'): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const callbackName = `__ft_jsonp_${jsonpCounter++}_${Date.now()}`;
-    const script = document.createElement('script');
-
-    const cleanup = () => {
-      delete (window as unknown as Record<string, unknown>)[callbackName];
-      if (script.parentNode) script.parentNode.removeChild(script);
-    };
-
-    (window as unknown as Record<string, unknown>)[callbackName] = (data: unknown) => {
-      cleanup();
-      resolve(typeof data === 'string' ? data : JSON.stringify(data));
-    };
-
-    script.src = `${url}${url.includes('?') ? '&' : '?'}${callbackParam}=${callbackName}`;
-    script.onerror = () => {
-      cleanup();
-      reject(new Error(`JSONP request failed: ${url}`));
-    };
-
-    document.head.appendChild(script);
-  });
-}
-
-// --- Fund estimate API (uses hardcoded jsonpgz callback) ---
 interface FundEstimate {
   name: string;
   code: string;
@@ -38,77 +14,153 @@ interface FundEstimate {
   navDate: string;
 }
 
-function loadJsonpgzScript(fundCode: string): Promise<unknown> {
+const PINGZHONG_GLOBALS = [
+  'fS_name', 'fS_code', 'Data_netWorthTrend',
+] as const;
+
+function loadPingzhongScript(fundCode: string): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const script = document.createElement('script');
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error('JSONP timeout'));
-    }, 10000);
+      reject(new Error('Script load timeout'));
+    }, 15000);
 
     const cleanup = () => {
       clearTimeout(timeout);
-      delete (window as unknown as Record<string, unknown>)['jsonpgz'];
+      // Clean up global variables
+      for (const key of PINGZHONG_GLOBALS) {
+        delete (window as unknown as Record<string, unknown>)[key];
+      }
+      // Also clean up other vars the script sets
+      const extraVars = [
+        'ishb', 'fund_sourceRate', 'fund_Rate', 'fund_minsg',
+        'stockCodes', 'zqCodes', 'stockCodesNew', 'zqCodesNew',
+        'syl_1n', 'syl_6y', 'syl_3y', 'syl_1y',
+        'Data_fundSharesPositions', 'Data_netWorthTrend',
+        'Data_ACWorthTrend', 'Data_grandTotal', 'Data_rateInSimilarType',
+        'Data_rateInSimilarFund', 'Data_performanceEvaluation',
+        'Data_currentFundManager', 'Data_fundSale', 'Data_fundStocks',
+        'Data_fundBond', 'Data_fundManager', 'stockCodesNew',
+        'fS_name', 'fS_code',
+      ];
+      for (const key of extraVars) {
+        delete (window as unknown as Record<string, unknown>)[key];
+      }
       if (script.parentNode) script.parentNode.removeChild(script);
     };
 
-    // The tiantian fund API hardcodes the callback name as 'jsonpgz'
-    (window as unknown as Record<string, unknown>)['jsonpgz'] = (data: unknown) => {
+    script.onload = () => {
+      const w = window as unknown as Record<string, unknown>;
+      const result: Record<string, unknown> = {};
+      // Read the global variables set by the script
+      for (const key of PINGZHONG_GLOBALS) {
+        result[key] = w[key];
+      }
+      // Also grab the nav trend data
+      result['Data_netWorthTrend'] = w['Data_netWorthTrend'];
       cleanup();
-      resolve(data);
+      resolve(result);
     };
 
-    script.src = `https://fundgz.1234567.com.cn/js/${fundCode}.js?rt=${Date.now()}`;
     script.onerror = () => {
       cleanup();
       reject(new Error(`Script load failed: ${fundCode}`));
     };
 
+    script.src = `https://fund.eastmoney.com/pingzhongdata/${fundCode}.js?v=${Date.now()}`;
     document.head.appendChild(script);
   });
 }
 
 export async function fetchFundEstimate(fundCode: string): Promise<FundEstimate | null> {
   try {
-    const data = await loadJsonpgzScript(fundCode) as Record<string, string>;
-    if (!data?.fundcode) return null;
+    const data = await loadPingzhongScript(fundCode);
+    const name = data['fS_name'] as string;
+    const code = data['fS_code'] as string;
+    if (!name || !code) return null;
+
+    // Extract latest NAV from Data_netWorthTrend
+    const trend = data['Data_netWorthTrend'] as Array<{ x: number; y: number }> | undefined;
+    if (!trend || trend.length === 0) {
+      return { name, code, nav: 0, lastNav: 0, changePercent: 0, navDate: '' };
+    }
+
+    const latest = trend[trend.length - 1]!;
+    const prev = trend.length > 1 ? trend[trend.length - 2]! : latest;
+    const navDate = new Date(latest.x).toISOString().slice(0, 10);
+    const lastNav = latest.y;
+    const prevNav = prev.y;
+    const changePercent = prevNav > 0 ? ((lastNav - prevNav) / prevNav) * 100 : 0;
+
     return {
-      name: data.name ?? '',
-      code: data.fundcode,
-      nav: parseFloat(data.gsz ?? '0'),
-      lastNav: parseFloat(data.dwjz ?? '0'),
-      changePercent: parseFloat(data.gszzl ?? '0'),
-      navDate: data.gztime?.slice(0, 10) ?? '',
+      name,
+      code,
+      nav: lastNav,
+      lastNav,
+      changePercent,
+      navDate,
     };
   } catch {
     return null;
   }
 }
 
-// --- Historical NAV (supports custom callback param) ---
+// --- Historical NAV from pingzhongdata ---
 export async function fetchNavHistory(
   fundCode: string,
   startDate: string,
   endDate: string
 ): Promise<NavRecord[]> {
   try {
-    const text = await jsonpText(
-      `https://fund.eastmoney.com/f10/F10DataApi.aspx?type=lsjz&code=${fundCode}&page=1&sdate=${startDate}&edate=${endDate}&per=49`,
-      'callback'
-    );
-    const records: NavRecord[] = [];
-    const rowRegex = /<td>(\d{4}-\d{2}-\d{2})<\/td><td>([\d.]+)<\/td><td>([\d.]+)<\/td>/g;
-    let match;
-    while ((match = rowRegex.exec(text)) !== null) {
-      records.push({
-        date: match[1]!,
-        nav: parseFloat(match[2]!),
-        accNav: parseFloat(match[3]!),
-      });
-    }
-    return records.reverse();
+    const data = await loadPingzhongScript(fundCode);
+    const trend = data['Data_netWorthTrend'] as Array<{ x: number; y: number }> | undefined;
+    if (!trend || trend.length === 0) return [];
+
+    const records: NavRecord[] = trend.map((item) => ({
+      date: new Date(item.x).toISOString().slice(0, 10),
+      nav: item.y,
+      accNav: item.y, // pingzhongdata only provides unit NAV, not accumulated
+    }));
+
+    // Filter by date range
+    return records.filter((r) => r.date >= startDate && r.date <= endDate);
   } catch {
     return [];
+  }
+}
+
+// --- Fetch fund info + full NAV history in one call ---
+export async function fetchFundWithHistory(fundCode: string): Promise<{
+  estimate: FundEstimate;
+  navHistory: NavRecord[];
+} | null> {
+  try {
+    const data = await loadPingzhongScript(fundCode);
+    const name = data['fS_name'] as string;
+    const code = data['fS_code'] as string;
+    if (!name || !code) return null;
+
+    const trend = data['Data_netWorthTrend'] as Array<{ x: number; y: number }> | undefined;
+    const navHistory: NavRecord[] = (trend ?? []).map((item) => ({
+      date: new Date(item.x).toISOString().slice(0, 10),
+      nav: item.y,
+      accNav: item.y,
+    }));
+
+    const latest = trend?.[trend.length - 1];
+    const prev = trend && trend.length > 1 ? trend[trend.length - 2] : latest;
+    const lastNav = latest?.y ?? 0;
+    const prevNav = prev?.y ?? lastNav;
+    const navDate = latest ? new Date(latest.x).toISOString().slice(0, 10) : '';
+    const changePercent = prevNav > 0 ? ((lastNav - prevNav) / prevNav) * 100 : 0;
+
+    return {
+      estimate: { name, code, nav: lastNav, lastNav, changePercent, navDate },
+      navHistory,
+    };
+  } catch {
+    return null;
   }
 }
 

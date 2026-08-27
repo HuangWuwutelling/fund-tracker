@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Button, Card, Table, Modal, Form, Input, Select, Tag, message, Popconfirm } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { useStore } from '../stores';
-import { fetchFundEstimate, fetchNavHistory } from '../api/fundApi';
+import { fetchFundEstimate, fetchFundWithHistory } from '../api/fundApi';
 import { formatDate } from '../utils/formatter';
 import { FUND_TYPE_LABELS } from '../types';
 import type { Fund } from '../types';
@@ -47,30 +47,28 @@ export default function FundList() {
         return;
       }
 
-      // Re-fetch latest NAV (user may have waited after initial query)
-      const estimate = await fetchFundEstimate(code);
+      // Fetch fund info + full NAV history in one call
+      const result = await fetchFundWithHistory(code);
+      const estimate = result?.estimate;
       const fund: Fund = {
         id: code,
-        name: values.name as string,
+        name: estimate?.name ?? values.name,
         platformId: values.platformId as string,
         type: values.type as Fund['type'],
-        currentNav: estimate?.lastNav ?? (values.currentNav as number) ?? 0,
+        currentNav: estimate?.lastNav ?? 0,
         navDate: estimate?.navDate ?? '',
       };
 
       addFund(fund);
 
-      // Fetch historical NAV (last 6 months)
-      const endDate = new Date().toISOString().slice(0, 10);
-      const startDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      fetchNavHistory(code, startDate, endDate).then((records) => {
-        if (records.length > 0) {
-          updateNavHistory(code, records);
-          message.success(`添加成功，已加载 ${records.length} 条历史净值`);
-        } else {
-          message.success('添加成功（暂无历史净值数据）');
-        }
-      });
+      // Save NAV history
+      const records = result?.navHistory ?? [];
+      if (records.length > 0) {
+        updateNavHistory(code, records);
+        message.success(`添加成功，已加载 ${records.length} 条历史净值`);
+      } else {
+        message.success('添加成功（暂无历史净值数据）');
+      }
 
       setModalOpen(false);
       form.resetFields();

@@ -3,9 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, theme, message } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { useStore } from './stores';
-import { fetchFundEstimate, fetchNavHistory } from './api/fundApi';
+import { fetchFundWithHistory } from './api/fundApi';
 import { generateSnapshot } from './utils/snapshot';
-import { today } from './utils/formatter';
 import AppLayout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import FundList from './pages/FundList';
@@ -29,25 +28,20 @@ export default function App() {
     for (let i = 0; i < funds.length; i++) {
       const fund = funds[i]!;
       try {
-        const estimate = await fetchFundEstimate(fund.id);
-        if (estimate && estimate.lastNav > 0) {
+        const result = await fetchFundWithHistory(fund.id);
+        if (result && result.estimate.lastNav > 0) {
           updateFund(fund.id, {
-            currentNav: estimate.lastNav,
-            navDate: estimate.navDate,
+            currentNav: result.estimate.lastNav,
+            navDate: result.estimate.navDate,
           });
 
-          // Also fetch recent NAV history (merge with existing)
-          const endDate = today();
-          const startDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-          const history = await fetchNavHistory(fund.id, startDate, endDate);
-          if (history.length > 0) {
-            updateNavHistory(fund.id, history);
+          if (result.navHistory.length > 0) {
+            updateNavHistory(fund.id, result.navHistory);
           }
         }
       } catch {
         // Skip failed funds silently
       }
-      // Rate limit
       if (i < funds.length - 1) {
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
