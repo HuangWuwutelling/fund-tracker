@@ -2,7 +2,7 @@
 
 ## 概述
 
-一个纯前端的基金投资管理 Web 应用，用于汇总跨直销平台（南方基金、摩根资产管理、广发基金）的基金投资数据。支持自动拉取净值、手动记录交易、定投计划管理、周报/月报生成。数据存储在浏览器 localStorage，部署在 GitHub Pages。
+一个纯前端的基金投资管理 Web 应用，用于汇总跨多个直销平台的基金投资数据。平台列表由用户自行管理（预置南方基金、摩根资产管理、广发基金，可随时增删）。支持自动拉取净值、手动记录交易、定投计划管理、周报/月报生成。数据存储在浏览器 localStorage，部署在 GitHub Pages。
 
 ## 技术栈
 
@@ -27,9 +27,21 @@
 /transactions     → 全局交易记录
 /dca              → 定投计划管理
 /reports          → 周报/月报
+/settings         → 设置（平台管理、主题、数据导入导出）
 ```
 
 ## 数据模型
+
+### Platform（投资平台）
+
+```typescript
+interface Platform {
+  id: string;              // UUID
+  name: string;            // 平台名称，如 "南方基金"
+}
+```
+
+预置平台：南方基金、摩根资产管理、广发基金。用户可在设置页自行增删。
 
 ### Fund（基金）
 
@@ -37,7 +49,7 @@
 interface Fund {
   id: string;              // 基金代码，如 "160140"
   name: string;            // 基金名称
-  platform: string;        // 来源平台：南方基金 / 摩根资管 / 广发基金
+  platformId: string;      // 关联 Platform.id
   type: 'index' | 'bond' | 'qdii' | 'mixed';
   currentNav: number;      // 最新单位净值
   navDate: string;         // 净值日期（YYYY-MM-DD）
@@ -98,6 +110,7 @@ interface Settings {
 ### localStorage 键设计
 
 ```
+fund-tracker:platforms    → Platform[]
 fund-tracker:funds        → Fund[]
 fund-tracker:transactions → Transaction[]
 fund-tracker:dca-plans    → DcaPlan[]
@@ -127,7 +140,7 @@ fund-tracker:settings     → Settings
 
 **添加基金表单（Ant Design Modal）：**
 - 输入基金代码 → 调用天天基金 API 自动填充名称和类型
-- 选择平台（下拉：南方基金 / 摩根资管 / 广发基金）
+- 选择平台（下拉列表，从用户自定义的平台列表中选取）
 - 确认后保存到 localStorage
 
 **基金列表（Ant Design Table）：**
@@ -196,6 +209,22 @@ fund-tracker:settings     → Settings
 - 各平台收益贡献（堆叠柱状图）
 - 各基金类型收益贡献
 - 本月最佳/最差基金
+
+### 设置页
+
+**平台管理：**
+- 平台列表（Ant Design Table）：显示所有平台名称
+- 添加平台：输入平台名称即可新增
+- 删除平台：如有基金关联该平台则禁止删除，需先迁移或删除相关基金
+- 预置平台（南方基金、摩根资产管理、广发基金）可删除
+
+**其他设置：**
+- 主题切换（亮色/暗色）
+- 净值自动刷新开关
+
+**数据管理：**
+- 导出数据：一键下载 JSON 备份文件
+- 导入数据：上传 JSON 文件恢复（覆盖前需确认）
 
 ## 计算逻辑
 
@@ -281,6 +310,7 @@ src/
 │   ├── TransactionForm.tsx   # 交易录入表单
 │   └── ChartWrapper.tsx      # ECharts 封装
 ├── hooks/
+│   ├── usePlatforms.ts       # 平台管理 hook
 │   ├── useFunds.ts           # 基金数据 hook
 │   ├── useTransactions.ts    # 交易记录 hook
 │   ├── useDcaPlans.ts        # 定投计划 hook
@@ -291,7 +321,8 @@ src/
 │   ├── FundDetail.tsx        # 基金详情
 │   ├── Transactions.tsx      # 交易记录
 │   ├── DcaPlans.tsx          # 定投计划
-│   └── Reports.tsx           # 周报/月报
+│   ├── Reports.tsx           # 周报/月报
+│   └── Settings.tsx          # 设置（平台管理、主题、数据导入导出）
 ├── stores/
 │   └── index.ts              # Zustand store 定义
 ├── types/
