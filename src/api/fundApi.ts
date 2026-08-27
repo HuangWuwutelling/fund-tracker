@@ -28,24 +28,21 @@ function loadPingzhongScript(fundCode: string): Promise<Record<string, unknown>>
 
     const cleanup = () => {
       clearTimeout(timeout);
-      // Clean up global variables
-      for (const key of PINGZHONG_GLOBALS) {
-        delete (window as unknown as Record<string, unknown>)[key];
-      }
-      // Also clean up other vars the script sets
-      const extraVars = [
-        'ishb', 'fund_sourceRate', 'fund_Rate', 'fund_minsg',
+      // Clear global variables set by the script (var creates non-configurable
+      // properties on window, so we set to undefined instead of delete)
+      const allVars = [
+        'ishb', 'fS_name', 'fS_code', 'fund_sourceRate', 'fund_Rate', 'fund_minsg',
         'stockCodes', 'zqCodes', 'stockCodesNew', 'zqCodesNew',
         'syl_1n', 'syl_6y', 'syl_3y', 'syl_1y',
         'Data_fundSharesPositions', 'Data_netWorthTrend',
         'Data_ACWorthTrend', 'Data_grandTotal', 'Data_rateInSimilarType',
         'Data_rateInSimilarFund', 'Data_performanceEvaluation',
         'Data_currentFundManager', 'Data_fundSale', 'Data_fundStocks',
-        'Data_fundBond', 'Data_fundManager', 'stockCodesNew',
-        'fS_name', 'fS_code',
+        'Data_fundBond', 'Data_fundManager',
       ];
-      for (const key of extraVars) {
-        delete (window as unknown as Record<string, unknown>)[key];
+      const w = window as unknown as Record<string, unknown>;
+      for (const key of allVars) {
+        try { w[key] = undefined; } catch { /* ignore */ }
       }
       if (script.parentNode) script.parentNode.removeChild(script);
     };
@@ -68,7 +65,7 @@ function loadPingzhongScript(fundCode: string): Promise<Record<string, unknown>>
       reject(new Error(`Script load failed: ${fundCode}`));
     };
 
-    script.src = `https://fund.eastmoney.com/pingzhongdata/${fundCode}.js?v=${Date.now()}`;
+    script.src = `https://fund.eastmoney.com/pingzhongdata/${fundCode}.js`;
     script.setAttribute('charset', 'utf-8');
     script.setAttribute('referrerpolicy', 'no-referrer');
     document.head.appendChild(script);
