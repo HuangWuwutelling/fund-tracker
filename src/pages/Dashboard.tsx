@@ -139,6 +139,15 @@ export default function Dashboard() {
       render: (v: number) => `¥${formatMoney(v)}`,
     },
     {
+      title: '持仓收益',
+      dataIndex: 'totalReturn',
+      key: 'totalReturn',
+      width: 130,
+      align: 'right' as const,
+      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.totalReturn - b.totalReturn,
+      render: (v: number) => <span style={{ color: pnlColor(v) }}>{formatSignedMoney(v)}</span>,
+    },
+    {
       title: '收益率',
       dataIndex: 'returnRate',
       key: 'returnRate',
