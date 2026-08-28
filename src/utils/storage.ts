@@ -1,7 +1,7 @@
 import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord } from '../types';
 
 const PREFIX = 'fund-tracker';
-const CURRENT_VERSION = 1;
+const CURRENT_VERSION = 2;
 
 function key(name: string): string {
   return `${PREFIX}:${name}`;
@@ -33,7 +33,7 @@ export function setVersion(v: number): void {
 // --- Platforms ---
 const DEFAULT_PLATFORMS: Platform[] = [
   { id: 'platform-nanfang', name: '南方基金' },
-  { id: 'platform-morgan', name: '摩根资产管理' },
+  { id: 'platform-morgan', name: '摩根' },
   { id: 'platform-guangfa', name: '广发基金' },
 ];
 
@@ -162,5 +162,4 @@ export function initStorage(): void {
       savePlatforms(DEFAULT_PLATFORMS);
     }
   }
-  // Future: add migration logic here when CURRENT_VERSION > 1
 }

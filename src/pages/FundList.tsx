@@ -1,39 +1,86 @@
-import { useState } from 'react';
-import { Button, Card, Table, Modal, Form, Input, Select, Tag, message, Popconfirm } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { useState, useEffect, useCallback } from 'react';
+import { Button, Card, Table, Modal, Form, Select, Input, Tag, message, Popconfirm, Space, Typography, Empty } from 'antd';
+import { PlusOutlined, SearchOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useStore } from '../stores';
-import { fetchFundEstimate, fetchFundWithHistory } from '../api/fundApi';
+import { fetchFundWithHistory, loadFundSearchList, searchFunds, getFundTypeFromSearch } from '../api/fundApi';
+import { getNavHistory } from '../utils/storage';
 import { formatDate } from '../utils/formatter';
 import { FUND_TYPE_LABELS } from '../types';
 import type { Fund } from '../types';
+import type { FundSearchItem } from '../api/fundApi';
+
+const { Text } = Typography;
 
 export default function FundList() {
-  const { funds, platforms, addFund, removeFund, updateNavHistory } = useStore();
+  const { funds, platforms, addFund, removeFund, updateNavHistory, updateFund } = useStore();
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-  const [_fetchedInfo, setFetchedInfo] = useState<{ name: string; code: string } | null>(null);
+  const [searchItems, setSearchItems] = useState<FundSearchItem[]>([]);
+  const [searchResults, setSearchResults] = useState<FundSearchItem[]>([]);
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [listLoaded, setListLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState<string | null>(null);
+  const [selectedType, setSelectedType] = useState<Fund['type'] | null>(null);
 
-  const handleFetchFund = async () => {
-    const code = form.getFieldValue('id');
-    if (!code) {
-      message.warning('请先输入基金代码');
+  // Load fund search list when modal opens
+  useEffect(() => {
+    if (modalOpen && !listLoaded) {
+      loadFundSearchList()
+        .then((items) => {
+          setSearchItems(items);
+          setListLoaded(true);
+        })
+        .catch(() => {
+          message.warning('基金列表加载失败，仍可使用代码查询');
+        });
+    }
+  }, [modalOpen, listLoaded]);
+
+  const handleSearch = useCallback((keyword: string) => {
+    setSearchKeyword(keyword);
+    if (!keyword.trim() || searchItems.length === 0) {
+      setSearchResults([]);
       return;
     }
-    setLoading(true);
+    const results = searchFunds(keyword, searchItems);
+    setSearchResults(results);
+  }, [searchItems]);
+
+  const handleSelectFund = (item: FundSearchItem) => {
+    form.setFieldsValue({
+      id: item.code,
+      name: item.name,
+    });
+    setSelectedType(getFundTypeFromSearch(item.type));
+    setSearchKeyword('');
+    setSearchResults([]);
+  };
+
+  const handleRefreshNav = async (fundId: string) => {
+    setRefreshing(fundId);
     try {
-      const estimate = await fetchFundEstimate(code);
-      if (estimate) {
-        form.setFieldsValue({ name: estimate.name });
-        setFetchedInfo({ name: estimate.name, code: estimate.code });
-        message.success(`已找到: ${estimate.name}`);
-      } else {
-        message.error('未找到该基金，请检查代码');
+      const result = await fetchFundWithHistory(fundId);
+      if (!result) {
+        message.error('刷新失败，请检查网络');
+        return;
       }
+      const records = result.navHistory;
+      if (records.length > 0) {
+        updateNavHistory(fundId, records);
+      }
+      if (result.estimate.lastNav > 0) {
+        updateFund(fundId, {
+          currentNav: result.estimate.lastNav,
+          navDate: result.estimate.navDate,
+        });
+      }
+      message.success(`已加载 ${records.length} 条历史净值`);
     } catch {
-      message.error('查询失败，请检查网络');
+      message.error('刷新失败');
+    } finally {
+      setRefreshing(null);
     }
-    setLoading(false);
   };
 
   const handleAdd = async () => {
@@ -41,27 +88,25 @@ export default function FundList() {
       const values = await form.validateFields();
       const code = values.id as string;
 
-      // Check duplicate
       if (funds.some((f) => f.id === code)) {
         message.warning('该基金已存在');
         return;
       }
 
-      // Fetch fund info + full NAV history in one call
+      setLoading(true);
       const result = await fetchFundWithHistory(code);
       const estimate = result?.estimate;
       const fund: Fund = {
         id: code,
         name: estimate?.name ?? values.name,
         platformId: values.platformId as string,
-        type: values.type as Fund['type'],
+        type: selectedType ?? 'mixed',
         currentNav: estimate?.lastNav ?? 0,
         navDate: estimate?.navDate ?? '',
       };
 
       addFund(fund);
 
-      // Save NAV history
       const records = result?.navHistory ?? [];
       if (records.length > 0) {
         updateNavHistory(code, records);
@@ -72,9 +117,10 @@ export default function FundList() {
 
       setModalOpen(false);
       form.resetFields();
-      setFetchedInfo(null);
+      setSelectedType(null);
+      setLoading(false);
     } catch {
-      // validation failed
+      setLoading(false);
     }
   };
 
@@ -108,21 +154,35 @@ export default function FundList() {
     {
       title: '操作',
       key: 'actions',
-      width: 80,
-      render: (_: unknown, record: Fund) => (
-        <Popconfirm
-          title="确定删除该基金？"
-          description="关联的交易记录和定投计划也会被删除"
-          onConfirm={() => {
-            removeFund(record.id);
-            message.success('已删除');
-          }}
-        >
-          <Button type="link" danger size="small">
-            删除
-          </Button>
-        </Popconfirm>
-      ),
+      width: 160,
+      render: (_: unknown, record: Fund) => {
+        const hasHistory = getNavHistory(record.id).length > 0;
+        return (
+          <Space>
+            <Button
+              type="link"
+              size="small"
+              icon={<ReloadOutlined />}
+              loading={refreshing === record.id}
+              onClick={() => handleRefreshNav(record.id)}
+            >
+              {hasHistory ? '刷新净值' : '加载净值'}
+            </Button>
+            <Popconfirm
+              title="确定删除该基金？"
+              description="关联的交易记录和定投计划也会被删除"
+              onConfirm={() => {
+                removeFund(record.id);
+                message.success('已删除');
+              }}
+            >
+              <Button type="link" danger size="small">
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -150,22 +210,63 @@ export default function FundList() {
         onCancel={() => {
           setModalOpen(false);
           form.resetFields();
-          setFetchedInfo(null);
+          setSearchKeyword('');
+          setSearchResults([]);
+          setSelectedType(null);
         }}
         okText="添加"
         cancelText="取消"
+        confirmLoading={loading}
+        width={560}
       >
+        {/* Standalone search box - NOT bound to form */}
+        <div style={{ marginBottom: 16 }}>
+          <Input
+            size="large"
+            prefix={<SearchOutlined />}
+            placeholder="搜索基金代码、名称或拼音"
+            value={searchKeyword}
+            onChange={(e) => handleSearch(e.target.value)}
+            allowClear
+          />
+          {searchItems.length === 0 && (
+            <div style={{ color: '#999', fontSize: 12, marginTop: 4 }}>正在加载基金列表...</div>
+          )}
+          {searchResults.length > 0 && (
+            <Card size="small" style={{ marginTop: 8, maxHeight: 240, overflow: 'auto' }}>
+              {searchResults.map((item) => {
+                const mappedType = getFundTypeFromSearch(item.type);
+                return (
+                  <div
+                    key={item.code}
+                    onClick={() => handleSelectFund(item)}
+                    style={{
+                      padding: '8px 12px',
+                      cursor: 'pointer',
+                      borderBottom: '1px solid #f0f0f0',
+                    }}
+                  >
+                    <Space>
+                      <Text strong style={{ minWidth: 60 }}>{item.code}</Text>
+                      <Text>{item.name}</Text>
+                      <Tag color="blue">{FUND_TYPE_LABELS[mappedType]}</Tag>
+                    </Space>
+                  </div>
+                );
+              })}
+            </Card>
+          )}
+          {searchKeyword && searchResults.length === 0 && searchItems.length > 0 && (
+            <div style={{ marginTop: 8 }}><Empty description="无匹配结果" /></div>
+          )}
+        </div>
+
         <Form form={form} layout="vertical">
-          <Form.Item label="基金代码" name="id" rules={[{ required: true, message: '请输入基金代码' }]}>
-            <Input.Search
-              placeholder="如 160140"
-              enterButton="查询"
-              loading={loading}
-              onSearch={handleFetchFund}
-            />
+          <Form.Item label="基金代码" name="id" rules={[{ required: true, message: '请搜索选择或手动输入代码' }]}>
+            <Input placeholder="上方搜索后自动填充" />
           </Form.Item>
-          <Form.Item label="基金名称" name="name" rules={[{ required: true, message: '请先查询基金' }]}>
-            <Input placeholder="查询后自动填充" disabled />
+          <Form.Item label="基金名称" name="name" rules={[{ required: true, message: '请搜索选择或手动输入名称' }]}>
+            <Input placeholder="搜索选择后自动填充，也可手动修改" />
           </Form.Item>
           <Form.Item label="投资平台" name="platformId" rules={[{ required: true, message: '请选择平台' }]}>
             <Select placeholder="选择平台">
@@ -176,15 +277,11 @@ export default function FundList() {
               ))}
             </Select>
           </Form.Item>
-          <Form.Item label="基金类型" name="type" initialValue="index" rules={[{ required: true }]}>
-            <Select>
-              {Object.entries(FUND_TYPE_LABELS).map(([key, label]) => (
-                <Select.Option key={key} value={key}>
-                  {label}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
+          {selectedType && (
+            <div style={{ color: '#666', fontSize: 13, marginBottom: 16 }}>
+              已识别基金类型：<Tag color="blue">{FUND_TYPE_LABELS[selectedType]}</Tag>
+            </div>
+          )}
         </Form>
       </Modal>
     </Card>

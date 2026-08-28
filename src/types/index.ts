@@ -34,7 +34,7 @@ export interface DcaPlan {
   id: string;
   fundId: string;
   amount: number;
-  frequency: 'weekly' | 'biweekly' | 'monthly';
+  frequency: 'daily' | 'weekly' | 'biweekly' | 'monthly';
   dayOfWeek?: number;
   dayOfMonth?: number;
   active: boolean;
@@ -67,6 +67,7 @@ export const TRANSACTION_TYPE_LABELS: Record<Transaction['type'], string> = {
 };
 
 export const FREQUENCY_LABELS: Record<DcaPlan['frequency'], string> = {
+  daily: '每个交易日',
   weekly: '每周',
   biweekly: '双周',
   monthly: '每月',
