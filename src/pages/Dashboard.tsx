@@ -97,6 +97,7 @@ export default function Dashboard() {
       title: '基金名称',
       dataIndex: ['fund', 'name'],
       key: 'name',
+      width: 220,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) =>
         a.fund.name.localeCompare(b.fund.name, 'zh-CN'),
       render: (text: string, record: typeof summaries[0]) => (
@@ -109,6 +110,7 @@ export default function Dashboard() {
     {
       title: '平台',
       key: 'platform',
+      width: 100,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => {
         const an = platforms.find((p) => p.id === a.fund.platformId)?.name ?? '';
         const bn = platforms.find((p) => p.id === b.fund.platformId)?.name ?? '';
@@ -121,6 +123,7 @@ export default function Dashboard() {
       title: '持仓成本',
       dataIndex: 'cost',
       key: 'cost',
+      width: 130,
       align: 'right' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.cost - b.cost,
       render: (v: number) => `¥${formatMoney(v)}`,
@@ -129,6 +132,7 @@ export default function Dashboard() {
       title: '当前市值',
       dataIndex: 'marketValue',
       key: 'marketValue',
+      width: 130,
       align: 'right' as const,
       defaultSortOrder: 'descend' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.marketValue - b.marketValue,
@@ -138,6 +142,7 @@ export default function Dashboard() {
       title: '收益率',
       dataIndex: 'returnRate',
       key: 'returnRate',
+      width: 100,
       align: 'right' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.returnRate - b.returnRate,
       render: (v: number) => <span style={{ color: pnlColor(v) }}>{formatPercent(v)}</span>,
@@ -146,6 +151,7 @@ export default function Dashboard() {
       title: '当日盈亏',
       dataIndex: 'dailyPnl',
       key: 'dailyPnl',
+      width: 130,
       align: 'right' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
       render: (v: number | null) =>
@@ -272,6 +278,7 @@ export default function Dashboard() {
           columns={columns}
           rowKey={(record) => record.fund.id}
           pagination={false}
+          scroll={{ x: 'max-content' }}
           onRow={(record) => ({
             onClick: () => navigate(`/funds/${record.fund.id}`),
             style: { cursor: 'pointer' },

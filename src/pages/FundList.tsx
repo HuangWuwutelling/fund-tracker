@@ -130,11 +130,13 @@ export default function FundList() {
       title: '基金名称',
       dataIndex: 'name',
       key: 'name',
+      width: 220,
       sorter: (a: Fund, b: Fund) => a.name.localeCompare(b.name, 'zh-CN'),
     },
     {
       title: '平台',
       key: 'platform',
+      width: 100,
       sorter: (a: Fund, b: Fund) => {
         const an = platforms.find((p) => p.id === a.platformId)?.name ?? '';
         const bn = platforms.find((p) => p.id === b.platformId)?.name ?? '';
@@ -147,6 +149,7 @@ export default function FundList() {
       title: '类型',
       dataIndex: 'type',
       key: 'type',
+      width: 100,
       sorter: (a: Fund, b: Fund) => FUND_TYPE_LABELS[a.type].localeCompare(FUND_TYPE_LABELS[b.type], 'zh-CN'),
       render: (type: Fund['type']) => <Tag>{FUND_TYPE_LABELS[type]}</Tag>,
     },
@@ -154,6 +157,7 @@ export default function FundList() {
       title: '最新净值',
       dataIndex: 'currentNav',
       key: 'currentNav',
+      width: 120,
       sorter: (a: Fund, b: Fund) => a.currentNav - b.currentNav,
       render: (nav: number) => nav.toFixed(4),
     },
@@ -161,6 +165,7 @@ export default function FundList() {
       title: '净值日期',
       dataIndex: 'navDate',
       key: 'navDate',
+      width: 120,
       sorter: (a: Fund, b: Fund) => a.navDate.localeCompare(b.navDate),
       render: (date: string) => formatDate(date),
     },
@@ -213,6 +218,7 @@ export default function FundList() {
         columns={columns}
         rowKey="id"
         pagination={false}
+        scroll={{ x: 'max-content' }}
         locale={{ emptyText: '暂无基金，点击"添加基金"开始' }}
       />
 
