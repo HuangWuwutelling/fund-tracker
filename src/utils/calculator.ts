@@ -1,5 +1,10 @@
 import type { Transaction, Fund, NavRecord } from '../types';
 
+/** 过滤掉 pending(待确认)交易;只保留 confirmed 或未设状态的(向后兼容) */
+export function onlyConfirmed(transactions: Transaction[]): Transaction[] {
+  return transactions.filter((t) => t.status !== 'pending');
+}
+
 /** 计算某只基金的持有份额 */
 export function calcShares(transactions: Transaction[]): number {
   return transactions.reduce((sum, tx) => {
@@ -73,7 +78,7 @@ export function calcDailyPnl(shares: number, navHistory: NavRecord[]): number | 
 
 /** 累计分红金额（所有 dividend 类型交易） */
 export function calcDividendTotal(transactions: Transaction[]): number {
-  return transactions
+  return onlyConfirmed(transactions)
     .filter((tx) => tx.type === 'dividend')
     .reduce((sum, tx) => sum + tx.amount, 0);
 }
@@ -85,6 +90,7 @@ export function calcDividendTotal(transactions: Transaction[]): number {
  */
 export function calcXIRR(transactions: Transaction[], currentValue: number): number {
   if (transactions.length === 0 || currentValue <= 0) return 0;
+  transactions = onlyConfirmed(transactions);
 
   const flows: { t: number; amount: number }[] = [];
   for (const tx of transactions) {
@@ -178,7 +184,7 @@ export function calcFundSummary(
   transactions: Transaction[],
   navHistory: NavRecord[]
 ) {
-  const fundTransactions = transactions.filter((t) => t.fundId === fund.id);
+  const fundTransactions = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
   const shares = calcShares(fundTransactions);
   const cost = calcCost(fundTransactions);
   const marketValue = calcMarketValue(shares, fund.currentNav);

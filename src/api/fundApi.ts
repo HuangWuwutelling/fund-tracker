@@ -1,4 +1,83 @@
-import type { NavRecord } from '../types';
+import type { NavRecord, Fund } from '../types';
+
+// --- Fund search: load full fund list once for code/name search ---
+export interface FundSearchItem {
+  code: string;
+  abbreviation: string;
+  name: string;
+  type: string;
+  pinyin: string;
+}
+
+let fundSearchCache: FundSearchItem[] | null = null;
+
+function mapFundType(rawType: string): Fund['type'] {
+  if (rawType.includes('QDII') || rawType.includes('qdi')) return 'qdii';
+  if (rawType.includes('债券')) return 'bond';
+  if (rawType.includes('指数')) return 'index';
+  return 'mixed';
+}
+
+export async function loadFundSearchList(): Promise<FundSearchItem[]> {
+  if (fundSearchCache) return fundSearchCache;
+
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Fund list load timeout'));
+    }, 20000);
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      try { (window as unknown as Record<string, unknown>)['r'] = undefined; } catch { /* ignore */ }
+      if (script.parentNode) script.parentNode.removeChild(script);
+    };
+
+    script.onload = () => {
+      const raw = (window as unknown as Record<string, unknown>)['r'] as string[][] | undefined;
+      cleanup();
+      if (!raw) {
+        resolve([]);
+        return;
+      }
+      fundSearchCache = raw.map((item) => ({
+        code: item[0] ?? '',
+        abbreviation: item[1] ?? '',
+        name: item[2] ?? '',
+        type: item[3] ?? '',
+        pinyin: item[4] ?? '',
+      }));
+      resolve(fundSearchCache);
+    };
+
+    script.onerror = () => {
+      cleanup();
+      reject(new Error('Fund list load failed'));
+    };
+
+    script.src = 'https://fund.eastmoney.com/js/fundcode_search.js';
+    script.setAttribute('charset', 'utf-8');
+    script.setAttribute('referrerpolicy', 'no-referrer');
+    document.head.appendChild(script);
+  });
+}
+
+export function searchFunds(keyword: string, items: FundSearchItem[]): FundSearchItem[] {
+  const kw = keyword.trim().toLowerCase();
+  if (!kw) return [];
+  return items
+    .filter((item) =>
+      item.code.includes(kw) ||
+      item.name.toLowerCase().includes(kw) ||
+      item.pinyin.toLowerCase().includes(kw)
+    )
+    .slice(0, 20);
+}
+
+export function getFundTypeFromSearch(rawType: string): Fund['type'] {
+  return mapFundType(rawType);
+}
 
 // --- Fund info + NAV history via pingzhongdata API ---
 // This API returns a JS script with global variables:

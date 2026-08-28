@@ -1,6 +1,7 @@
 import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform } from '../types';
 import { calcShares, calcCost, calcMarketValue } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
+import { countTradingDays } from './navLookup';
 
 export interface FundPerformance {
   fundId: string;
@@ -161,6 +162,9 @@ export function generateWeeklyReport(
         return d.getDate();
       });
       if (weekDays.includes(planDay)) dcaExpected += 1;
+    } else if (plan.frequency === 'daily') {
+      // Count actual trading days in this week from the fund's NAV history
+      dcaExpected += countTradingDays(plan.fundId, weekStart, weekEnd);
     }
     const planBuyTxs = transactions.filter(
       (t) => t.fundId === plan.fundId && t.type === 'buy' && t.date >= weekStart && t.date <= weekEnd

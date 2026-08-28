@@ -28,6 +28,7 @@ export interface Transaction {
   shares: number;
   nav: number;
   note?: string;
+  status?: 'pending' | 'confirmed';
 }
 
 export interface DcaPlan {

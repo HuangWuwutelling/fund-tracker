@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Card, Row, Col, Statistic, Table, Tabs, Tag } from 'antd';
+import { Card, Row, Col, Statistic, Table, Tabs, Tag, Alert, Button } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts/core';
@@ -37,6 +37,13 @@ export default function Dashboard() {
 
   // XIRR(全平台):把 currentValue 作为终值,所有交易视为现金流
   const totalXIRR = calcXIRR(transactions, totalValue);
+
+  // 未确认定投(pending):不计入持仓/收益,但提示用户去确认
+  const pendingTransactions = transactions.filter((t) => t.status === 'pending');
+  const pendingCount = pendingTransactions.length;
+  const pendingAmount = pendingTransactions
+    .filter((t) => t.type === 'buy')
+    .reduce((sum, t) => sum + t.amount, 0);
 
   // Pie chart: by platform
   const platformPieData = useMemo(() => {
@@ -174,6 +181,21 @@ export default function Dashboard() {
 
   return (
     <div>
+      {pendingCount > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          message={`您有 ${pendingCount} 笔未确认定投${pendingAmount > 0 ? `，合计 ${formatMoney(pendingAmount)}` : ''}`}
+          description="这些交易还未生效（T+1 净值待发布），不影响当前持仓显示。点击下方按钮确认份额。"
+          action={
+            <Button size="small" type="primary" onClick={() => navigate('/transactions?status=pending')}>
+              去确认
+            </Button>
+          }
+          style={{ marginBottom: 16 }}
+          closable
+        />
+      )}
       <Row gutter={[16, 16]}>
         <Col xs={12} sm={6}>
           <Card>

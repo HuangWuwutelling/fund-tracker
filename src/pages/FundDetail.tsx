@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Descriptions, Row, Col, Statistic, Table, Button, Tag, Modal, Form, Input, Select, DatePicker, InputNumber, message, Space, Radio, Alert } from 'antd';
+import { Card, Descriptions, Row, Col, Statistic, Table, Button, Tag, Modal, Form, Input, Select, DatePicker, InputNumber, message, Space, Radio, Alert, Checkbox } from 'antd';
 import { ArrowLeftOutlined, PlusOutlined, ImportOutlined } from '@ant-design/icons';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts/core';
@@ -12,6 +12,7 @@ import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { calcFundSummary, calcSharesFromAmount } from '../utils/calculator';
 import { formatMoney, pnlColor, formatDate } from '../utils/formatter';
+import { lookupNavForDate } from '../utils/navLookup';
 import { FUND_TYPE_LABELS, TRANSACTION_TYPE_LABELS } from '../types';
 import type { Transaction } from '../types';
 
@@ -20,10 +21,11 @@ echarts.use([LineChart, TooltipComponent, GridComponent, CanvasRenderer]);
 export default function FundDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { platforms, transactions, getNavHistory, addTransaction, getFundById } = useStore();
+  const { platforms, transactions, getNavHistory, addTransaction, updateTransaction, getFundById } = useStore();
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [txForm] = Form.useForm();
   const txTypeWatch = Form.useWatch('type', txForm);
+  const pendingWatch = Form.useWatch('pending', txForm);
   const [initModalOpen, setInitModalOpen] = useState(false);
   const [initForm] = Form.useForm();
   const prevFilledCount = useRef(0);
@@ -75,10 +77,11 @@ export default function FundDetail() {
       const txType = values.type as Transaction['type'];
       const amount = values.amount as number;
       const fee = (values.fee as number) ?? 0;
-      const nav = values.nav as number;
+      const pending = (values.pending as boolean) ?? false;
+      const nav = pending ? 0 : ((values.nav as number) ?? 0);
       const shares = txType === 'dividend'
         ? (values.shares as number) ?? 0
-        : calcSharesFromAmount(amount, fee, nav);
+        : pending ? 0 : calcSharesFromAmount(amount, fee, nav);
 
       const tx: Transaction = {
         id: uuid(),
@@ -90,10 +93,11 @@ export default function FundDetail() {
         shares: Math.round(shares * 10000) / 10000,
         nav,
         note: values.note as string | undefined,
+        status: pending ? 'pending' : 'confirmed',
       };
 
       addTransaction(tx);
-      message.success('交易记录已添加');
+      message.success(pending ? '已记录为待确认交易' : '交易记录已添加');
       setTxModalOpen(false);
       txForm.resetFields();
     } catch {
@@ -101,7 +105,27 @@ export default function FundDetail() {
     }
   };
 
-  const handleSetInitialPosition = async () => {
+  const handleConfirmTx = async (tx: Transaction) => {
+    if (tx.type === 'dividend') {
+      updateTransaction(tx.id, { status: 'confirmed' });
+      message.success('已确认');
+      return;
+    }
+    const result = lookupNavForDate(tx.fundId, new Date(tx.date));
+    if (!result) {
+      message.error(`未找到 ${tx.date} 之前的净值，请稍后重试`);
+      return;
+    }
+    const shares = calcSharesFromAmount(tx.amount, tx.fee, result.nav);
+    updateTransaction(tx.id, {
+      status: 'confirmed',
+      nav: result.nav,
+      shares: Math.round(shares * 10000) / 10000,
+    });
+    message.success(`已确认：${shares.toFixed(4)} 份 @ ${result.nav.toFixed(4)}`);
+  };
+
+const handleSetInitialPosition = async () => {
     try {
       const values = await initForm.validateFields();
       const shares = values.shares as number;
@@ -139,11 +163,30 @@ export default function FundDetail() {
       key: 'type',
       render: (v: Transaction['type']) => <Tag color={v === 'buy' ? 'red' : v === 'sell' ? 'green' : 'gold'}>{TRANSACTION_TYPE_LABELS[v]}</Tag>,
     },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 80,
+      render: (v: string | undefined) =>
+        v === 'pending' ? <Tag color="orange">待确认</Tag> : <Tag>已确认</Tag>,
+    },
     { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
     { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
     { title: '份额', dataIndex: 'shares', key: 'shares', align: 'right' as const, render: (v: number) => v.toFixed(4) },
     { title: '净值', dataIndex: 'nav', key: 'nav', align: 'right' as const, render: (v: number) => v.toFixed(4) },
     { title: '备注', dataIndex: 'note', key: 'note', render: (v: string) => v || '—' },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 100,
+      render: (_: unknown, record: Transaction) =>
+        record.status === 'pending' ? (
+          <Button type="link" size="small" onClick={() => handleConfirmTx(record)}>
+            确认
+          </Button>
+        ) : null,
+    },
   ];
 
   return (
@@ -280,9 +323,14 @@ export default function FundDetail() {
               <InputNumber style={{ width: '100%' }} min={0} precision={4} placeholder="现金分红填 0" />
             </Form.Item>
           )}
-          <Form.Item label="成交净值" name="nav" rules={[{ required: true, message: '请输入成交净值' }]}>
-            <InputNumber style={{ width: '100%' }} min={0} step={0.0001} precision={4} />
+          <Form.Item name="pending" valuePropName="checked" style={{ marginBottom: 16 }}>
+            <Checkbox>待确认（T+1 净值未出，先记账不进入持仓）</Checkbox>
           </Form.Item>
+          {!pendingWatch && (
+            <Form.Item label="成交净值" name="nav" rules={[{ required: true, message: '请输入成交净值' }]}>
+              <InputNumber style={{ width: '100%' }} min={0} step={0.0001} precision={4} />
+            </Form.Item>
+          )}
           <Form.Item label="备注" name="note">
             <Input placeholder="可选" />
           </Form.Item>

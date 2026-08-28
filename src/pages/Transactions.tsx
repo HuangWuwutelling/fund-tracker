@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Tag, Space, message, Popconfirm, Alert } from 'antd';
+import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Tag, Space, message, Popconfirm, Alert, Checkbox } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
+import { useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
@@ -16,8 +17,15 @@ export default function Transactions() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
   const txTypeWatch = Form.useWatch('type', form);
+  const pendingWatch = Form.useWatch('pending', form);
   const [filterFund, setFilterFund] = useState<string>('');
   const [filterType, setFilterType] = useState<string>('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const pendingOnly = searchParams.get('status') === 'pending';
+  const setPendingOnly = (v: boolean) => {
+    if (v) setSearchParams({ status: 'pending' });
+    else setSearchParams({});
+  };
   const [preview, setPreview] = useState<{ shares: number | null; nav: number | null; navDate: string | null }>({
     shares: null,
     nav: null,
@@ -28,8 +36,9 @@ export default function Transactions() {
     let list = [...transactions];
     if (filterFund) list = list.filter((t) => t.fundId === filterFund);
     if (filterType) list = list.filter((t) => t.type === filterType);
+    if (pendingOnly) list = list.filter((t) => t.status === 'pending');
     return list.sort((a, b) => b.date.localeCompare(a.date));
-  }, [transactions, filterFund, filterType]);
+  }, [transactions, filterFund, filterType, pendingOnly]);
 
   const handleSave = async () => {
     try {
@@ -37,17 +46,18 @@ export default function Transactions() {
       const txType = values.type as Transaction['type'];
       const amount = (values.amount as number) ?? 0;
       const fee = (values.fee as number) ?? 0;
+      const pending = (values.pending as boolean) ?? false;
       const nav = preview.nav;
 
-      // Block save when NAV is missing for non-dividend types
-      if (txType !== 'dividend' && (nav === null || nav <= 0)) {
+      // Block save when NAV is missing for non-dividend, non-pending types
+      if (!pending && txType !== 'dividend' && (nav === null || nav <= 0)) {
         message.error('无法保存：未找到该日期的成交净值，请先加载该基金的历史净值');
         return;
       }
 
       const shares = txType === 'dividend'
         ? 0
-        : calcSharesFromAmount(amount, fee, nav ?? 0);
+        : pending ? 0 : calcSharesFromAmount(amount, fee, nav ?? 0);
 
       const txData: Transaction = {
         id: editingId ?? uuid(),
@@ -57,8 +67,9 @@ export default function Transactions() {
         amount,
         fee,
         shares: Math.round(shares * 10000) / 10000,
-        nav: nav ?? 0,
+        nav: pending ? 0 : (nav ?? 0),
         note: values.note as string | undefined,
+        status: pending ? 'pending' : 'confirmed',
       };
 
       if (editingId) {
@@ -76,6 +87,26 @@ export default function Transactions() {
     } catch {
       // validation failed
     }
+  };
+
+  const handleConfirm = async (tx: Transaction) => {
+    if (tx.type === 'dividend') {
+      updateTransaction(tx.id, { status: 'confirmed' });
+      message.success('已确认');
+      return;
+    }
+    const result = lookupNavForDate(tx.fundId, new Date(tx.date));
+    if (!result) {
+      message.error(`未找到 ${tx.date} 之前的净值，请稍后重试或手动编辑`);
+      return;
+    }
+    const shares = calcSharesFromAmount(tx.amount, tx.fee, result.nav);
+    updateTransaction(tx.id, {
+      status: 'confirmed',
+      nav: result.nav,
+      shares: Math.round(shares * 10000) / 10000,
+    });
+    message.success(`已确认：${shares.toFixed(4)} 份 @ ${result.nav.toFixed(4)}`);
   };
 
   const handleEdit = (tx: Transaction) => {
@@ -167,6 +198,14 @@ export default function Transactions() {
         </Tag>
       ),
     },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 80,
+      render: (v: string | undefined) =>
+        v === 'pending' ? <Tag color="orange">待确认</Tag> : <Tag>已确认</Tag>,
+    },
     { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
     { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
     { title: '份额', dataIndex: 'shares', key: 'shares', align: 'right' as const, render: (v: number) => v.toFixed(4) },
@@ -175,9 +214,12 @@ export default function Transactions() {
     {
       title: '操作',
       key: 'actions',
-      width: 120,
+      width: 180,
       render: (_: unknown, record: Transaction) => (
         <Space>
+          {record.status === 'pending' && (
+            <Button type="link" size="small" onClick={() => handleConfirm(record)}>确认</Button>
+          )}
           <Button type="link" size="small" onClick={() => handleEdit(record)}>编辑</Button>
           <Popconfirm title="确定删除？" onConfirm={() => { removeTransaction(record.id); message.success('已删除'); }}>
             <Button type="link" danger size="small">删除</Button>
@@ -219,6 +261,9 @@ export default function Transactions() {
             <Select.Option key={key} value={key}>{label}</Select.Option>
           ))}
         </Select>
+        <Checkbox checked={pendingOnly} onChange={(e) => setPendingOnly(e.target.checked)}>
+          仅看未确认
+        </Checkbox>
       </Space>
 
       <Table dataSource={filteredTxs} columns={columns} rowKey="id" pagination={{ pageSize: 20 }} />
@@ -255,13 +300,16 @@ export default function Transactions() {
           <Form.Item label="手续费（元）" name="fee">
             <InputNumber style={{ width: '100%' }} min={0} precision={2} />
           </Form.Item>
+          <Form.Item name="pending" valuePropName="checked" style={{ marginBottom: 16 }}>
+            <Checkbox>待确认（T+1 净值未出，先记账不进入持仓）</Checkbox>
+          </Form.Item>
           {txTypeWatch === 'dividend' && (
             <Form.Item label="获得份额" name="shares" rules={[{ required: true, message: '请输入获得份额（现金分红填 0）' }]}>
               <InputNumber style={{ width: '100%' }} min={0} precision={4} placeholder="现金分红填 0" />
             </Form.Item>
           )}
           {/* NAV is hidden - auto-filled from history, shown in preview below */}
-          {preview.nav !== null && (
+          {!pendingWatch && preview.nav !== null && (
             <Alert
               type="success"
               showIcon
@@ -275,7 +323,7 @@ export default function Transactions() {
               style={{ marginBottom: 16 }}
             />
           )}
-          {preview.nav === null && (form.getFieldValue('fundId') && form.getFieldValue('date')) && (
+          {!pendingWatch && preview.nav === null && (form.getFieldValue('fundId') && form.getFieldValue('date')) && (
             <Alert
               type="warning"
               showIcon
