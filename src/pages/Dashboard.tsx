@@ -97,6 +97,8 @@ export default function Dashboard() {
       title: '基金名称',
       dataIndex: ['fund', 'name'],
       key: 'name',
+      sorter: (a: typeof summaries[0], b: typeof summaries[0]) =>
+        a.fund.name.localeCompare(b.fund.name, 'zh-CN'),
       render: (text: string, record: typeof summaries[0]) => (
         <span>
           {text}
@@ -107,6 +109,11 @@ export default function Dashboard() {
     {
       title: '平台',
       key: 'platform',
+      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => {
+        const an = platforms.find((p) => p.id === a.fund.platformId)?.name ?? '';
+        const bn = platforms.find((p) => p.id === b.fund.platformId)?.name ?? '';
+        return an.localeCompare(bn, 'zh-CN');
+      },
       render: (_: unknown, record: typeof summaries[0]) =>
         platforms.find((p) => p.id === record.fund.platformId)?.name ?? '—',
     },
@@ -115,6 +122,7 @@ export default function Dashboard() {
       dataIndex: 'cost',
       key: 'cost',
       align: 'right' as const,
+      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.cost - b.cost,
       render: (v: number) => `¥${formatMoney(v)}`,
     },
     {
@@ -122,6 +130,8 @@ export default function Dashboard() {
       dataIndex: 'marketValue',
       key: 'marketValue',
       align: 'right' as const,
+      defaultSortOrder: 'descend' as const,
+      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.marketValue - b.marketValue,
       render: (v: number) => `¥${formatMoney(v)}`,
     },
     {
@@ -129,6 +139,7 @@ export default function Dashboard() {
       dataIndex: 'returnRate',
       key: 'returnRate',
       align: 'right' as const,
+      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.returnRate - b.returnRate,
       render: (v: number) => <span style={{ color: pnlColor(v) }}>{formatPercent(v)}</span>,
     },
     {
@@ -136,6 +147,7 @@ export default function Dashboard() {
       dataIndex: 'dailyPnl',
       key: 'dailyPnl',
       align: 'right' as const,
+      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
       render: (v: number | null) =>
         v !== null ? (
           <span style={{ color: pnlColor(v) }}>{formatSignedMoney(v)}</span>

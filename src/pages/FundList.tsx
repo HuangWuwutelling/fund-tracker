@@ -125,11 +125,21 @@ export default function FundList() {
   };
 
   const columns = [
-    { title: '基金代码', dataIndex: 'id', key: 'id', width: 100 },
-    { title: '基金名称', dataIndex: 'name', key: 'name' },
+    { title: '基金代码', dataIndex: 'id', key: 'id', width: 100, sorter: (a: Fund, b: Fund) => a.id.localeCompare(b.id) },
+    {
+      title: '基金名称',
+      dataIndex: 'name',
+      key: 'name',
+      sorter: (a: Fund, b: Fund) => a.name.localeCompare(b.name, 'zh-CN'),
+    },
     {
       title: '平台',
       key: 'platform',
+      sorter: (a: Fund, b: Fund) => {
+        const an = platforms.find((p) => p.id === a.platformId)?.name ?? '';
+        const bn = platforms.find((p) => p.id === b.platformId)?.name ?? '';
+        return an.localeCompare(bn, 'zh-CN');
+      },
       render: (_: unknown, record: Fund) =>
         platforms.find((p) => p.id === record.platformId)?.name ?? '—',
     },
@@ -137,18 +147,21 @@ export default function FundList() {
       title: '类型',
       dataIndex: 'type',
       key: 'type',
+      sorter: (a: Fund, b: Fund) => FUND_TYPE_LABELS[a.type].localeCompare(FUND_TYPE_LABELS[b.type], 'zh-CN'),
       render: (type: Fund['type']) => <Tag>{FUND_TYPE_LABELS[type]}</Tag>,
     },
     {
       title: '最新净值',
       dataIndex: 'currentNav',
       key: 'currentNav',
+      sorter: (a: Fund, b: Fund) => a.currentNav - b.currentNav,
       render: (nav: number) => nav.toFixed(4),
     },
     {
       title: '净值日期',
       dataIndex: 'navDate',
       key: 'navDate',
+      sorter: (a: Fund, b: Fund) => a.navDate.localeCompare(b.navDate),
       render: (date: string) => formatDate(date),
     },
     {
