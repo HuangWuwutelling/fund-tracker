@@ -15,6 +15,7 @@ export default function Transactions() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
+  const txTypeWatch = Form.useWatch('type', form);
   const [filterFund, setFilterFund] = useState<string>('');
   const [filterType, setFilterType] = useState<string>('');
   const [preview, setPreview] = useState<{ shares: number | null; nav: number | null; navDate: string | null }>({
@@ -254,6 +255,11 @@ export default function Transactions() {
           <Form.Item label="手续费（元）" name="fee">
             <InputNumber style={{ width: '100%' }} min={0} precision={2} />
           </Form.Item>
+          {txTypeWatch === 'dividend' && (
+            <Form.Item label="获得份额" name="shares" rules={[{ required: true, message: '请输入获得份额（现金分红填 0）' }]}>
+              <InputNumber style={{ width: '100%' }} min={0} precision={4} placeholder="现金分红填 0" />
+            </Form.Item>
+          )}
           {/* NAV is hidden - auto-filled from history, shown in preview below */}
           {preview.nav !== null && (
             <Alert

@@ -23,6 +23,7 @@ export default function FundDetail() {
   const { platforms, transactions, getNavHistory, addTransaction, getFundById } = useStore();
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [txForm] = Form.useForm();
+  const txTypeWatch = Form.useWatch('type', txForm);
   const [initModalOpen, setInitModalOpen] = useState(false);
   const [initForm] = Form.useForm();
   const prevFilledCount = useRef(0);
@@ -274,6 +275,11 @@ export default function FundDetail() {
           <Form.Item label="手续费（元）" name="fee">
             <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="0" />
           </Form.Item>
+          {txTypeWatch === 'dividend' && (
+            <Form.Item label="获得份额" name="shares" rules={[{ required: true, message: '请输入获得份额（现金分红填 0）' }]}>
+              <InputNumber style={{ width: '100%' }} min={0} precision={4} placeholder="现金分红填 0" />
+            </Form.Item>
+          )}
           <Form.Item label="成交净值" name="nav" rules={[{ required: true, message: '请输入成交净值' }]}>
             <InputNumber style={{ width: '100%' }} min={0} step={0.0001} precision={4} />
           </Form.Item>
