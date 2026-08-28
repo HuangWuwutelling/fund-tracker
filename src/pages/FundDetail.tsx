@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Descriptions, Row, Col, Statistic, Table, Button, Tag, Modal, Form, Input, Select, DatePicker, InputNumber, message, Space, Radio, Alert } from 'antd';
 import { ArrowLeftOutlined, PlusOutlined, ImportOutlined } from '@ant-design/icons';
@@ -25,6 +25,7 @@ export default function FundDetail() {
   const [txForm] = Form.useForm();
   const [initModalOpen, setInitModalOpen] = useState(false);
   const [initForm] = Form.useForm();
+  const prevFilledCount = useRef(0);
   const [navRange, setNavRange] = useState<'1m' | '3m' | '6m' | '1y' | 'all'>('6m');
 
   const fund = getFundById(id ?? '');
@@ -103,9 +104,9 @@ export default function FundDetail() {
     try {
       const values = await initForm.validateFields();
       const shares = values.shares as number;
-      const totalCost = values.totalCost as number;
+      const totalCost = values.cost as number;
       const startDate = (values.startDate as dayjs.Dayjs).format('YYYY-MM-DD');
-      const nav = totalCost / shares; // average cost per share
+      const nav = values.price as number;
 
       const tx: Transaction = {
         id: uuid(),
@@ -123,6 +124,7 @@ export default function FundDetail() {
       message.success(`已设置初始持仓：${shares.toFixed(2)} 份，累计成本 ${formatMoney(totalCost)}`);
       setInitModalOpen(false);
       initForm.resetFields();
+      prevFilledCount.current = 0;
     } catch {
       // validation failed
     }
@@ -285,7 +287,7 @@ export default function FundDetail() {
         title="设置初始持仓"
         open={initModalOpen}
         onOk={handleSetInitialPosition}
-        onCancel={() => { setInitModalOpen(false); initForm.resetFields(); }}
+        onCancel={() => { setInitModalOpen(false); initForm.resetFields(); prevFilledCount.current = 0; }}
         okText="确认设置"
         cancelText="取消"
       >
@@ -293,35 +295,42 @@ export default function FundDetail() {
           type="info"
           showIcon
           message="适合已有持仓的情况"
-          description="如果你已经定投了一段时间，直接输入当前总份额和累计投入金额，应用会按这个成本基准跟踪后续表现。"
+          description="如果你已经定投了一段时间，输入当前持有的份额、平均成本单价和累计投入本金中的任意两项，第三项会自动算出。"
           style={{ marginBottom: 16 }}
         />
-        <Form form={initForm} layout="vertical" initialValues={{ startDate: dayjs().subtract(2, 'month') }}>
+        <Form
+          form={initForm}
+          layout="vertical"
+          initialValues={{ startDate: dayjs().subtract(2, 'month') }}
+          onValuesChange={(changed, all) => {
+            const changedField = Object.keys(changed)[0] as string | undefined;
+            if (!changedField || !['shares', 'price', 'cost'].includes(changedField)) return;
+            const isFilled = (v: unknown) => typeof v === 'number' && v > 0;
+            const { shares, price, cost } = all;
+            const filled = [isFilled(shares), isFilled(price), isFilled(cost)].filter(Boolean).length;
+            if (filled === 2 && prevFilledCount.current === 1) {
+              if (!isFilled(shares) && isFilled(price) && isFilled(cost)) {
+                initForm.setFieldValue('shares', +(cost! / price!).toFixed(4));
+              } else if (!isFilled(price) && isFilled(shares) && isFilled(cost)) {
+                initForm.setFieldValue('price', +(cost! / shares!).toFixed(4));
+              } else if (!isFilled(cost) && isFilled(shares) && isFilled(price)) {
+                initForm.setFieldValue('cost', +(shares! * price).toFixed(2));
+              }
+            }
+            prevFilledCount.current = filled;
+          }}
+        >
           <Form.Item label="持仓开始日期" name="startDate" rules={[{ required: true, message: '请选择开始日期' }]}>
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item label="当前持有份额" name="shares" rules={[{ required: true, message: '请输入当前份额' }]}>
+          <Form.Item label="当前持有份额" name="shares" rules={[{ required: true, message: '请输入持有份额' }]}>
             <InputNumber style={{ width: '100%' }} min={0} precision={4} placeholder="例如：1500.50" />
           </Form.Item>
-          <Form.Item label="累计投入本金（元）" name="totalCost" rules={[{ required: true, message: '请输入累计投入' }]}>
-            <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="例如：5000" />
+          <Form.Item label="持仓单价（元）" name="price" rules={[{ required: true, message: '请输入持仓单价' }]}>
+            <InputNumber style={{ width: '100%' }} min={0} step={0.0001} precision={4} placeholder="例如：1.0928" />
           </Form.Item>
-          <Form.Item shouldUpdate noStyle>
-            {() => {
-              const shares = initForm.getFieldValue('shares') as number;
-              const totalCost = initForm.getFieldValue('totalCost') as number;
-              if (shares && totalCost) {
-                const avgCost = totalCost / shares;
-                return (
-                  <Alert
-                    type="success"
-                    message={`平均成本：${avgCost.toFixed(4)} / 份`}
-                    style={{ marginBottom: 16 }}
-                  />
-                );
-              }
-              return null;
-            }}
+          <Form.Item label="累计投入本金（元）" name="cost" rules={[{ required: true, message: '请输入累计投入' }]}>
+            <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="例如：5000" />
           </Form.Item>
         </Form>
       </Modal>
