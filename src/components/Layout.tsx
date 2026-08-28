@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 
-const { Header, Sider, Content } = Layout;
+const { Header, Sider, Content, Footer } = Layout;
 
 const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: '资产总览' },
@@ -83,6 +83,9 @@ export default function AppLayout() {
         <Content style={{ margin: 24 }}>
           <Outlet />
         </Content>
+        <Footer style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: '16px 24px' }}>
+          仅为个人记录，不构成投资建议。数据为 T+1，仅供参考。投资有风险，入市需谨慎。
+        </Footer>
       </Layout>
     </Layout>
   );
