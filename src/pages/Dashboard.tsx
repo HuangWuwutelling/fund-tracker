@@ -7,7 +7,7 @@ import { PieChart, LineChart } from 'echarts/charts';
 import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import { useStore } from '../stores';
-import { calcFundSummary } from '../utils/calculator';
+import { calcFundSummary, calcXIRR, calcDividendTotal } from '../utils/calculator';
 import { formatMoney, formatPercent, formatSignedMoney, pnlColor } from '../utils/formatter';
 import { FUND_TYPE_LABELS } from '../types';
 
@@ -31,6 +31,12 @@ export default function Dashboard() {
 
   // Daily P&L: sum of all funds' daily P&L
   const totalDailyPnl = summaries.reduce((sum, s) => sum + (s.dailyPnl ?? 0), 0);
+
+  // 累计分红(全平台)
+  const totalDividend = calcDividendTotal(transactions);
+
+  // XIRR(全平台):把 currentValue 作为终值,所有交易视为现金流
+  const totalXIRR = calcXIRR(transactions, totalValue);
 
   // Pie chart: by platform
   const platformPieData = useMemo(() => {
@@ -177,6 +183,28 @@ export default function Dashboard() {
               prefix="¥"
               precision={2}
               valueStyle={{ color: pnlColor(totalDailyPnl) }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={8}>
+          <Card>
+            <Statistic
+              title="年化收益率（XIRR）"
+              value={totalXIRR}
+              suffix="%"
+              precision={2}
+              valueStyle={{ color: pnlColor(totalXIRR) }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={8}>
+          <Card>
+            <Statistic
+              title="累计分红"
+              value={totalDividend}
+              prefix="¥"
+              precision={2}
+              valueStyle={{ color: totalDividend > 0 ? pnlColor(totalDividend) : undefined }}
             />
           </Card>
         </Col>

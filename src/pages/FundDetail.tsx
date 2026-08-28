@@ -161,13 +161,13 @@ export default function FundDetail() {
       </Card>
 
       <Row gutter={16} style={{ marginTop: 16 }}>
-        <Col xs={12} sm={6}>
+        <Col xs={12} sm={12} md={8}>
           <Card><Statistic title="持仓成本" value={summary.cost} prefix="¥" precision={2} /></Card>
         </Col>
-        <Col xs={12} sm={6}>
+        <Col xs={12} sm={12} md={8}>
           <Card><Statistic title="当前市值" value={summary.marketValue} prefix="¥" precision={2} /></Card>
         </Col>
-        <Col xs={12} sm={6}>
+        <Col xs={12} sm={12} md={8}>
           <Card>
             <Statistic
               title="收益率"
@@ -178,7 +178,7 @@ export default function FundDetail() {
             />
           </Card>
         </Col>
-        <Col xs={12} sm={6}>
+        <Col xs={12} sm={12} md={8}>
           <Card>
             <Statistic
               title="当日盈亏"
@@ -186,6 +186,28 @@ export default function FundDetail() {
               prefix="¥"
               precision={2}
               valueStyle={{ color: pnlColor(summary.dailyPnl ?? 0) }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={12} md={8}>
+          <Card>
+            <Statistic
+              title="年化收益率（XIRR）"
+              value={summary.xirr}
+              suffix="%"
+              precision={2}
+              valueStyle={{ color: pnlColor(summary.xirr) }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={12} md={8}>
+          <Card>
+            <Statistic
+              title="累计分红"
+              value={summary.dividend}
+              prefix="¥"
+              precision={2}
+              valueStyle={{ color: summary.dividend > 0 ? pnlColor(summary.dividend) : undefined }}
             />
           </Card>
         </Col>
