@@ -1,4 +1,4 @@
-/** 格式化金额，带千分位 */
+/** 格式化金额，带千分位（负数自带 - 号） */
 export function formatMoney(value: number, decimals = 2): string {
   return value.toLocaleString('zh-CN', {
     minimumFractionDigits: decimals,
@@ -9,12 +9,6 @@ export function formatMoney(value: number, decimals = 2): string {
 /** 格式化百分比 */
 export function formatPercent(value: number, decimals = 2): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(decimals)}%`;
-}
-
-/** 格式化带正负号的金额 */
-export function formatSignedMoney(value: number): string {
-  const prefix = value >= 0 ? '+' : '';
-  return `${prefix}¥${formatMoney(Math.abs(value))}`;
 }
 
 /** 格式化日期 */

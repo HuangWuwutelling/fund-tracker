@@ -24,7 +24,7 @@ function WeeklyReportView() {
   const rankingColumns = [
     { title: '排名', key: 'rank', render: (_: unknown, __: unknown, i: number) => i + 1, width: 60 },
     { title: '基金', dataIndex: 'fundName', key: 'fundName' },
-    { title: '收益', dataIndex: 'returnAmount', key: 'returnAmount', align: 'right' as const, render: (v: number) => `¥${formatMoney(v)}` },
+    { title: '收益', dataIndex: 'returnAmount', key: 'returnAmount', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
     {
       title: '收益率',
       dataIndex: 'returnRate',
@@ -44,7 +44,6 @@ function WeeklyReportView() {
             <Statistic
               title="本周收益"
               value={report.totalReturn}
-              prefix="¥"
               precision={2}
               valueStyle={{ color: pnlColor(report.totalReturn) }}
             />
@@ -102,14 +101,14 @@ function MonthlyReportView() {
     tooltip: { trigger: 'axis' as const },
     grid: { left: 60, right: 20, top: 10, bottom: 30 },
     xAxis: { type: 'category' as const, data: report.snapshots.map((s) => s.date) },
-    yAxis: { type: 'value' as const, axisLabel: { formatter: '¥{value}' } },
+    yAxis: { type: 'value' as const, axisLabel: { formatter: '{value}' } },
     series: [{ type: 'line', data: report.snapshots.map((s) => s.totalValue), smooth: true, areaStyle: { opacity: 0.1 } }],
   };
 
   const platformBarOption = {
     tooltip: { trigger: 'axis' as const },
     grid: { left: 100, right: 20, top: 10, bottom: 30 },
-    xAxis: { type: 'value' as const, axisLabel: { formatter: '¥{value}' } },
+    xAxis: { type: 'value' as const, axisLabel: { formatter: '{value}' } },
     yAxis: { type: 'category' as const, data: report.platformContributions.map((p) => p.name) },
     series: [{ type: 'bar', data: report.platformContributions.map((p) => p.returnAmount) }],
   };
@@ -124,7 +123,6 @@ function MonthlyReportView() {
             <Statistic
               title="本月收益"
               value={report.totalReturn}
-              prefix="¥"
               precision={2}
               valueStyle={{ color: pnlColor(report.totalReturn) }}
             />

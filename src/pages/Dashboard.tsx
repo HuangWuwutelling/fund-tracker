@@ -8,7 +8,7 @@ import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from
 import { CanvasRenderer } from 'echarts/renderers';
 import { useStore } from '../stores';
 import { calcFundSummary, calcXIRR, calcDividendTotal } from '../utils/calculator';
-import { formatMoney, formatPercent, formatSignedMoney, pnlColor } from '../utils/formatter';
+import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
 import { FUND_TYPE_LABELS } from '../types';
 
 echarts.use([PieChart, LineChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer]);
@@ -66,7 +66,7 @@ export default function Dashboard() {
   }, [snapshots]);
 
   const pieOption = (data: { name: string; value: number }[]) => ({
-    tooltip: { trigger: 'item' as const, formatter: '{b}: ¥{c} ({d}%)' },
+    tooltip: { trigger: 'item' as const, formatter: '{b}: {c} ({d}%)' },
     legend: { bottom: 0 },
     series: [
       {
@@ -83,12 +83,12 @@ export default function Dashboard() {
       trigger: 'axis' as const,
       formatter: (params: Array<{ name: string; value: number }>) => {
         const p = params[0];
-        return p ? `${p.name}<br/>总资产: ¥${formatMoney(p.value)}` : '';
+        return p ? `${p.name}<br/>总资产: ${formatMoney(p.value)}` : '';
       },
     },
     grid: { left: 60, right: 20, top: 20, bottom: 30 },
     xAxis: { type: 'category' as const, data: lineData.map((d) => d.date) },
-    yAxis: { type: 'value' as const, axisLabel: { formatter: '¥{value}' } },
+    yAxis: { type: 'value' as const, axisLabel: { formatter: '{value}' } },
     series: [{ type: 'line', data: lineData.map((d) => d.value), smooth: true, areaStyle: { opacity: 0.1 } }],
   };
 
@@ -126,7 +126,7 @@ export default function Dashboard() {
       width: 130,
       align: 'right' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.cost - b.cost,
-      render: (v: number) => `¥${formatMoney(v)}`,
+      render: (v: number) => `${formatMoney(v)}`,
     },
     {
       title: '当前市值',
@@ -136,7 +136,7 @@ export default function Dashboard() {
       align: 'right' as const,
       defaultSortOrder: 'descend' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.marketValue - b.marketValue,
-      render: (v: number) => `¥${formatMoney(v)}`,
+      render: (v: number) => `${formatMoney(v)}`,
     },
     {
       title: '持仓收益',
@@ -145,7 +145,7 @@ export default function Dashboard() {
       width: 130,
       align: 'right' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.totalReturn - b.totalReturn,
-      render: (v: number) => <span style={{ color: pnlColor(v) }}>{formatSignedMoney(v)}</span>,
+      render: (v: number) => <span style={{ color: pnlColor(v) }}>{formatMoney(v)}</span>,
     },
     {
       title: '收益率',
@@ -165,7 +165,7 @@ export default function Dashboard() {
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
       render: (v: number | null) =>
         v !== null ? (
-          <span style={{ color: pnlColor(v) }}>{formatSignedMoney(v)}</span>
+          <span style={{ color: pnlColor(v) }}>{formatMoney(v)}</span>
         ) : (
           '—'
         ),
@@ -177,7 +177,7 @@ export default function Dashboard() {
       <Row gutter={[16, 16]}>
         <Col xs={12} sm={6}>
           <Card>
-            <Statistic title="总资产" value={totalValue} prefix="¥" precision={2} />
+            <Statistic title="总资产" value={totalValue} precision={2} />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
@@ -185,7 +185,6 @@ export default function Dashboard() {
             <Statistic
               title="总收益"
               value={totalReturn}
-              prefix="¥"
               precision={2}
               valueStyle={{ color: pnlColor(totalReturn) }}
             />
@@ -207,7 +206,6 @@ export default function Dashboard() {
             <Statistic
               title="当日盈亏"
               value={totalDailyPnl}
-              prefix="¥"
               precision={2}
               valueStyle={{ color: pnlColor(totalDailyPnl) }}
             />
@@ -229,7 +227,6 @@ export default function Dashboard() {
             <Statistic
               title="累计分红"
               value={totalDividend}
-              prefix="¥"
               precision={2}
               valueStyle={{ color: totalDividend > 0 ? pnlColor(totalDividend) : undefined }}
             />

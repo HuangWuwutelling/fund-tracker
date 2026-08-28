@@ -120,7 +120,7 @@ export default function FundDetail() {
       };
 
       addTransaction(tx);
-      message.success(`已设置初始持仓：${shares.toFixed(2)} 份，累计成本 ¥${formatMoney(totalCost)}`);
+      message.success(`已设置初始持仓：${shares.toFixed(2)} 份，累计成本 ${formatMoney(totalCost)}`);
       setInitModalOpen(false);
       initForm.resetFields();
     } catch {
@@ -136,8 +136,8 @@ export default function FundDetail() {
       key: 'type',
       render: (v: Transaction['type']) => <Tag color={v === 'buy' ? 'red' : v === 'sell' ? 'green' : 'gold'}>{TRANSACTION_TYPE_LABELS[v]}</Tag>,
     },
-    { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => `¥${formatMoney(v)}` },
-    { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => `¥${formatMoney(v)}` },
+    { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
+    { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
     { title: '份额', dataIndex: 'shares', key: 'shares', align: 'right' as const, render: (v: number) => v.toFixed(4) },
     { title: '净值', dataIndex: 'nav', key: 'nav', align: 'right' as const, render: (v: number) => v.toFixed(4) },
     { title: '备注', dataIndex: 'note', key: 'note', render: (v: string) => v || '—' },
@@ -162,10 +162,10 @@ export default function FundDetail() {
 
       <Row gutter={16} style={{ marginTop: 16 }}>
         <Col xs={12} sm={12} md={8}>
-          <Card><Statistic title="持仓成本" value={summary.cost} prefix="¥" precision={2} /></Card>
+          <Card><Statistic title="持仓成本" value={summary.cost} precision={2} /></Card>
         </Col>
         <Col xs={12} sm={12} md={8}>
-          <Card><Statistic title="当前市值" value={summary.marketValue} prefix="¥" precision={2} /></Card>
+          <Card><Statistic title="当前市值" value={summary.marketValue} precision={2} /></Card>
         </Col>
         <Col xs={12} sm={12} md={8}>
           <Card>
@@ -183,7 +183,6 @@ export default function FundDetail() {
             <Statistic
               title="当日盈亏"
               value={summary.dailyPnl ?? 0}
-              prefix="¥"
               precision={2}
               valueStyle={{ color: pnlColor(summary.dailyPnl ?? 0) }}
             />
@@ -205,7 +204,6 @@ export default function FundDetail() {
             <Statistic
               title="累计分红"
               value={summary.dividend}
-              prefix="¥"
               precision={2}
               valueStyle={{ color: summary.dividend > 0 ? pnlColor(summary.dividend) : undefined }}
             />
@@ -317,7 +315,7 @@ export default function FundDetail() {
                 return (
                   <Alert
                     type="success"
-                    message={`平均成本：¥${avgCost.toFixed(4)} / 份`}
+                    message={`平均成本：${avgCost.toFixed(4)} / 份`}
                     style={{ marginBottom: 16 }}
                   />
                 );

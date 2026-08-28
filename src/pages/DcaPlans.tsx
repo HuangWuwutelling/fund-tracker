@@ -43,6 +43,8 @@ export default function DcaPlans() {
     const returnRate = totalInvested > 0 ? (totalReturn / totalInvested) * 100 : 0;
     return { totalInvested, totalMarketValue, totalReturn, returnRate };
   }, [dcaPlans, funds, transactions]);
+  // Note: when a fund has multiple DCA plans, only the first plan's transactions are counted.
+  // For accurate aggregation, ensure each fund has at most one plan, or filter transactions by all plan amounts.
 
   const handleSave = async () => {
     try {
@@ -88,6 +90,15 @@ export default function DcaPlans() {
 
   const getNextDate = (plan: DcaPlan): string => {
     const now = dayjs();
+    if (plan.frequency === 'daily') {
+      // Next trading day: if today is a weekday and past 15:00, assume tomorrow
+      // For simplicity, just show next weekday
+      let next = now.add(1, 'day');
+      while (next.day() === 0 || next.day() === 6) {
+        next = next.add(1, 'day');
+      }
+      return next.format('YYYY-MM-DD');
+    }
     if (plan.frequency === 'monthly' && plan.dayOfMonth) {
       let next = now.date(plan.dayOfMonth);
       if (next.isBefore(now, 'day')) next = next.add(1, 'month');
@@ -108,7 +119,7 @@ export default function DcaPlans() {
       key: 'fund',
       render: (id: string) => funds.find((f) => f.id === id)?.name ?? id,
     },
-    { title: '每期金额', dataIndex: 'amount', key: 'amount', render: (v: number) => `¥${formatMoney(v)}` },
+    { title: '每期金额', dataIndex: 'amount', key: 'amount', render: (v: number) => `${formatMoney(v)}` },
     {
       title: '频率',
       dataIndex: 'frequency',
@@ -151,10 +162,10 @@ export default function DcaPlans() {
     <div>
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col xs={8}>
-          <Card><Statistic title="累计投入" value={stats.totalInvested} prefix="¥" precision={2} /></Card>
+          <Card><Statistic title="累计投入" value={stats.totalInvested} precision={2} /></Card>
         </Col>
         <Col xs={8}>
-          <Card><Statistic title="当前市值" value={stats.totalMarketValue} prefix="¥" precision={2} /></Card>
+          <Card><Statistic title="当前市值" value={stats.totalMarketValue} precision={2} /></Card>
         </Col>
         <Col xs={8}>
           <Card>

@@ -1,11 +1,12 @@
-import { useState, useMemo } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Tag, Space, message, Popconfirm } from 'antd';
+import { useState, useMemo, useEffect } from 'react';
+import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Tag, Space, message, Popconfirm, Alert } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { calcSharesFromAmount } from '../utils/calculator';
 import { formatMoney, formatDate } from '../utils/formatter';
+import { lookupNavForDate } from '../utils/navLookup';
 import { TRANSACTION_TYPE_LABELS } from '../types';
 import type { Transaction } from '../types';
 
@@ -16,6 +17,11 @@ export default function Transactions() {
   const [form] = Form.useForm();
   const [filterFund, setFilterFund] = useState<string>('');
   const [filterType, setFilterType] = useState<string>('');
+  const [preview, setPreview] = useState<{ shares: number | null; nav: number | null; navDate: string | null }>({
+    shares: null,
+    nav: null,
+    navDate: null,
+  });
 
   const filteredTxs = useMemo(() => {
     let list = [...transactions];
@@ -28,12 +34,19 @@ export default function Transactions() {
     try {
       const values = await form.validateFields();
       const txType = values.type as Transaction['type'];
-      const amount = values.amount as number;
+      const amount = (values.amount as number) ?? 0;
       const fee = (values.fee as number) ?? 0;
-      const nav = values.nav as number;
+      const nav = preview.nav;
+
+      // Block save when NAV is missing for non-dividend types
+      if (txType !== 'dividend' && (nav === null || nav <= 0)) {
+        message.error('无法保存：未找到该日期的成交净值，请先加载该基金的历史净值');
+        return;
+      }
+
       const shares = txType === 'dividend'
-        ? (values.shares as number) ?? 0
-        : calcSharesFromAmount(amount, fee, nav);
+        ? 0
+        : calcSharesFromAmount(amount, fee, nav ?? 0);
 
       const txData: Transaction = {
         id: editingId ?? uuid(),
@@ -43,7 +56,7 @@ export default function Transactions() {
         amount,
         fee,
         shares: Math.round(shares * 10000) / 10000,
-        nav,
+        nav: nav ?? 0,
         note: values.note as string | undefined,
       };
 
@@ -58,6 +71,7 @@ export default function Transactions() {
       setModalOpen(false);
       setEditingId(null);
       form.resetFields();
+      setPreview({ shares: null, nav: null, navDate: null });
     } catch {
       // validation failed
     }
@@ -69,8 +83,70 @@ export default function Transactions() {
       ...tx,
       date: dayjs(tx.date),
     });
+    setPreview({ shares: tx.shares, nav: tx.nav, navDate: tx.date });
     setModalOpen(true);
   };
+
+  // Recompute preview whenever relevant fields change
+  const handleFormChange = (changedValues: Record<string, unknown>) => {
+    const fundId = (form.getFieldValue('fundId') as string) || '';
+    const date = form.getFieldValue('date') as dayjs.Dayjs | null;
+    const amount = form.getFieldValue('amount') as number;
+    const fee = (form.getFieldValue('fee') as number) ?? 0;
+    const txType = form.getFieldValue('type') as Transaction['type'];
+
+    let nav: number | null = preview.nav;
+    let navDate: string | null = preview.navDate;
+
+    // Re-lookup NAV when fund or date changes
+    if ('fundId' in changedValues || 'date' in changedValues) {
+      if (fundId && date) {
+        const result = lookupNavForDate(fundId, date.toDate());
+        if (result) {
+          nav = result.nav;
+          navDate = result.navDate;
+        } else {
+          nav = null;
+          navDate = null;
+        }
+      } else {
+        nav = null;
+        navDate = null;
+      }
+    }
+
+    // Compute shares preview
+    let shares: number | null = null;
+    if (txType !== 'dividend' && nav && amount) {
+      shares = calcSharesFromAmount(amount, fee, nav);
+    }
+
+    setPreview({ shares, nav, navDate });
+  };
+
+  // Manual NAV refresh button (in case user picks a date that needs fallback to prior trading day)
+  const handleRefreshNav = () => {
+    const fundId = (form.getFieldValue('fundId') as string) || '';
+    const date = form.getFieldValue('date') as dayjs.Dayjs | null;
+    if (!fundId || !date) {
+      message.warning('请先选择基金和日期');
+      return;
+    }
+    const result = lookupNavForDate(fundId, date.toDate());
+    if (result) {
+      setPreview((p) => ({ ...p, nav: result.nav, navDate: result.navDate }));
+      message.success(`使用 ${result.navDate} 的净值 ${result.nav.toFixed(4)}`);
+    } else {
+      message.warning('未找到该日期之前的净值');
+    }
+  };
+
+  // Reset preview when modal closes
+  useEffect(() => {
+    if (!modalOpen) {
+      setPreview({ shares: null, nav: null, navDate: null });
+    }
+  }, [modalOpen]);
 
   const columns = [
     { title: '日期', dataIndex: 'date', key: 'date', render: (v: string) => formatDate(v) },
@@ -90,8 +166,8 @@ export default function Transactions() {
         </Tag>
       ),
     },
-    { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => `¥${formatMoney(v)}` },
-    { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => `¥${formatMoney(v)}` },
+    { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
+    { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
     { title: '份额', dataIndex: 'shares', key: 'shares', align: 'right' as const, render: (v: number) => v.toFixed(4) },
     { title: '净值', dataIndex: 'nav', key: 'nav', align: 'right' as const, render: (v: number) => v.toFixed(4) },
     { title: '备注', dataIndex: 'note', key: 'note', render: (v: string) => v || '—' },
@@ -114,7 +190,7 @@ export default function Transactions() {
     <Card
       title="交易记录"
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingId(null); form.resetFields(); setModalOpen(true); }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingId(null); form.resetFields(); setPreview({ shares: null, nav: null, navDate: null }); setModalOpen(true); }}>
           添加交易
         </Button>
       }
@@ -150,11 +226,11 @@ export default function Transactions() {
         title={editingId ? '编辑交易' : '添加交易'}
         open={modalOpen}
         onOk={handleSave}
-        onCancel={() => { setModalOpen(false); setEditingId(null); form.resetFields(); }}
+        onCancel={() => { setModalOpen(false); setEditingId(null); form.resetFields(); setPreview({ shares: null, nav: null, navDate: null }); }}
         okText="保存"
         cancelText="取消"
       >
-        <Form form={form} layout="vertical" initialValues={{ date: dayjs(), type: 'buy', fee: 0 }}>
+        <Form form={form} layout="vertical" initialValues={{ date: dayjs(), type: 'buy', fee: 0 }} onValuesChange={handleFormChange}>
           <Form.Item label="基金" name="fundId" rules={[{ required: true, message: '请选择基金' }]}>
             <Select placeholder="选择基金">
               {funds.map((f) => (
@@ -178,9 +254,30 @@ export default function Transactions() {
           <Form.Item label="手续费（元）" name="fee">
             <InputNumber style={{ width: '100%' }} min={0} precision={2} />
           </Form.Item>
-          <Form.Item label="成交净值" name="nav" rules={[{ required: true, message: '请输入净值' }]}>
-            <InputNumber style={{ width: '100%' }} min={0} step={0.0001} precision={4} />
-          </Form.Item>
+          {/* NAV is hidden - auto-filled from history, shown in preview below */}
+          {preview.nav !== null && (
+            <Alert
+              type="success"
+              showIcon
+              message={`成交净值：${preview.nav.toFixed(4)}（${preview.navDate}${preview.navDate !== (form.getFieldValue('date') as dayjs.Dayjs | null)?.format('YYYY-MM-DD') ? '，最近交易日' : ''}）`}
+              description={
+                preview.shares !== null ? (
+                  <>预计份额：<strong>{preview.shares.toFixed(4)}</strong> 份<br />（{form.getFieldValue('amount') ?? 0} - {form.getFieldValue('fee') ?? 0}）÷ {preview.nav.toFixed(4)}</>
+                ) : '请输入金额后查看预计份额'
+              }
+              action={<Button size="small" onClick={handleRefreshNav}>刷新净值</Button>}
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          {preview.nav === null && (form.getFieldValue('fundId') && form.getFieldValue('date')) && (
+            <Alert
+              type="warning"
+              showIcon
+              message="未找到该日期的净值"
+              description="该日期之前无历史净值数据，请检查该基金是否已加载历史，或换个日期"
+              style={{ marginBottom: 16 }}
+            />
+          )}
           <Form.Item label="备注" name="note">
             <Input placeholder="可选" />
           </Form.Item>
