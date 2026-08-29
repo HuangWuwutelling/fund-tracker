@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Card, Table, Button, Modal, Form, Select, DatePicker, InputNumber, Switch, Space, Statistic, Row, Col, message, Popconfirm } from 'antd';
+import { Card, Table, Button, Modal, Form, Select, DatePicker, InputNumber, Switch, Space, Statistic, Row, Col, message, Popconfirm, Tooltip } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
@@ -19,10 +19,12 @@ export default function DcaPlans() {
 
   // DCA statistics: each plan claims only the buy transactions whose amount matches (within ¥1).
   // When a fund has multiple plans, txs are attributed in plan order to avoid double-counting.
+  // Only confirmed transactions count toward "累计投入" — pending ones haven't been invested yet.
   const stats = useMemo(() => {
     let totalInvested = 0;
     let totalMarketValue = 0;
     const usedTxIds = new Set<string>();
+    const matchedTxs: Array<{ planId: string; fundName: string; date: string; amount: number }> = [];
 
     for (const plan of dcaPlans) {
       const fund = funds.find((f) => f.id === plan.fundId);
@@ -32,10 +34,14 @@ export default function DcaPlans() {
         (t) =>
           t.fundId === plan.fundId &&
           t.type === 'buy' &&
+          t.status !== 'pending' &&
           !usedTxIds.has(t.id) &&
           Math.abs(t.amount - plan.amount) < 1
       );
-      for (const t of planTxs) usedTxIds.add(t.id);
+      for (const t of planTxs) {
+        usedTxIds.add(t.id);
+        matchedTxs.push({ planId: plan.id, fundName: fund.name, date: t.date, amount: t.amount });
+      }
 
       const shares = calcShares(planTxs);
       const cost = calcCost(planTxs);
@@ -46,7 +52,7 @@ export default function DcaPlans() {
 
     const totalReturn = totalMarketValue - totalInvested;
     const returnRate = totalInvested > 0 ? (totalReturn / totalInvested) * 100 : 0;
-    return { totalInvested, totalMarketValue, totalReturn, returnRate };
+    return { totalInvested, totalMarketValue, totalReturn, returnRate, matchedTxs };
   }, [dcaPlans, funds, transactions]);
 
   const handleSave = async () => {
@@ -190,7 +196,22 @@ export default function DcaPlans() {
     <div>
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col xs={8}>
-          <Card><Statistic title="累计投入" value={stats.totalInvested} precision={2} /></Card>
+          <Card>
+            <Tooltip
+              title={
+                stats.matchedTxs.length > 0 ? (
+                  <div>
+                    <div>以下已确认买入交易被计入：</div>
+                    {stats.matchedTxs.map((m, i) => (
+                      <div key={i}>{m.fundName} · {m.date} · {formatMoney(m.amount)}</div>
+                    ))}
+                  </div>
+                ) : '尚无匹配的买入交易'
+              }
+            >
+              <Statistic title="累计投入" value={stats.totalInvested} precision={2} />
+            </Tooltip>
+          </Card>
         </Col>
         <Col xs={8}>
           <Card><Statistic title="当前市值" value={stats.totalMarketValue} precision={2} /></Card>
