@@ -120,23 +120,47 @@ export default function DcaPlans() {
       title: '基金',
       dataIndex: 'fundId',
       key: 'fund',
+      align: 'left' as const,
+      sorter: (a: DcaPlan, b: DcaPlan) => {
+        const an = funds.find((f) => f.id === a.fundId)?.name ?? a.fundId;
+        const bn = funds.find((f) => f.id === b.fundId)?.name ?? b.fundId;
+        return an.localeCompare(bn, 'zh-CN');
+      },
       render: (id: string) => funds.find((f) => f.id === id)?.name ?? id,
     },
-    { title: '每期金额', dataIndex: 'amount', key: 'amount', render: (v: number) => `${formatMoney(v)}` },
+    {
+      title: '每期金额',
+      dataIndex: 'amount',
+      key: 'amount',
+      align: 'right' as const,
+      sorter: (a: DcaPlan, b: DcaPlan) => a.amount - b.amount,
+      render: (v: number) => `${formatMoney(v)}`,
+    },
     {
       title: '频率',
       dataIndex: 'frequency',
       key: 'frequency',
+      align: 'left' as const,
+      sorter: (a: DcaPlan, b: DcaPlan) =>
+        FREQUENCY_LABELS[a.frequency].localeCompare(FREQUENCY_LABELS[b.frequency], 'zh-CN'),
       render: (v: DcaPlan['frequency']) => FREQUENCY_LABELS[v],
     },
     {
       title: '下次定投',
       key: 'nextDate',
+      align: 'left' as const,
+      sorter: (a: DcaPlan, b: DcaPlan) => {
+        const an = a.active ? getNextDate(a) : '~';
+        const bn = b.active ? getNextDate(b) : '~';
+        return an.localeCompare(bn);
+      },
       render: (_: unknown, record: DcaPlan) => record.active ? getNextDate(record) : '已停用',
     },
     {
       title: '状态',
       key: 'active',
+      align: 'center' as const,
+      sorter: (a: DcaPlan, b: DcaPlan) => Number(a.active) - Number(b.active),
       render: (_: unknown, record: DcaPlan) => (
         <Switch
           checked={record.active}
@@ -150,6 +174,7 @@ export default function DcaPlans() {
       title: '操作',
       key: 'actions',
       width: 120,
+      align: 'center' as const,
       render: (_: unknown, record: DcaPlan) => (
         <Space>
           <Button type="link" size="small" onClick={() => handleEdit(record)}>编辑</Button>
