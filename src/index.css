@@ -9,7 +9,8 @@ body {
 }
 
 /* DatePicker 弹窗头部：年份和月份按钮之间的间距从默认 8px 收到 2px，
-   否则 "2026年" 和 "8月" 之间看起来像 "8" 前面多了个空格 */
+   否则 "2026年" 和 "8月" 之间看起来像 "8" 前面多了个空格。
+   AntD v5 cssinjs 会给规则注入 hash 类，特异性更高，必须用 !important 才能覆盖 */
 .ant-picker-header-view > button:not(:first-child) {
-  margin-inline-start: 2px;
+  margin-inline-start: 2px !important;
 }
