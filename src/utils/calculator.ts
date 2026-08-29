@@ -1,4 +1,5 @@
-import type { Transaction, Fund, NavRecord } from '../types';
+import type { Transaction, Fund, NavRecord, DcaPlan } from '../types';
+import dayjs from 'dayjs';
 
 /** 过滤掉 pending(待确认)交易;只保留 confirmed 或未设状态的(向后兼容) */
 export function onlyConfirmed(transactions: Transaction[]): Transaction[] {
@@ -205,6 +206,70 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
 export function calcSharesFromAmount(amount: number, fee: number, nav: number): number {
   if (nav === 0) return 0;
   return (amount - fee) / nav;
+}
+
+/**
+ * 判断某个 DCA 计划今天是否应执行
+ * - daily: 当前时间 < 15:00 → 今天；否则 → 明天（这里只判断"今天"，用于 Dashboard 实时显示）
+ * - weekly: 今天星期几 == plan.dayOfWeek
+ * - biweekly: 满足 weekly 条件 + 与 startDate 所在周奇偶相同
+ * - monthly: 今天是 plan.dayOfMonth 号
+ * 跳过周末（不补录周六/周日的定投）
+ */
+export function isDcaPlanDueToday(plan: DcaPlan, today: Date = new Date()): boolean {
+  if (!plan.active) return false;
+  const now = dayjs(today);
+  // 周末不计入（避免补录上周遗漏的定投）
+  if (now.day() === 0 || now.day() === 6) return false;
+
+  switch (plan.frequency) {
+    case 'daily': {
+      const cutoff = now.hour(15).minute(0).second(0).millisecond(0);
+      return now.isBefore(cutoff);
+    }
+    case 'weekly':
+      return now.day() === plan.dayOfWeek;
+    case 'biweekly': {
+      if (now.day() !== plan.dayOfWeek) return false;
+      const start = dayjs(plan.startDate);
+      const diffDays = now.startOf('day').diff(start.startOf('day'), 'day');
+      const diffWeeks = Math.floor(diffDays / 7);
+      return diffDays >= 0 && diffWeeks % 2 === 0;
+    }
+    case 'monthly':
+      return now.date() === plan.dayOfMonth;
+    default:
+      return false;
+  }
+}
+
+/**
+ * 计算当日投入金额（交易记录 + 定投计划预期）
+ * - 交易记录：今天所有买入的 amount 之和（含 pending 和 confirmed）
+ * - 定投计划：今天应执行的计划 amount 之和（去重：若当日已有该基金的买入交易，则该计划不重复计入）
+ * 返回：{ txAmount, planAmount, total }
+ */
+export function calcTodayInvested(
+  transactions: Transaction[],
+  dcaPlans: DcaPlan[],
+  today: Date = new Date()
+): { txAmount: number; planAmount: number; total: number } {
+  const todayStr = dayjs(today).format('YYYY-MM-DD');
+
+  // 交易部分：今天所有买入
+  const txAmount = transactions
+    .filter((t) => t.type === 'buy' && t.date === todayStr)
+    .reduce((sum, t) => sum + t.amount, 0);
+
+  // 定投部分：今天应执行、且当日没有对应交易（避免重复计数）
+  const fundsWithTxToday = new Set(
+    transactions.filter((t) => t.type === 'buy' && t.date === todayStr).map((t) => t.fundId)
+  );
+  const planAmount = dcaPlans
+    .filter((p) => isDcaPlanDueToday(p, today) && !fundsWithTxToday.has(p.fundId))
+    .reduce((sum, p) => sum + p.amount, 0);
+
+  return { txAmount, planAmount, total: txAmount + planAmount };
 }
 
 /** 计算基金汇总信息 */

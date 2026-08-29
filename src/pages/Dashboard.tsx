@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Card, Row, Col, Statistic, Table, Tabs, Tag, Alert, Button } from 'antd';
+import { Card, Row, Col, Statistic, Table, Tabs, Tag, Alert, Button, Tooltip } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts/core';
@@ -7,14 +7,14 @@ import { PieChart, LineChart } from 'echarts/charts';
 import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import { useStore } from '../stores';
-import { calcFundSummary, calcXIRR, calcDividendTotal } from '../utils/calculator';
+import { calcFundSummary, calcXIRR, calcDividendTotal, calcTodayInvested } from '../utils/calculator';
 import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
 import { FUND_TYPE_LABELS } from '../types';
 
 echarts.use([PieChart, LineChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer]);
 
 export default function Dashboard() {
-  const { funds, transactions, platforms, snapshots, getNavHistory } = useStore();
+  const { funds, transactions, platforms, snapshots, dcaPlans, getNavHistory } = useStore();
   const navigate = useNavigate();
 
   const summaries = useMemo(() => {
@@ -36,6 +36,7 @@ export default function Dashboard() {
 
   const totalDividend = calcDividendTotal(transactions);
   const totalXIRR = calcXIRR(transactions, totals.totalValue);
+  const todayInvested = calcTodayInvested(transactions, dcaPlans);
 
   // 未确认定投(pending):不计入持仓/收益,但提示用户去确认
   const pendingTransactions = transactions.filter((t) => t.status === 'pending');
@@ -251,6 +252,20 @@ export default function Dashboard() {
               precision={2}
               valueStyle={{ color: totalDividend > 0 ? pnlColor(totalDividend) : undefined }}
             />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={8}>
+          <Card>
+            <Tooltip
+              title={`交易：${formatMoney(todayInvested.txAmount)}  +  定投预期：${formatMoney(todayInvested.planAmount)}`}
+            >
+              <Statistic
+                title="当日投入"
+                value={todayInvested.total}
+                precision={2}
+                valueStyle={{ color: todayInvested.total > 0 ? '#1677ff' : undefined }}
+              />
+            </Tooltip>
           </Card>
         </Col>
       </Row>
