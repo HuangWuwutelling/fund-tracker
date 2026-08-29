@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Tag, Space, message, Popconfirm, Alert, Checkbox } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { PlusOutlined, ImportOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
@@ -8,6 +8,7 @@ import { useStore } from '../stores';
 import { calcSharesFromAmount } from '../utils/calculator';
 import { formatMoney, formatDate } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
+import InitialPositionModal from '../components/InitialPositionModal';
 import { TRANSACTION_TYPE_LABELS } from '../types';
 import type { Transaction } from '../types';
 
@@ -31,6 +32,7 @@ export default function Transactions() {
     nav: null,
     navDate: null,
   });
+  const [initModalOpen, setInitModalOpen] = useState(false);
 
   const filteredTxs = useMemo(() => {
     let list = [...transactions];
@@ -233,9 +235,16 @@ export default function Transactions() {
     <Card
       title="交易记录"
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingId(null); form.resetFields(); setPreview({ shares: null, nav: null, navDate: null }); setModalOpen(true); }}>
-          添加交易
-        </Button>
+        <Space>
+          {filterFund && (
+            <Button icon={<ImportOutlined />} onClick={() => setInitModalOpen(true)}>
+              补登初始持仓
+            </Button>
+          )}
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingId(null); form.resetFields(); setPreview({ shares: null, nav: null, navDate: null }); setModalOpen(true); }}>
+            添加交易
+          </Button>
+        </Space>
       }
     >
       <Space style={{ marginBottom: 16 }} wrap>
@@ -337,6 +346,12 @@ export default function Transactions() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <InitialPositionModal
+        fundId={filterFund || null}
+        open={initModalOpen}
+        onClose={() => setInitModalOpen(false)}
+      />
     </Card>
   );
 }

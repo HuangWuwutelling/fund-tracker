@@ -5,6 +5,7 @@ import { useStore } from '../stores';
 import { fetchFundWithHistory, loadFundSearchList, searchFunds, getFundTypeFromSearch } from '../api/fundApi';
 import { getNavHistory } from '../utils/storage';
 import { formatDate } from '../utils/formatter';
+import InitialPositionModal from '../components/InitialPositionModal';
 import { FUND_TYPE_LABELS } from '../types';
 import type { Fund } from '../types';
 import type { FundSearchItem } from '../api/fundApi';
@@ -22,6 +23,8 @@ export default function FundList() {
   const [listLoaded, setListLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [selectedType, setSelectedType] = useState<Fund['type'] | null>(null);
+  const [initModalOpen, setInitModalOpen] = useState(false);
+  const [initFundId, setInitFundId] = useState<string | null>(null);
 
   // Load fund search list when modal opens
   useEffect(() => {
@@ -114,6 +117,10 @@ export default function FundList() {
       } else {
         message.success('添加成功（暂无历史净值数据）');
       }
+
+      // 询问是否设置初始持仓
+      setInitFundId(code);
+      setInitModalOpen(true);
 
       setModalOpen(false);
       form.resetFields();
@@ -303,6 +310,12 @@ export default function FundList() {
           )}
         </Form>
       </Modal>
+
+      <InitialPositionModal
+        fundId={initFundId}
+        open={initModalOpen}
+        onClose={() => { setInitModalOpen(false); setInitFundId(null); }}
+      />
     </Card>
   );
 }
