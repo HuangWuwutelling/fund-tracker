@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Descriptions, Row, Col, Statistic, Table, Button, Tag, Modal, Form, Input, Select, DatePicker, InputNumber, message, Space, Radio, Checkbox, Popconfirm } from 'antd';
+import { Card, Descriptions, Row, Col, Statistic, Table, Button, Tag, Modal, Form, Input, Select, DatePicker, InputNumber, message, Space, Radio, Checkbox, Popconfirm, Alert } from 'antd';
 import { ArrowLeftOutlined, PlusOutlined, ImportOutlined } from '@ant-design/icons';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts/core';
@@ -30,6 +30,7 @@ export default function FundDetail() {
   const pendingWatch = Form.useWatch('pending', txForm);
   const [initModalOpen, setInitModalOpen] = useState(false);
   const [navRange, setNavRange] = useState<'1m' | '3m' | '6m' | '1y' | 'all'>('6m');
+  const [navPreview, setNavPreview] = useState<{ nav: number; navDate: string } | null>(null);
 
   const fund = getFundById(id ?? '');
   if (!fund) {
@@ -78,7 +79,16 @@ export default function FundDetail() {
       const amount = values.amount as number;
       const fee = (values.fee as number) ?? 0;
       const pending = (values.pending as boolean) ?? false;
-      const nav = pending ? 0 : ((values.nav as number) ?? 0);
+      // 新增时用自动查到的净值；编辑时用表单里用户确认的值
+      const nav = pending
+        ? 0
+        : editingTxId
+          ? ((values.nav as number) ?? 0)
+          : (navPreview?.nav ?? 0);
+      if (!pending && !editingTxId && (!navPreview || navPreview.nav <= 0)) {
+        message.error('无法保存：未找到该日期的成交净值，请检查历史净值或切换为待确认');
+        return;
+      }
       const shares = txType === 'dividend'
         ? (values.shares as number) ?? 0
         : pending ? 0 : calcSharesFromAmount(amount, fee, nav);
@@ -120,8 +130,47 @@ export default function FundDetail() {
       ...tx,
       date: dayjs(tx.date),
     });
+    // 编辑时同步预览该笔交易的净值
+    const dateStr = tx.date;
+    const result = lookupNavForDate(fund.id, dateStr);
+    setNavPreview(result ?? null);
     setTxModalOpen(true);
   };
+
+  /** 表单值变化时：自动从历史净值查找成交净值（新增时） */
+  const handleTxFormChange = (changedValues: Record<string, unknown>) => {
+    if (!('date' in changedValues) && !('amount' in changedValues) && !('fee' in changedValues) && !('type' in changedValues)) return;
+    if (editingTxId) return; // 编辑时不覆盖用户已填的 nav
+
+    const date = txForm.getFieldValue('date') as dayjs.Dayjs | null;
+    if (!date) {
+      setNavPreview(null);
+      return;
+    }
+    const result = lookupNavForDate(fund.id, date.toDate());
+    setNavPreview(result ?? null);
+  };
+
+  /** 手动刷新净值（用于用户想要取最近交易日的净值） */
+  const handleRefreshNav = () => {
+    const date = txForm.getFieldValue('date') as dayjs.Dayjs | null;
+    if (!date) {
+      message.warning('请先选择交易日期');
+      return;
+    }
+    const result = lookupNavForDate(fund.id, date.toDate());
+    if (result) {
+      setNavPreview(result);
+      message.success(`使用 ${result.navDate} 的净值 ${result.nav.toFixed(4)}`);
+    } else {
+      message.warning('未找到该日期之前的净值');
+    }
+  };
+
+  // 关闭弹窗时清空预览
+  useEffect(() => {
+    if (!txModalOpen) setNavPreview(null);
+  }, [txModalOpen]);
 
   const handleConfirmTx = async (tx: Transaction) => {
     if (tx.type === 'dividend') {
@@ -277,7 +326,7 @@ export default function FundDetail() {
             <Button icon={<ImportOutlined />} onClick={() => setInitModalOpen(true)}>
               {fundTxs.length === 0 ? '设置初始持仓' : '补登初始持仓'}
             </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingTxId(null); txForm.resetFields(); setTxModalOpen(true); }}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingTxId(null); txForm.resetFields(); setNavPreview(null); setTxModalOpen(true); }}>
               添加交易
             </Button>
           </Space>
@@ -290,11 +339,11 @@ export default function FundDetail() {
         title={editingTxId ? '编辑交易' : '添加交易'}
         open={txModalOpen}
         onOk={handleSaveTransaction}
-        onCancel={() => { setTxModalOpen(false); setEditingTxId(null); txForm.resetFields(); }}
+        onCancel={() => { setTxModalOpen(false); setEditingTxId(null); setNavPreview(null); txForm.resetFields(); }}
         okText="保存"
         cancelText="取消"
       >
-        <Form form={txForm} layout="vertical" initialValues={{ date: dayjs(), type: 'buy', fee: 0 }}>
+        <Form form={txForm} layout="vertical" initialValues={{ date: dayjs(), type: 'buy', fee: 0 }} onValuesChange={handleTxFormChange}>
           <Form.Item label="交易类型" name="type" rules={[{ required: true }]}>
             <Select>
               {Object.entries(TRANSACTION_TYPE_LABELS).map(([key, label]) => (
@@ -319,7 +368,36 @@ export default function FundDetail() {
           <Form.Item name="pending" valuePropName="checked" style={{ marginBottom: 16 }}>
             <Checkbox>待确认（T+1 净值未出，先记账不进入持仓）</Checkbox>
           </Form.Item>
-          {!pendingWatch && (
+
+          {/* 新增交易：自动从历史查净值，展示预览 */}
+          {!pendingWatch && !editingTxId && navPreview && (
+            <Alert
+              type="success"
+              showIcon
+              message={`成交净值：${navPreview.nav.toFixed(4)}（${navPreview.navDate}${navPreview.navDate !== (txForm.getFieldValue('date') as dayjs.Dayjs | null)?.format('YYYY-MM-DD') ? '，最近交易日' : ''}）`}
+              description={(() => {
+                const amt = (txForm.getFieldValue('amount') as number) ?? 0;
+                const fe = (txForm.getFieldValue('fee') as number) ?? 0;
+                const s = txTypeWatch !== 'dividend' && amt ? calcSharesFromAmount(amt, fe, navPreview.nav) : null;
+                return s !== null ? <>预计份额：<strong>{s.toFixed(4)}</strong> 份<br />（{amt} - {fe}）÷ {navPreview.nav.toFixed(4)}</> : '请输入金额后查看预计份额';
+              })()}
+              action={<Button size="small" onClick={handleRefreshNav}>刷新净值</Button>}
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          {!pendingWatch && !editingTxId && !navPreview && txForm.getFieldValue('date') && (
+            <Alert
+              type="warning"
+              showIcon
+              message="未找到该日期的净值"
+              description="该日期之前无历史净值数据，请切换为待确认，或先刷新净值"
+              action={<Button size="small" onClick={handleRefreshNav}>刷新净值</Button>}
+              style={{ marginBottom: 16 }}
+            />
+          )}
+
+          {/* 编辑交易：保留手动输入净值（默认回填原值） */}
+          {!pendingWatch && editingTxId && (
             <Form.Item label="成交净值" name="nav" rules={[{ required: true, message: '请输入成交净值' }]}>
               <InputNumber style={{ width: '100%' }} min={0} step={0.0001} precision={4} />
             </Form.Item>
