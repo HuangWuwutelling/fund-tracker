@@ -133,7 +133,7 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
       <Form
         form={form}
         layout="vertical"
-        initialValues={{ startDate: dayjs().subtract(2, 'month') }}
+        initialValues={{ startDate: dayjs() }}
         onValuesChange={(changed, all) => {
           const changedField = Object.keys(changed)[0] as string | undefined;
           if (!changedField || !['shares', 'price', 'cost'].includes(changedField)) return;

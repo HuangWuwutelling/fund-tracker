@@ -2,6 +2,10 @@ import { useEffect, useCallback, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, theme, message } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
+import dayjs from 'dayjs';
+import 'dayjs/locale/zh-cn';
+
+dayjs.locale('zh-cn');
 import { useStore } from './stores';
 import { fetchFundWithHistory } from './api/fundApi';
 import { generateSnapshot } from './utils/snapshot';
