@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Descriptions, Row, Col, Statistic, Table, Button, Tag, Modal, Form, Input, Select, DatePicker, InputNumber, message, Space, Radio, Checkbox } from 'antd';
+import { Card, Descriptions, Row, Col, Statistic, Table, Button, Tag, Modal, Form, Input, Select, DatePicker, InputNumber, message, Space, Radio, Checkbox, Popconfirm } from 'antd';
 import { ArrowLeftOutlined, PlusOutlined, ImportOutlined } from '@ant-design/icons';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts/core';
@@ -22,8 +22,9 @@ echarts.use([LineChart, TooltipComponent, GridComponent, CanvasRenderer]);
 export default function FundDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { platforms, transactions, getNavHistory, addTransaction, updateTransaction, getFundById } = useStore();
+  const { platforms, transactions, getNavHistory, addTransaction, updateTransaction, removeTransaction, getFundById } = useStore();
   const [txModalOpen, setTxModalOpen] = useState(false);
+  const [editingTxId, setEditingTxId] = useState<string | null>(null);
   const [txForm] = Form.useForm();
   const txTypeWatch = Form.useWatch('type', txForm);
   const pendingWatch = Form.useWatch('pending', txForm);
@@ -70,7 +71,7 @@ export default function FundDetail() {
     series: [{ type: 'line', data: filteredNav.map((r) => r.nav), smooth: true }],
   }), [filteredNav]);
 
-  const handleAddTransaction = async () => {
+  const handleSaveTransaction = async () => {
     try {
       const values = await txForm.validateFields();
       const txType = values.type as Transaction['type'];
@@ -82,9 +83,7 @@ export default function FundDetail() {
         ? (values.shares as number) ?? 0
         : pending ? 0 : calcSharesFromAmount(amount, fee, nav);
 
-      const tx: Transaction = {
-        id: uuid(),
-        fundId: fund.id,
+      const txData: Partial<Transaction> = {
         type: txType,
         date: (values.date as dayjs.Dayjs).format('YYYY-MM-DD'),
         amount,
@@ -95,13 +94,33 @@ export default function FundDetail() {
         status: pending ? 'pending' : 'confirmed',
       };
 
-      addTransaction(tx);
-      message.success(pending ? '已记录为待确认交易' : '交易记录已添加');
+      if (editingTxId) {
+        updateTransaction(editingTxId, txData);
+        message.success('已更新');
+      } else {
+        addTransaction({
+          ...txData,
+          id: uuid(),
+          fundId: fund.id,
+        } as Transaction);
+        message.success(pending ? '已记录为待确认交易' : '交易记录已添加');
+      }
+
       setTxModalOpen(false);
+      setEditingTxId(null);
       txForm.resetFields();
     } catch {
       // validation failed
     }
+  };
+
+  const handleEditTx = (tx: Transaction) => {
+    setEditingTxId(tx.id);
+    txForm.setFieldsValue({
+      ...tx,
+      date: dayjs(tx.date),
+    });
+    setTxModalOpen(true);
   };
 
   const handleConfirmTx = async (tx: Transaction) => {
@@ -148,13 +167,18 @@ export default function FundDetail() {
     {
       title: '操作',
       key: 'actions',
-      width: 100,
-      render: (_: unknown, record: Transaction) =>
-        record.status === 'pending' ? (
-          <Button type="link" size="small" onClick={() => handleConfirmTx(record)}>
-            确认
-          </Button>
-        ) : null,
+      width: 180,
+      render: (_: unknown, record: Transaction) => (
+        <Space>
+          {record.status === 'pending' && (
+            <Button type="link" size="small" onClick={() => handleConfirmTx(record)}>确认</Button>
+          )}
+          <Button type="link" size="small" onClick={() => handleEditTx(record)}>编辑</Button>
+          <Popconfirm title="确定删除？" onConfirm={() => { removeTransaction(record.id); message.success('已删除'); }}>
+            <Button type="link" danger size="small">删除</Button>
+          </Popconfirm>
+        </Space>
+      ),
     },
   ];
 
@@ -253,7 +277,7 @@ export default function FundDetail() {
             <Button icon={<ImportOutlined />} onClick={() => setInitModalOpen(true)}>
               {fundTxs.length === 0 ? '设置初始持仓' : '补登初始持仓'}
             </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setTxModalOpen(true)}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingTxId(null); txForm.resetFields(); setTxModalOpen(true); }}>
               添加交易
             </Button>
           </Space>
@@ -263,11 +287,11 @@ export default function FundDetail() {
       </Card>
 
       <Modal
-        title="添加交易"
+        title={editingTxId ? '编辑交易' : '添加交易'}
         open={txModalOpen}
-        onOk={handleAddTransaction}
-        onCancel={() => { setTxModalOpen(false); txForm.resetFields(); }}
-        okText="添加"
+        onOk={handleSaveTransaction}
+        onCancel={() => { setTxModalOpen(false); setEditingTxId(null); txForm.resetFields(); }}
+        okText="保存"
         cancelText="取消"
       >
         <Form form={txForm} layout="vertical" initialValues={{ date: dayjs(), type: 'buy', fee: 0 }}>
