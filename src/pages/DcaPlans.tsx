@@ -4,8 +4,7 @@ import { PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
-import { calcShares, calcCost, calcMarketValue } from '../utils/calculator';
-import { formatMoney, pnlColor } from '../utils/formatter';
+import { formatMoney } from '../utils/formatter';
 import { FREQUENCY_LABELS } from '../types';
 import type { DcaPlan } from '../types';
 
@@ -22,8 +21,8 @@ export default function DcaPlans() {
   // Only confirmed transactions count toward "累计投入" — pending ones haven't been invested yet.
   const stats = useMemo(() => {
     let totalInvested = 0;
-    let totalMarketValue = 0;
     const usedTxIds = new Set<string>();
+    const perFund = new Map<string, { fundName: string; invested: number; txCount: number }>();
     const matchedTxs: Array<{ planId: string; fundName: string; date: string; amount: number }> = [];
 
     for (const plan of dcaPlans) {
@@ -38,21 +37,28 @@ export default function DcaPlans() {
           !usedTxIds.has(t.id) &&
           Math.abs(t.amount - plan.amount) < 1
       );
+      let planInvested = 0;
       for (const t of planTxs) {
         usedTxIds.add(t.id);
         matchedTxs.push({ planId: plan.id, fundName: fund.name, date: t.date, amount: t.amount });
+        planInvested += t.amount;
       }
-
-      const shares = calcShares(planTxs);
-      const cost = calcCost(planTxs);
-      const marketValue = calcMarketValue(shares, fund.currentNav);
-      totalInvested += cost;
-      totalMarketValue += marketValue;
+      totalInvested += planInvested;
+      const existing = perFund.get(fund.id) ?? { fundName: fund.name, invested: 0, txCount: 0 };
+      perFund.set(fund.id, {
+        fundName: fund.name,
+        invested: existing.invested + planInvested,
+        txCount: existing.txCount + planTxs.length,
+      });
     }
 
-    const totalReturn = totalMarketValue - totalInvested;
-    const returnRate = totalInvested > 0 ? (totalReturn / totalInvested) * 100 : 0;
-    return { totalInvested, totalMarketValue, totalReturn, returnRate, matchedTxs };
+    return {
+      totalInvested,
+      perFund: Array.from(perFund.entries())
+        .map(([fundId, v]) => ({ fundId, ...v }))
+        .sort((a, b) => b.invested - a.invested),
+      matchedTxs,
+    };
   }, [dcaPlans, funds, transactions]);
 
   const handleSave = async () => {
@@ -195,7 +201,7 @@ export default function DcaPlans() {
   return (
     <div>
       <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={8}>
+        <Col xs={24} sm={8}>
           <Card>
             <Tooltip
               title={
@@ -213,21 +219,30 @@ export default function DcaPlans() {
             </Tooltip>
           </Card>
         </Col>
-        <Col xs={8}>
-          <Card><Statistic title="当前市值" value={stats.totalMarketValue} precision={2} /></Card>
-        </Col>
-        <Col xs={8}>
-          <Card>
-            <Statistic
-              title="定投收益率"
-              value={stats.returnRate}
-              suffix="%"
-              precision={2}
-              valueStyle={{ color: pnlColor(stats.returnRate) }}
-            />
-          </Card>
-        </Col>
       </Row>
+
+      {stats.perFund.length > 0 && (
+        <Card title="各基金累计投入" size="small" style={{ marginBottom: 16 }}>
+          <Table
+            size="small"
+            dataSource={stats.perFund}
+            rowKey="fundId"
+            pagination={false}
+            columns={[
+              { title: '基金', dataIndex: 'fundName', key: 'fundName', align: 'left' as const },
+              { title: '交易笔数', dataIndex: 'txCount', key: 'txCount', align: 'right' as const, width: 100 },
+              {
+                title: '累计投入',
+                dataIndex: 'invested',
+                key: 'invested',
+                align: 'right' as const,
+                width: 160,
+                render: (v: number) => formatMoney(v),
+              },
+            ]}
+          />
+        </Card>
+      )}
 
       <Card
         title="定投计划"
