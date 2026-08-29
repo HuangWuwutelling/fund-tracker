@@ -105,6 +105,7 @@ export default function Dashboard() {
       dataIndex: ['fund', 'name'],
       key: 'name',
       width: 220,
+      align: 'left' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) =>
         a.fund.name.localeCompare(b.fund.name, 'zh-CN'),
       render: (text: string, record: typeof summaries[0]) => (
@@ -118,6 +119,7 @@ export default function Dashboard() {
       title: '平台',
       key: 'platform',
       width: 100,
+      align: 'left' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => {
         const an = platforms.find((p) => p.id === a.fund.platformId)?.name ?? '';
         const bn = platforms.find((p) => p.id === b.fund.platformId)?.name ?? '';
