@@ -11,6 +11,47 @@ import type { DcaPlan } from '../types';
 
 const DAY_OF_WEEK_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
+/**
+ * 判断某笔 buy 交易是否可能是某个定投计划的执行
+ * 修复"金额相同的手动买入被算进定投投入"的 bug：加上日期窗口约束
+ * - 必须在 plan.startDate 之后
+ * - 交易日期必须落在该计划"预期执行日"的合理窗口内
+ *   - daily: 任意交易日
+ *   - weekly: weekday 偏差 ≤ 3 天（容忍周末顺延）
+ *   - biweekly: 同 weekly + 与 startDate 所在周奇偶相同
+ *   - monthly: 与当月目标日偏差 ≤ 5 天
+ */
+function isInPlanWindow(plan: DcaPlan, txDate: string): boolean {
+  const tx = dayjs(txDate);
+  const start = dayjs(plan.startDate);
+  if (tx.isBefore(start, 'day')) return false;
+
+  if (plan.frequency === 'daily') return true;
+
+  if (plan.frequency === 'weekly' || plan.frequency === 'biweekly') {
+    if (plan.dayOfWeek === undefined) return false;
+    if (Math.abs(tx.day() - plan.dayOfWeek) > 3) return false;
+    if (plan.frequency === 'biweekly') {
+      // tx 所在周与 startDate 所在周的奇偶性需一致
+      const txWeekStart = tx.startOf('week');
+      const startWeekStart = start.startOf('week');
+      const weekDiff = Math.round(txWeekStart.diff(startWeekStart, 'day') / 7);
+      if (weekDiff < 0 || weekDiff % 2 !== 0) return false;
+    }
+    return true;
+  }
+
+  if (plan.frequency === 'monthly') {
+    if (plan.dayOfMonth === undefined) return false;
+    const txDay = tx.date();
+    const daysInMonth = tx.daysInMonth();
+    const actualTargetDay = Math.min(plan.dayOfMonth, daysInMonth);
+    return Math.abs(txDay - actualTargetDay) <= 5;
+  }
+
+  return false;
+}
+
 export default function DcaPlans() {
   const { funds, dcaPlans, transactions, addDcaPlan, updateDcaPlan, removeDcaPlan, toggleDcaPlan } = useStore();
   const navigate = useNavigate();
@@ -18,9 +59,11 @@ export default function DcaPlans() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
 
-  // DCA statistics: each plan claims only the buy transactions whose amount matches (within ¥1).
-  // When a fund has multiple plans, txs are attributed in plan order to avoid double-counting.
-  // Only confirmed transactions count toward "累计投入" — pending ones haven't been invested yet.
+  // DCA statistics: 一笔交易要算作某个计划的执行，必须同时满足：
+  //   1) 同基金、买入、已确认
+  //   2) 金额匹配（±¥1）
+  //   3) 落在该计划的预期执行窗口内（避免金额相同的非定投买入被误算）
+  // 多个计划按 dcaPlans 顺序 claim，每笔交易只归属第一个匹配的 plan，避免重复计算。
   const stats = useMemo(() => {
     let totalInvested = 0;
     const usedTxIds = new Set<string>();
@@ -37,7 +80,8 @@ export default function DcaPlans() {
           t.type === 'buy' &&
           t.status !== 'pending' &&
           !usedTxIds.has(t.id) &&
-          Math.abs(t.amount - plan.amount) < 1
+          Math.abs(t.amount - plan.amount) < 1 &&
+          isInPlanWindow(plan, t.date)
       );
       let planInvested = 0;
       for (const t of planTxs) {
