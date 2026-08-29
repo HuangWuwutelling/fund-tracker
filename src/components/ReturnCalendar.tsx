@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { Card, Tooltip, Table, Tag, Empty, Button, Space } from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import type { DailyReturn } from '../utils/reportGenerator';
 import { formatMoney, pnlColor } from '../utils/formatter';
@@ -21,6 +22,7 @@ const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
  * - 点击格子展开当天每只基金明细
  */
 export default function ReturnCalendar({ dailyReturns }: Props) {
+  const navigate = useNavigate();
   // 视图月份：YYYY-MM
   const [viewMonth, setViewMonth] = useState<string>(() => {
     if (dailyReturns.length > 0) {
@@ -205,7 +207,14 @@ export default function ReturnCalendar({ dailyReturns }: Props) {
             rowKey="fundId"
             pagination={false}
             columns={[
-              { title: '基金', dataIndex: 'fundName', key: 'fundName' },
+              {
+                title: '基金',
+                dataIndex: 'fundName',
+                key: 'fundName',
+                render: (name: string, r: { fundId: string }) => (
+                  <a onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</a>
+                ),
+              },
               {
                 title: '收益',
                 dataIndex: 'returnAmount',

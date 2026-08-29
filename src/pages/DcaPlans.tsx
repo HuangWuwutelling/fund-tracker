@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { Card, Table, Button, Modal, Form, Select, DatePicker, InputNumber, Switch, Space, Statistic, Row, Col, message, Popconfirm, Tooltip } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
@@ -12,6 +13,7 @@ const DAY_OF_WEEK_LABELS = ['周日', '周一', '周二', '周三', '周四', '�
 
 export default function DcaPlans() {
   const { funds, dcaPlans, transactions, addDcaPlan, updateDcaPlan, removeDcaPlan, toggleDcaPlan } = useStore();
+  const navigate = useNavigate();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
@@ -22,7 +24,7 @@ export default function DcaPlans() {
   const stats = useMemo(() => {
     let totalInvested = 0;
     const usedTxIds = new Set<string>();
-    const perFund = new Map<string, { fundName: string; invested: number; txCount: number }>();
+    const perFund = new Map<string, { fundId: string; fundName: string; invested: number; txCount: number }>();
     const matchedTxs: Array<{ planId: string; fundName: string; date: string; amount: number }> = [];
 
     for (const plan of dcaPlans) {
@@ -44,8 +46,9 @@ export default function DcaPlans() {
         planInvested += t.amount;
       }
       totalInvested += planInvested;
-      const existing = perFund.get(fund.id) ?? { fundName: fund.name, invested: 0, txCount: 0 };
+      const existing = perFund.get(fund.id) ?? { fundId: fund.id, fundName: fund.name, invested: 0, txCount: 0 };
       perFund.set(fund.id, {
+        fundId: fund.id,
         fundName: fund.name,
         invested: existing.invested + planInvested,
         txCount: existing.txCount + planTxs.length,
@@ -54,9 +57,7 @@ export default function DcaPlans() {
 
     return {
       totalInvested,
-      perFund: Array.from(perFund.entries())
-        .map(([fundId, v]) => ({ fundId, ...v }))
-        .sort((a, b) => b.invested - a.invested),
+      perFund: Array.from(perFund.values()).sort((a, b) => b.invested - a.invested),
       matchedTxs,
     };
   }, [dcaPlans, funds, transactions]);
@@ -236,6 +237,9 @@ export default function DcaPlans() {
                 align: 'left' as const,
                 sorter: (a: typeof stats.perFund[0], b: typeof stats.perFund[0]) =>
                   a.fundName.localeCompare(b.fundName, 'zh-CN'),
+                render: (name: string, r: typeof stats.perFund[0]) => (
+                  <a onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</a>
+                ),
               },
               {
                 title: '交易笔数',

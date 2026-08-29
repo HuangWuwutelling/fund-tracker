@@ -190,10 +190,18 @@ function MonthlyReportView() {
           <Card>
             <Descriptions column={1} size="small">
               <Descriptions.Item label="最佳基金">
-                {report.bestFund ? `${report.bestFund.fundName} (${formatPercent(report.bestFund.returnRate)})` : '—'}
+                {report.bestFund ? (
+                  <a onClick={() => navigate(`/funds/${report.bestFund!.fundId}`)}>
+                    {report.bestFund.fundName} ({formatPercent(report.bestFund.returnRate)})
+                  </a>
+                ) : '—'}
               </Descriptions.Item>
               <Descriptions.Item label="最差基金">
-                {report.worstFund ? `${report.worstFund.fundName} (${formatPercent(report.worstFund.returnRate)})` : '—'}
+                {report.worstFund ? (
+                  <a onClick={() => navigate(`/funds/${report.worstFund!.fundId}`)}>
+                    {report.worstFund.fundName} ({formatPercent(report.worstFund.returnRate)})
+                  </a>
+                ) : '—'}
               </Descriptions.Item>
             </Descriptions>
           </Card>

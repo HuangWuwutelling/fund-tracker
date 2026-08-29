@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Tag, Space, message, Popconfirm, Alert, Checkbox } from 'antd';
 import { PlusOutlined, ImportOutlined } from '@ant-design/icons';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
@@ -14,6 +14,7 @@ import type { Transaction } from '../types';
 
 export default function Transactions() {
   const { funds, transactions, addTransaction, updateTransaction, removeTransaction } = useStore();
+  const navigate = useNavigate();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
@@ -191,7 +192,10 @@ export default function Transactions() {
       title: '基金',
       dataIndex: 'fundId',
       key: 'fund',
-      render: (id: string) => funds.find((f) => f.id === id)?.name ?? id,
+      render: (id: string) => {
+        const name = funds.find((f) => f.id === id)?.name ?? id;
+        return <a onClick={() => navigate(`/funds/${id}`)}>{name}</a>;
+      },
     },
     {
       title: '类型',
