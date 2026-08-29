@@ -1,5 +1,5 @@
 import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform } from '../types';
-import { calcShares } from './calculator';
+import { calcShares, onlyConfirmed } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
 import { countTradingDays, lookupNavForDate } from './navLookup';
 import dayjs from 'dayjs';
@@ -52,6 +52,7 @@ function getMonthRange(year: number, month: number): [string, string] {
 /**
  * 计算某日期的总持仓市值（基于交易 + 历史净值查询）
  * 替代 snapshot.totalValue：解决"没有期初快照时 startValue=0，把本金算成收益"的 bug
+ * 只看已确认交易——pending 买入尚未成交，不应计入持仓市值
  */
 function calcPortfolioValueAtDate(
   date: string,
@@ -60,7 +61,7 @@ function calcPortfolioValueAtDate(
 ): number {
   let total = 0;
   for (const fund of funds) {
-    const txs = transactions.filter((t) => t.fundId === fund.id && t.date <= date);
+    const txs = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id && t.date <= date);
     const shares = calcShares(txs);
     if (shares <= 0) continue;
     const nav = lookupNavForDate(fund.id, date);
@@ -75,8 +76,10 @@ function calcFundPerformanceInRange(
   startDate: string,
   endDate: string
 ): FundPerformance {
-  const txBeforeStart = transactions.filter((t) => t.fundId === fund.id && t.date < startDate);
-  const txBeforeEnd = transactions.filter((t) => t.fundId === fund.id && t.date <= endDate);
+  // 只看已确认交易——pending 买入尚未成交，不计入持仓份额也不计入本期投入
+  const confirmed = onlyConfirmed(transactions);
+  const txBeforeStart = confirmed.filter((t) => t.fundId === fund.id && t.date < startDate);
+  const txBeforeEnd = confirmed.filter((t) => t.fundId === fund.id && t.date <= endDate);
 
   const sharesStart = calcShares(txBeforeStart);
   const sharesEnd = calcShares(txBeforeEnd);
@@ -93,10 +96,10 @@ function calcFundPerformanceInRange(
   const valueEnd = sharesEnd * navEnd.nav;
 
   // fee 内扣：用户的总付出/总收入就是 tx.amount（不再额外加/减 fee，否则重复计算）
-  const buyInRange = transactions
+  const buyInRange = confirmed
     .filter((t) => t.fundId === fund.id && t.type === 'buy' && t.date >= startDate && t.date <= endDate)
     .reduce((sum, t) => sum + t.amount, 0);
-  const sellInRange = transactions
+  const sellInRange = confirmed
     .filter((t) => t.fundId === fund.id && t.type === 'sell' && t.date >= startDate && t.date <= endDate)
     .reduce((sum, t) => sum + (t.amount - t.fee), 0);
 
@@ -120,7 +123,8 @@ export function generateWeeklyReport(
   const startValue = calcPortfolioValueAtDate(weekStart, funds, transactions);
   const endValue = calcPortfolioValueAtDate(weekEnd, funds, transactions);
 
-  const weekTxs = transactions.filter((t) => t.date >= weekStart && t.date <= weekEnd);
+  // 区间内交易只看已确认的——pending 买入尚未成交，不计入本期投入/笔数
+  const weekTxs = onlyConfirmed(transactions).filter((t) => t.date >= weekStart && t.date <= weekEnd);
   const buyCount = weekTxs.filter((t) => t.type === 'buy').length;
   const sellCount = weekTxs.filter((t) => t.type === 'sell').length;
   const dividendCount = weekTxs.filter((t) => t.type === 'dividend').length;
@@ -166,7 +170,7 @@ export function generateWeeklyReport(
       // Count actual trading days in this week from the fund's NAV history
       dcaExpected += countTradingDays(plan.fundId, weekStart, weekEnd);
     }
-    const planBuyTxs = transactions.filter(
+    const planBuyTxs = onlyConfirmed(transactions).filter(
       (t) => t.fundId === plan.fundId && t.type === 'buy' && t.date >= weekStart && t.date <= weekEnd
     );
     dcaActual += planBuyTxs.length;
@@ -205,7 +209,8 @@ export function generateMonthlyReport(
   const startValue = calcPortfolioValueAtDate(monthStart, funds, transactions);
   const endValue = calcPortfolioValueAtDate(monthEnd, funds, transactions);
 
-  const monthTxs = transactions.filter((t) => t.date >= monthStart && t.date <= monthEnd);
+  // 区间内交易只看已确认的——pending 买入尚未成交，不计入本期投入
+  const monthTxs = onlyConfirmed(transactions).filter((t) => t.date >= monthStart && t.date <= monthEnd);
   const buyTotal = monthTxs
     .filter((t) => t.type === 'buy')
     .reduce((sum, t) => sum + t.amount, 0);
