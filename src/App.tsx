@@ -13,6 +13,8 @@ dayjs.updateLocale('zh-cn', { weekStart: 0 });
 import { useStore } from './stores';
 import { fetchFundWithHistory } from './api/fundApi';
 import { generateSnapshot } from './utils/snapshot';
+import { lookupNavForDate } from './utils/navLookup';
+import { calcSharesFromAmount } from './utils/calculator';
 import AppLayout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import FundList from './pages/FundList';
@@ -23,7 +25,7 @@ import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 
 export default function App() {
-  const { settings, funds, transactions, loadFromStorage, updateFund, updateNavHistory, addSnapshot } = useStore();
+  const { settings, funds, transactions, loadFromStorage, updateFund, updateNavHistory, updateTransaction, addSnapshot } = useStore();
 
   useEffect(() => {
     loadFromStorage();
@@ -33,6 +35,37 @@ export default function App() {
   // refreshAll's deps include `transactions`, so adding a tx fires a new refresh —
   // the in-flight old one must not overwrite with stale state.
   const refreshGenerationRef = useRef(0);
+
+  // Auto-confirm pending transactions: any buy/sell whose date is in the past and
+  // whose NAV is now available in the fund's NAV history can be confirmed automatically.
+  // Today's pending tx stays pending — user confirms manually to avoid stale-NAV mistakes.
+  const autoConfirmPending = useCallback(() => {
+    const today = dayjs().format('YYYY-MM-DD');
+    const pendingTxs = transactions.filter((t) => t.status === 'pending');
+    if (pendingTxs.length === 0) return 0;
+
+    let confirmed = 0;
+    for (const tx of pendingTxs) {
+      // Skip today's pending (T+1 NAV not yet released) and future-dated entries
+      if (tx.date >= today) continue;
+      // Dividend has no NAV lookup — just flip status
+      if (tx.type === 'dividend') {
+        updateTransaction(tx.id, { status: 'confirmed' });
+        confirmed++;
+        continue;
+      }
+      const result = lookupNavForDate(tx.fundId, new Date(tx.date));
+      if (!result) continue; // NAV not yet available, leave as pending
+      const shares = calcSharesFromAmount(tx.amount, tx.fee, result.nav);
+      updateTransaction(tx.id, {
+        status: 'confirmed',
+        nav: result.nav,
+        shares: Math.round(shares * 10000) / 10000,
+      });
+      confirmed++;
+    }
+    return confirmed;
+  }, [transactions, updateTransaction]);
 
   // Auto-refresh NAV + generate snapshot when funds are loaded
   const refreshAll = useCallback(async () => {
@@ -64,11 +97,17 @@ export default function App() {
     }
 
     if (refreshGenerationRef.current !== myGen) return;
+    // NAV history is now fresh — try to auto-confirm pending transactions whose NAV is available
+    const confirmedCount = autoConfirmPending();
+    if (refreshGenerationRef.current !== myGen) return;
+    if (confirmedCount > 0) {
+      message.success(`已自动确认 ${confirmedCount} 笔历史交易`);
+    }
     const updatedFunds = useStore.getState().funds;
     const updatedTxs = useStore.getState().transactions;
     const snapshot = generateSnapshot(updatedFunds, updatedTxs);
     addSnapshot(snapshot);
-  }, [funds.length, updateFund, updateNavHistory, addSnapshot, transactions]);
+  }, [funds.length, updateFund, updateNavHistory, updateTransaction, addSnapshot, autoConfirmPending, transactions]);
 
   useEffect(() => {
     if (!settings.navAutoRefresh || funds.length === 0) return;

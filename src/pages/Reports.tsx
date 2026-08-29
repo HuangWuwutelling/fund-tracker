@@ -1,38 +1,51 @@
 import { useState, useMemo } from 'react';
-import { Card, Tabs, DatePicker, Descriptions, Table, Statistic, Row, Col } from 'antd';
-import ReactEChartsCore from 'echarts-for-react/lib/core';
-import * as echarts from 'echarts/core';
-import { LineChart, BarChart } from 'echarts/charts';
-import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components';
-import { CanvasRenderer } from 'echarts/renderers';
+import { Card, Tabs, DatePicker, Descriptions, Table, Statistic, Row, Col, Tag } from 'antd';
+import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { useStore } from '../stores';
 import { generateWeeklyReport, generateMonthlyReport } from '../utils/reportGenerator';
 import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
+import { FREQUENCY_LABELS } from '../types';
+import type { DcaPlanExecution } from '../utils/reportGenerator';
 
-echarts.use([LineChart, BarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer]);
+const rankingColumns = (navigate: (path: string) => void) => [
+  { title: '排名', key: 'rank', render: (_: unknown, __: unknown, i: number) => i + 1, width: 60 },
+  {
+    title: '基金',
+    dataIndex: 'fundName',
+    key: 'fundName',
+    sorter: (a: { fundName: string }, b: { fundName: string }) => a.fundName.localeCompare(b.fundName, 'zh-CN'),
+    render: (name: string, r: { fundId: string }) => (
+      <a onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</a>
+    ),
+  },
+  {
+    title: '收益',
+    dataIndex: 'returnAmount',
+    key: 'returnAmount',
+    align: 'right' as const,
+    sorter: (a: { returnAmount: number }, b: { returnAmount: number }) => a.returnAmount - b.returnAmount,
+    render: (v: number) => `${formatMoney(v)}`,
+  },
+  {
+    title: '收益率',
+    dataIndex: 'returnRate',
+    key: 'returnRate',
+    align: 'right' as const,
+    sorter: (a: { returnRate: number }, b: { returnRate: number }) => a.returnRate - b.returnRate,
+    render: (v: number) => <span style={{ color: pnlColor(v) }}>{formatPercent(v)}</span>,
+  },
+];
 
 function WeeklyReportView() {
   const { funds, transactions, dcaPlans, snapshots } = useStore();
   const [date, setDate] = useState(dayjs());
+  const navigate = useNavigate();
 
   const report = useMemo(
     () => generateWeeklyReport(date.toDate(), funds, transactions, dcaPlans, snapshots),
     [date, funds, transactions, dcaPlans, snapshots]
   );
-
-  const rankingColumns = [
-    { title: '排名', key: 'rank', render: (_: unknown, __: unknown, i: number) => i + 1, width: 60 },
-    { title: '基金', dataIndex: 'fundName', key: 'fundName' },
-    { title: '收益', dataIndex: 'returnAmount', key: 'returnAmount', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
-    {
-      title: '收益率',
-      dataIndex: 'returnRate',
-      key: 'returnRate',
-      align: 'right' as const,
-      render: (v: number) => <span style={{ color: pnlColor(v) }}>{formatPercent(v)}</span>,
-    },
-  ];
 
   return (
     <div>
@@ -67,18 +80,67 @@ function WeeklyReportView() {
         </Col>
       </Row>
 
-      <Card title="定投执行" style={{ marginBottom: 16 }}>
-        <Descriptions>
-          <Descriptions.Item label="计划执行">
-            {report.dcaActual} / {report.dcaExpected} 笔
-          </Descriptions.Item>
-        </Descriptions>
+      <Card
+        title={`定投执行（${report.dcaActual} / ${report.dcaExpected} 笔）`}
+        style={{ marginBottom: 16 }}
+      >
+        <Table
+          size="small"
+          dataSource={report.dcaDetails}
+          rowKey="planId"
+          pagination={false}
+          locale={{ emptyText: '本周无活跃定投计划' }}
+          columns={[
+            {
+              title: '基金',
+              dataIndex: 'fundName',
+              key: 'fundName',
+              render: (name: string, r: DcaPlanExecution) => (
+                <a onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</a>
+              ),
+            },
+            {
+              title: '频率',
+              dataIndex: 'frequency',
+              key: 'frequency',
+              width: 100,
+              render: (v: DcaPlanExecution['frequency']) => FREQUENCY_LABELS[v] ?? v,
+            },
+            {
+              title: '本周',
+              key: 'isDueWeek',
+              width: 120,
+              render: (_: unknown, r: DcaPlanExecution) =>
+                r.isDueWeek ? <Tag color="blue">执行周</Tag> : <Tag>非执行周</Tag>,
+            },
+            {
+              title: '期望',
+              dataIndex: 'expected',
+              key: 'expected',
+              width: 80,
+              align: 'right' as const,
+            },
+            {
+              title: '实际',
+              dataIndex: 'actual',
+              key: 'actual',
+              width: 80,
+              align: 'right' as const,
+              render: (v: number, r: DcaPlanExecution) => {
+                if (!r.isDueWeek) return <span style={{ color: '#999' }}>—</span>;
+                if (v === 0) return <span style={{ color: '#ff4d4f' }}>{v}</span>;
+                if (v < r.expected) return <span style={{ color: '#faad14' }}>{v}</span>;
+                return <span style={{ color: '#52c41a' }}>{v}</span>;
+              },
+            },
+          ]}
+        />
       </Card>
 
       <Card title="各基金表现排名">
         <Table
           dataSource={report.fundRankings}
-          columns={rankingColumns}
+          columns={rankingColumns(navigate)}
           rowKey="fundId"
           pagination={false}
           locale={{ emptyText: '暂无基金数据' }}
@@ -91,27 +153,12 @@ function WeeklyReportView() {
 function MonthlyReportView() {
   const { funds, transactions, snapshots, platforms } = useStore();
   const [date, setDate] = useState(dayjs());
+  const navigate = useNavigate();
 
   const report = useMemo(
     () => generateMonthlyReport(date.year(), date.month() + 1, funds, transactions, snapshots, platforms),
     [date, funds, transactions, snapshots, platforms]
   );
-
-  const lineOption = useMemo(() => ({
-    tooltip: { trigger: 'axis' as const },
-    grid: { left: 60, right: 20, top: 10, bottom: 30 },
-    xAxis: { type: 'category' as const, data: report.snapshots.map((s) => s.date) },
-    yAxis: { type: 'value' as const, axisLabel: { formatter: '{value}' } },
-    series: [{ type: 'line', data: report.snapshots.map((s) => s.totalValue), smooth: true, areaStyle: { opacity: 0.1 } }],
-  }), [report.snapshots]);
-
-  const platformBarOption = useMemo(() => ({
-    tooltip: { trigger: 'axis' as const },
-    grid: { left: 100, right: 20, top: 10, bottom: 30 },
-    xAxis: { type: 'value' as const, axisLabel: { formatter: '{value}' } },
-    yAxis: { type: 'category' as const, data: report.platformContributions.map((p) => p.name) },
-    series: [{ type: 'bar', data: report.platformContributions.map((p) => p.returnAmount) }],
-  }), [report.platformContributions]);
 
   return (
     <div>
@@ -153,18 +200,14 @@ function MonthlyReportView() {
         </Col>
       </Row>
 
-      <Card title="资产变化" style={{ marginBottom: 16 }}>
-        {report.snapshots.length > 0 ? (
-          <ReactEChartsCore echarts={echarts} option={lineOption} style={{ height: 250 }} />
-        ) : (
-          <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-            本月暂无快照数据
-          </div>
-        )}
-      </Card>
-
-      <Card title="各平台收益贡献">
-        <ReactEChartsCore echarts={echarts} option={platformBarOption} style={{ height: 200 }} />
+      <Card title="各基金表现排名">
+        <Table
+          dataSource={report.fundRankings}
+          columns={rankingColumns(navigate)}
+          rowKey="fundId"
+          pagination={false}
+          locale={{ emptyText: '暂无基金数据' }}
+        />
       </Card>
     </div>
   );

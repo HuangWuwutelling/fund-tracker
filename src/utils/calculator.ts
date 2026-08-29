@@ -76,13 +76,20 @@ export function calcReturnRate(totalReturn: number, cost: number): number {
   return (totalReturn / cost) * 100;
 }
 
-/** 计算当日盈亏 */
-export function calcDailyPnl(shares: number, navHistory: NavRecord[]): number | null {
+/**
+ * 计算当日盈亏
+ * 用今天日期找 NAV，找不到（非交易日）就返回 null
+ * - 非交易日（周末/节假日）：返回 null，让 UI 显示"—"而非虚假的盈亏
+ * - 交易日：用今日 NAV − 昨日 NAV
+ */
+export function calcDailyPnl(shares: number, navHistory: NavRecord[], todayStr: string): number | null {
   if (navHistory.length < 2) return null;
   const sorted = [...navHistory].sort((a, b) => b.date.localeCompare(a.date));
-  const today = sorted[0];
+  // 今天必须是交易日才有"当日盈亏"
+  if (sorted[0]?.date !== todayStr) return null;
+  const today = sorted[0]!;
   const yesterday = sorted[1];
-  if (!today || !yesterday) return null;
+  if (!yesterday) return null;
   return shares * (today.nav - yesterday.nav);
 }
 
@@ -276,7 +283,8 @@ export function calcTodayInvested(
 export function calcFundSummary(
   fund: Fund,
   transactions: Transaction[],
-  navHistory: NavRecord[]
+  navHistory: NavRecord[],
+  todayStr: string
 ) {
   const fundTransactions = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
   const shares = calcShares(fundTransactions);
@@ -284,7 +292,7 @@ export function calcFundSummary(
   const marketValue = calcMarketValue(shares, fund.currentNav);
   const totalReturn = calcReturn(marketValue, cost);
   const returnRate = calcReturnRate(totalReturn, cost);
-  const dailyPnl = calcDailyPnl(shares, navHistory);
+  const dailyPnl = calcDailyPnl(shares, navHistory, todayStr);
   const xirr = calcXIRR(fundTransactions, marketValue);
   const dividend = calcDividendTotal(fundTransactions);
 

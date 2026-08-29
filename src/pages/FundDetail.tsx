@@ -11,18 +11,18 @@ import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { calcFundSummary, calcSharesFromAmount } from '../utils/calculator';
-import { pnlColor, formatDate, formatMoney } from '../utils/formatter';
+import { pnlColor, formatDate, formatMoney, today } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
 import InitialPositionModal from '../components/InitialPositionModal';
-import { FUND_TYPE_LABELS, TRANSACTION_TYPE_LABELS } from '../types';
-import type { Transaction } from '../types';
+import { FUND_TYPE_LABELS, TRANSACTION_TYPE_LABELS, FREQUENCY_LABELS } from '../types';
+import type { Transaction, DcaPlan } from '../types';
 
 echarts.use([LineChart, TooltipComponent, GridComponent, CanvasRenderer]);
 
 export default function FundDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { platforms, transactions, getNavHistory, addTransaction, updateTransaction, removeTransaction, getFundById } = useStore();
+  const { platforms, transactions, getNavHistory, addTransaction, updateTransaction, removeTransaction, getFundById, dcaPlans, addDcaPlan, updateDcaPlan, removeDcaPlan, toggleDcaPlan } = useStore();
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [editingTxId, setEditingTxId] = useState<string | null>(null);
   const [txForm] = Form.useForm();
@@ -31,6 +31,49 @@ export default function FundDetail() {
   const [initModalOpen, setInitModalOpen] = useState(false);
   const [navRange, setNavRange] = useState<'1m' | '3m' | '6m' | '1y' | 'all'>('6m');
   const [navPreview, setNavPreview] = useState<{ nav: number; navDate: string } | null>(null);
+  const [dcaModalOpen, setDcaModalOpen] = useState(false);
+  const [editingDcaId, setEditingDcaId] = useState<string | null>(null);
+  const [dcaForm] = Form.useForm();
+  const dcaFreqWatch = Form.useWatch('frequency', dcaForm);
+
+  const handleEditDca = (plan: DcaPlan) => {
+    setEditingDcaId(plan.id);
+    dcaForm.setFieldsValue({
+      ...plan,
+      startDate: dayjs(plan.startDate),
+    });
+    setDcaModalOpen(true);
+  };
+
+  const handleSaveDca = async () => {
+    try {
+      const values = await dcaForm.validateFields();
+      const frequency = values.frequency as DcaPlan['frequency'];
+      const existing = editingDcaId ? dcaPlans.find((p) => p.id === editingDcaId) : null;
+      const plan: DcaPlan = {
+        id: editingDcaId ?? uuid(),
+        fundId: fund!.id,
+        amount: values.amount as number,
+        frequency,
+        dayOfWeek: frequency === 'weekly' || frequency === 'biweekly' ? (values.dayOfWeek as number) : undefined,
+        dayOfMonth: frequency === 'monthly' ? (values.dayOfMonth as number) : undefined,
+        active: existing?.active ?? true,
+        startDate: (values.startDate as dayjs.Dayjs).format('YYYY-MM-DD'),
+      };
+      if (editingDcaId) {
+        updateDcaPlan(editingDcaId, plan);
+        message.success('已更新');
+      } else {
+        addDcaPlan(plan);
+        message.success('已创建');
+      }
+      setDcaModalOpen(false);
+      setEditingDcaId(null);
+      dcaForm.resetFields();
+    } catch {
+      // validation failed
+    }
+  };
 
   const fund = getFundById(id ?? '');
   if (!fund) {
@@ -38,7 +81,8 @@ export default function FundDetail() {
   }
 
   const navHistory = getNavHistory(fund.id);
-  const summary = calcFundSummary(fund, transactions, navHistory);
+  const fundDcaPlans = dcaPlans.filter((p) => p.fundId === fund.id);
+  const summary = calcFundSummary(fund, transactions, navHistory, today());
   const fundTxs = transactions.filter((t) => t.fundId === fund.id).sort((a, b) => b.date.localeCompare(a.date));
   const platformName = platforms.find((p) => p.id === fund.platformId)?.name ?? '—';
 
@@ -260,11 +304,18 @@ export default function FundDetail() {
         <Col xs={12} sm={12} md={8}>
           <Card>
             <Statistic
-              title="收益率"
-              value={summary.returnRate}
-              suffix="%"
+              title="收益/收益率"
+              value={summary.totalReturn}
               precision={2}
-              valueStyle={{ color: pnlColor(summary.returnRate) }}
+              valueStyle={{ color: pnlColor(summary.totalReturn) }}
+              formatter={(value) => (
+                <span>
+                  {formatMoney(Number(value))}
+                  <span style={{ fontSize: 14, marginLeft: 8, color: pnlColor(summary.returnRate) }}>
+                    {summary.returnRate.toFixed(2)}%
+                  </span>
+                </span>
+              )}
             />
           </Card>
         </Col>
@@ -272,9 +323,9 @@ export default function FundDetail() {
           <Card>
             <Statistic
               title="当日盈亏"
-              value={summary.dailyPnl ?? 0}
+              value={summary.dailyPnl ?? '—'}
               precision={2}
-              valueStyle={{ color: pnlColor(summary.dailyPnl ?? 0) }}
+              valueStyle={{ color: summary.dailyPnl !== null ? pnlColor(summary.dailyPnl) : undefined }}
             />
           </Card>
         </Col>
@@ -335,6 +386,88 @@ export default function FundDetail() {
         }
       >
         <Table dataSource={fundTxs} columns={txColumns} rowKey="id" pagination={false} />
+      </Card>
+
+      <Card
+        title="定投计划"
+        style={{ marginTop: 16 }}
+        extra={
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setDcaModalOpen(true)}>
+            添加定投计划
+          </Button>
+        }
+      >
+        <Table
+          size="small"
+          dataSource={fundDcaPlans}
+          rowKey="id"
+          pagination={false}
+          locale={{ emptyText: '暂无定投计划' }}
+          columns={[
+            {
+              title: '每期金额',
+              dataIndex: 'amount',
+              key: 'amount',
+              width: 120,
+              align: 'right' as const,
+              render: (v: number) => formatMoney(v),
+            },
+            {
+              title: '频率',
+              dataIndex: 'frequency',
+              key: 'frequency',
+              width: 100,
+              render: (v: DcaPlan['frequency']) => FREQUENCY_LABELS[v] ?? v,
+            },
+            {
+              title: '执行日',
+              key: 'day',
+              width: 100,
+              render: (_: unknown, r: DcaPlan) => {
+                if (r.frequency === 'weekly' || r.frequency === 'biweekly') {
+                  return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][r.dayOfWeek ?? 0];
+                }
+                if (r.frequency === 'monthly') return `每月 ${r.dayOfMonth ?? 1} 日`;
+                return '—';
+              },
+            },
+            {
+              title: '开始日期',
+              dataIndex: 'startDate',
+              key: 'startDate',
+              width: 120,
+              render: (v: string) => formatDate(v),
+            },
+            {
+              title: '状态',
+              key: 'active',
+              width: 100,
+              render: (_: unknown, r: DcaPlan) => (
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => toggleDcaPlan(r.id)}
+                  style={{ padding: 0 }}
+                >
+                  {r.active ? <Tag color="green">启用中</Tag> : <Tag>已停用</Tag>}
+                </Button>
+              ),
+            },
+            {
+              title: '操作',
+              key: 'actions',
+              width: 120,
+              render: (_: unknown, r: DcaPlan) => (
+                <Space>
+                  <Button type="link" size="small" onClick={() => handleEditDca(r)}>编辑</Button>
+                  <Popconfirm title="确定删除该定投计划？" onConfirm={() => { removeDcaPlan(r.id); message.success('已删除'); }}>
+                    <Button type="link" danger size="small">删除</Button>
+                  </Popconfirm>
+                </Space>
+              ),
+            },
+          ]}
+        />
       </Card>
 
       <Modal
@@ -406,6 +539,45 @@ export default function FundDetail() {
           )}
           <Form.Item label="备注" name="note">
             <Input placeholder="可选" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={editingDcaId ? '编辑定投计划' : '添加定投计划'}
+        open={dcaModalOpen}
+        onOk={handleSaveDca}
+        onCancel={() => { setDcaModalOpen(false); setEditingDcaId(null); dcaForm.resetFields(); }}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={dcaForm} layout="vertical" initialValues={{ frequency: 'monthly', startDate: dayjs() }}>
+          <Form.Item label="每期金额（元）" name="amount" rules={[{ required: true }]}>
+            <InputNumber style={{ width: '100%' }} min={0} precision={2} />
+          </Form.Item>
+          <Form.Item label="定投频率" name="frequency" rules={[{ required: true }]}>
+            <Select>
+              {Object.entries(FREQUENCY_LABELS).map(([key, label]) => (
+                <Select.Option key={key} value={key}>{label}</Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          {(dcaFreqWatch === 'weekly' || dcaFreqWatch === 'biweekly') && (
+            <Form.Item label="周几" name="dayOfWeek" rules={[{ required: true }]}>
+              <Select>
+                {['周日', '周一', '周二', '周三', '周四', '周五', '周六'].map((label, i) => (
+                  <Select.Option key={i} value={i}>{label}</Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
+          {dcaFreqWatch === 'monthly' && (
+            <Form.Item label="每月几号" name="dayOfMonth" rules={[{ required: true }]}>
+              <InputNumber style={{ width: '100%' }} min={1} max={28} />
+            </Form.Item>
+          )}
+          <Form.Item label="开始日期" name="startDate" rules={[{ required: true }]}>
+            <DatePicker style={{ width: '100%' }} />
           </Form.Item>
         </Form>
       </Modal>

@@ -11,6 +11,19 @@ export interface FundPerformance {
   returnRate: number;
 }
 
+export interface DcaPlanExecution {
+  planId: string;
+  fundId: string;
+  fundName: string;
+  frequency: DcaPlan['frequency'];
+  /** 本周是否落入执行周（biweekly/monthly 不是每周都执行） */
+  isDueWeek: boolean;
+  /** 本周内该基金的 buy 交易笔数（confirmed） */
+  actual: number;
+  /** 期望笔数：daily 时是本周交易天数，其他都是 0/1 */
+  expected: number;
+}
+
 export interface WeeklyReport {
   weekStart: string;
   weekEnd: string;
@@ -22,6 +35,7 @@ export interface WeeklyReport {
   fundRankings: FundPerformance[];
   dcaExpected: number;
   dcaActual: number;
+  dcaDetails: DcaPlanExecution[];
 }
 
 export interface MonthlyReport {
@@ -33,6 +47,7 @@ export interface MonthlyReport {
   typeContributions: { type: string; returnAmount: number }[];
   bestFund: FundPerformance | null;
   worstFund: FundPerformance | null;
+  fundRankings: FundPerformance[];
 }
 
 function getWeekRange(date: Date): [string, string] {
@@ -47,6 +62,79 @@ function getMonthRange(year: number, month: number): [string, string] {
   const start = dayjs(`${year}-${String(month).padStart(2, '0')}-01`);
   const end = start.endOf('month');
   return [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')];
+}
+
+export interface DailyReturn {
+  date: string;
+  /** 当天总收益（已扣除期间投入的本金） */
+  totalReturn: number;
+  /** 各基金贡献的收益 */
+  perFund: { fundId: string; fundName: string; returnAmount: number }[];
+}
+
+/**
+ * 生成每日收益明细（按日期升序）
+ * - 不依赖 snapshot：用 calcPortfolioValueAtDate 按日期算持仓市值，避免"snapshot 不含当天买入"的 bug
+ * - 只有 prev 存在时才计算收益（第一个日期没有基线）
+ * - perFund 用 "当天每只基金期末市值 − 期初市值 − 期内净投入" 推算
+ */
+export function generateDailyReturns(
+  funds: Fund[],
+  transactions: Transaction[],
+  snapshots: DailySnapshot[]
+): DailyReturn[] {
+  // 只用 snapshot 的日期序列来驱动"哪天有数据"——不读 totalValue
+  const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length === 0) return [];
+
+  const result: DailyReturn[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const currDate = sorted[i]!.date;
+    const prevDate = i > 0 ? sorted[i - 1]!.date : null;
+
+    // 当天内所有 confirmed buy/sell 净额（用来排除本金影响）
+    const netFlow = onlyConfirmed(transactions)
+      .filter((t) => t.date === currDate)
+      .reduce((sum, t) => {
+        if (t.type === 'buy') return sum + t.amount;
+        if (t.type === 'sell') return sum - (t.amount - t.fee);
+        return sum;
+      }, 0);
+
+    // 总收益：curr 当天末持仓市值（含今天的买入）− prev 当天末持仓市值 − 当天净投入
+    // 没有"昨天"的第一个日期：无法计算收益（避免把首日买入金额当成负收益）
+    const totalReturn = prevDate
+      ? calcPortfolioValueAtDate(currDate, funds, transactions) -
+        calcPortfolioValueAtDate(prevDate, funds, transactions) -
+        netFlow
+      : 0;
+
+    // 各基金收益：每只基金今日末市值 − 昨日末市值 − 当日净投入
+    // 没有"昨天"时：无法计算单基金收益（首日不算）
+    const perFund = prevDate
+      ? funds
+          .map((fund) => {
+            const prevValue = calcPortfolioValueAtDate(prevDate, [fund], transactions);
+            const currValue = calcPortfolioValueAtDate(currDate, [fund], transactions);
+            const fundFlow = onlyConfirmed(transactions)
+              .filter((t) => t.fundId === fund.id && t.date === currDate)
+              .reduce((sum, t) => {
+                if (t.type === 'buy') return sum + t.amount;
+                if (t.type === 'sell') return sum - (t.amount - t.fee);
+                return sum;
+              }, 0);
+            return {
+              fundId: fund.id,
+              fundName: fund.name,
+              returnAmount: currValue - prevValue - fundFlow,
+            };
+          })
+          .filter((f) => Math.abs(f.returnAmount) > 0.01 || onlyConfirmed(transactions).some((t) => t.fundId === f.fundId && t.date === currDate))
+      : [];
+
+    result.push({ date: currDate, totalReturn, perFund });
+  }
+  return result;
 }
 
 /**
@@ -146,18 +234,38 @@ export function generateWeeklyReport(
   // DCA: count expected vs actual for active plans
   let dcaExpected = 0;
   let dcaActual = 0;
+  const dcaDetails: DcaPlanExecution[] = [];
   for (const plan of dcaPlans.filter((p) => p.active)) {
+    const fund = funds.find((f) => f.id === plan.fundId);
+    const fundName = fund?.name ?? plan.fundId;
+
+    // 计划还没到 startDate，整周都不算执行周（不管什么频率）
+    const planStart = new Date(plan.startDate);
+    const weekEndDate = new Date(weekEnd);
+    if (planStart.getTime() > weekEndDate.getTime()) {
+      dcaDetails.push({
+        planId: plan.id,
+        fundId: plan.fundId,
+        fundName,
+        frequency: plan.frequency,
+        isDueWeek: false,
+        actual: 0,
+        expected: 0,
+      });
+      continue;
+    }
+
+    let isDueWeek = true;
+    let expected = 0;
     if (plan.frequency === 'weekly') {
-      dcaExpected += 1;
+      expected = 1;
     } else if (plan.frequency === 'biweekly') {
       // Check if this week falls on a DCA week based on start date
-      const start = new Date(plan.startDate);
       const weekMonday = new Date(weekStart);
-      const diffDays = Math.round((weekMonday.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      const diffDays = Math.round((weekMonday.getTime() - planStart.getTime()) / (1000 * 60 * 60 * 24));
       const diffWeeks = Math.floor(diffDays / 7);
-      if (diffWeeks >= 0 && diffWeeks % 2 === 0) {
-        dcaExpected += 1;
-      }
+      isDueWeek = diffWeeks >= 0 && diffWeeks % 2 === 0;
+      expected = isDueWeek ? 1 : 0;
     } else if (plan.frequency === 'monthly') {
       const planDay = plan.dayOfMonth ?? 1;
       const weekDays = Array.from({ length: 7 }, (_, i) => {
@@ -165,15 +273,35 @@ export function generateWeeklyReport(
         d.setDate(d.getDate() + i);
         return d.getDate();
       });
-      if (weekDays.includes(planDay)) dcaExpected += 1;
+      isDueWeek = weekDays.includes(planDay);
+      expected = isDueWeek ? 1 : 0;
     } else if (plan.frequency === 'daily') {
       // Count actual trading days in this week from the fund's NAV history
-      dcaExpected += countTradingDays(plan.fundId, weekStart, weekEnd);
+      expected = countTradingDays(plan.fundId, weekStart, weekEnd);
     }
+    // 实际笔数：只统计"金额与计划金额匹配（在 ±1 元内）的 buy 交易"
+    // 否则手动买入会被错误地算作定投执行
     const planBuyTxs = onlyConfirmed(transactions).filter(
-      (t) => t.fundId === plan.fundId && t.type === 'buy' && t.date >= weekStart && t.date <= weekEnd
+      (t) =>
+        t.fundId === plan.fundId &&
+        t.type === 'buy' &&
+        t.date >= weekStart &&
+        t.date <= weekEnd &&
+        Math.abs(t.amount - plan.amount) < 1
     );
-    dcaActual += planBuyTxs.length;
+    const actual = planBuyTxs.length;
+
+    dcaExpected += expected;
+    dcaActual += actual;
+    dcaDetails.push({
+      planId: plan.id,
+      fundId: plan.fundId,
+      fundName,
+      frequency: plan.frequency,
+      isDueWeek,
+      actual,
+      expected,
+    });
   }
 
   return {
@@ -187,6 +315,7 @@ export function generateWeeklyReport(
     fundRankings,
     dcaExpected,
     dcaActual,
+    dcaDetails,
   };
 }
 
@@ -243,12 +372,12 @@ export function generateMonthlyReport(
   });
 
   // Fund rankings
-  const rankings = funds
+  const fundRankings = funds
     .map((f) => calcFundPerformanceInRange(f, transactions, monthStart, monthEnd))
     .sort((a, b) => b.returnRate - a.returnRate);
 
-  const bestFund = rankings[0] ?? null;
-  const worstFund = rankings[rankings.length - 1] ?? null;
+  const bestFund = fundRankings[0] ?? null;
+  const worstFund = fundRankings[fundRankings.length - 1] ?? null;
 
   return {
     month: monthStr,
@@ -259,5 +388,6 @@ export function generateMonthlyReport(
     typeContributions,
     bestFund,
     worstFund,
+    fundRankings,
   };
 }

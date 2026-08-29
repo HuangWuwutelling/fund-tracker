@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Button, Card, Table, Modal, Form, Select, Input, Tag, message, Popconfirm, Space, Typography, Empty } from 'antd';
 import { PlusOutlined, SearchOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { useStore } from '../stores';
 import { fetchFundWithHistory, loadFundSearchList, searchFunds, getFundTypeFromSearch } from '../api/fundApi';
 import { getNavHistory } from '../utils/storage';
@@ -14,6 +15,7 @@ const { Text } = Typography;
 
 export default function FundList() {
   const { funds, platforms, addFund, removeFund, updateNavHistory, updateFund } = useStore();
+  const navigate = useNavigate();
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
@@ -139,6 +141,9 @@ export default function FundList() {
       key: 'name',
       width: 220,
       sorter: (a: Fund, b: Fund) => a.name.localeCompare(b.name, 'zh-CN'),
+      render: (name: string, record: Fund) => (
+        <a onClick={() => navigate(`/funds/${record.id}`)}>{name}</a>
+      ),
     },
     {
       title: '平台',

@@ -8,6 +8,9 @@ import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from
 import { CanvasRenderer } from 'echarts/renderers';
 import { useStore } from '../stores';
 import { calcFundSummary, calcXIRR, calcDividendTotal, calcTodayInvested } from '../utils/calculator';
+import { today } from '../utils/formatter';
+import { generateDailyReturns } from '../utils/reportGenerator';
+import ReturnCalendar from '../components/ReturnCalendar';
 import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
 import { FUND_TYPE_LABELS } from '../types';
 
@@ -18,9 +21,10 @@ export default function Dashboard() {
   const navigate = useNavigate();
 
   const summaries = useMemo(() => {
+    const todayStr = today();
     return funds.map((fund) => ({
       fund,
-      ...calcFundSummary(fund, transactions, getNavHistory(fund.id)),
+      ...calcFundSummary(fund, transactions, getNavHistory(fund.id), todayStr),
     }));
   }, [funds, transactions, getNavHistory]);
 
@@ -30,13 +34,20 @@ export default function Dashboard() {
     const totalCost = summaries.reduce((sum, s) => sum + s.cost, 0);
     const totalReturn = totalValue - totalCost;
     const totalReturnRate = totalCost > 0 ? (totalReturn / totalCost) * 100 : 0;
-    const totalDailyPnl = summaries.reduce((sum, s) => sum + (s.dailyPnl ?? 0), 0);
+    // 非交易日所有基金 dailyPnl 都是 null → 总和也应为 null（让 UI 显示"—"）
+    const dailyPnlValues = summaries.map((s) => s.dailyPnl).filter((v): v is number => v !== null);
+    const totalDailyPnl = dailyPnlValues.length > 0 ? dailyPnlValues.reduce((sum, v) => sum + v, 0) : null;
     return { totalValue, totalCost, totalReturn, totalReturnRate, totalDailyPnl };
   }, [summaries]);
 
   const totalDividend = calcDividendTotal(transactions);
   const totalXIRR = calcXIRR(transactions, totals.totalValue);
   const todayInvested = calcTodayInvested(transactions, dcaPlans);
+
+  const dailyReturns = useMemo(
+    () => generateDailyReturns(funds, transactions, snapshots),
+    [funds, transactions, snapshots]
+  );
 
   // 未确认定投(pending):不计入持仓/收益,但提示用户去确认
   const pendingTransactions = transactions.filter((t) => t.status === 'pending');
@@ -187,7 +198,7 @@ export default function Dashboard() {
         <Alert
           type="warning"
           showIcon
-          message={`您有 ${pendingCount} 笔未确认定投${pendingAmount > 0 ? `，合计 ${formatMoney(pendingAmount)}` : ''}`}
+          message={`您有 ${pendingCount} 笔未确认交易${pendingAmount > 0 ? `，合计 ${formatMoney(pendingAmount)}` : ''}`}
           description="这些交易还未生效（T+1 净值待发布），不影响当前持仓显示。点击下方按钮确认份额。"
           action={
             <Button size="small" type="primary" onClick={() => navigate('/transactions?status=pending')}>
@@ -198,6 +209,7 @@ export default function Dashboard() {
           closable
         />
       )}
+      <ReturnCalendar dailyReturns={dailyReturns} />
       <Row gutter={[16, 16]}>
         <Col xs={12} sm={6}>
           <Card>
@@ -228,10 +240,10 @@ export default function Dashboard() {
         <Col xs={12} sm={6}>
           <Card>
             <Statistic
-              title="当日盈亏"
-              value={totals.totalDailyPnl}
+              title={`当日盈亏（${today()})`}
+              value={totals.totalDailyPnl ?? '—'}
               precision={2}
-              valueStyle={{ color: pnlColor(totals.totalDailyPnl) }}
+              valueStyle={{ color: totals.totalDailyPnl !== null ? pnlColor(totals.totalDailyPnl) : undefined }}
             />
           </Card>
         </Col>
@@ -262,7 +274,7 @@ export default function Dashboard() {
               title={`交易：${formatMoney(todayInvested.txAmount)}  +  定投预期：${formatMoney(todayInvested.planAmount)}`}
             >
               <Statistic
-                title="当日投入"
+                title={`当日投入（${today()})`}
                 value={todayInvested.total}
                 precision={2}
                 valueStyle={{ color: todayInvested.total > 0 ? '#1677ff' : undefined }}
@@ -299,7 +311,7 @@ export default function Dashboard() {
             },
             {
               key: 'trend',
-              label: '收益走势',
+              label: '资产走势',
               children: lineData.length > 0 ? (
                 <ReactEChartsCore
                   echarts={echarts}
