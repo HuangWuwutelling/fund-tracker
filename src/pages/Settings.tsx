@@ -30,23 +30,66 @@ export default function Settings() {
     }
   };
 
+/** 校验导入的备份 JSON 是否结构合法；返回 ok=true 或错误描述 */
+function validateBackup(data: unknown): { ok: true } | { ok: false; error: string } {
+  if (typeof data !== 'object' || data === null) {
+    return { ok: false, error: '顶层必须是对象' };
+  }
+  const d = data as Record<string, unknown>;
+
+  if (!Array.isArray(d.platforms)) return { ok: false, error: 'platforms 必须是数组' };
+  if (!Array.isArray(d.funds)) return { ok: false, error: 'funds 必须是数组' };
+  if (!Array.isArray(d.transactions)) return { ok: false, error: 'transactions 必须是数组' };
+  if (!Array.isArray(d.dcaPlans)) return { ok: false, error: 'dca-plans 必须是数组' };
+
+  // 校验关键字段类型（snapshot/settings 可选，但若存在需正确）
+  for (const p of d.platforms) {
+    if (typeof p !== 'object' || p === null || typeof (p as Record<string, unknown>).id !== 'string' || typeof (p as Record<string, unknown>).name !== 'string') {
+      return { ok: false, error: 'platforms 中存在格式不正确的条目' };
+    }
+  }
+  for (const f of d.funds) {
+    if (typeof f !== 'object' || f === null || typeof (f as Record<string, unknown>).id !== 'string') {
+      return { ok: false, error: 'funds 中存在格式不正确的条目' };
+    }
+  }
+  for (const t of d.transactions) {
+    if (typeof t !== 'object' || t === null || typeof (t as Record<string, unknown>).id !== 'string') {
+      return { ok: false, error: 'transactions 中存在格式不正确的条目' };
+    }
+  }
+
+  if (d.snapshots !== undefined && !Array.isArray(d.snapshots)) {
+    return { ok: false, error: 'snapshots 必须是数组' };
+  }
+  if (d.navHistories !== undefined && (typeof d.navHistories !== 'object' || d.navHistories === null)) {
+    return { ok: false, error: 'navHistories 必须是对象' };
+  }
+
+  return { ok: true };
+}
+
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = (ev) => {
+      let data: unknown;
       try {
-        const data = JSON.parse(ev.target?.result as string);
-        if (!data.funds || !data.platforms || !Array.isArray(data.transactions) || !Array.isArray(data.dcaPlans)) {
-          message.error('无效的备份文件格式：缺少必要字段');
-          return;
-        }
-        importData(data);
-        message.success('数据导入成功');
-      } catch {
-        message.error('文件解析失败');
+        data = JSON.parse(ev.target?.result as string);
+      } catch (err) {
+        console.error('[Settings] import parse failed', err);
+        message.error('文件解析失败：不是有效的 JSON');
+        return;
       }
+      const validation = validateBackup(data);
+      if (!validation.ok) {
+        message.error(`无效的备份文件：${validation.error}`);
+        return;
+      }
+      importData(data as Parameters<typeof importData>[0]);
+      message.success('数据导入成功');
     };
     reader.readAsText(file);
     // Reset input

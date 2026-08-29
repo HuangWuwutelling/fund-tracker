@@ -3,6 +3,11 @@ import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, Nav
 import * as storage from '../utils/storage';
 import { generateSnapshot } from '../utils/snapshot';
 
+/** 净值历史内存缓存：避免每次 getNavHistory 都解析 localStorage JSON。
+ *  updateNavHistory 和 loadFromStorage 时清空；getNavHistory 命中后写入。
+ */
+const navHistoryCache = new Map<string, NavRecord[]>();
+
 interface FundTrackerState {
   // Data
   platforms: Platform[];
@@ -173,15 +178,21 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
   // --- Nav History ---
   updateNavHistory: (fundCode, records) => {
+    navHistoryCache.set(fundCode, records);
     storage.saveNavHistory(fundCode, records);
   },
 
   getNavHistory: (fundCode) => {
-    return storage.getNavHistory(fundCode);
+    const cached = navHistoryCache.get(fundCode);
+    if (cached) return cached;
+    const records = storage.getNavHistory(fundCode);
+    navHistoryCache.set(fundCode, records);
+    return records;
   },
 
   // --- Init & Bulk ---
   loadFromStorage: () => {
+    navHistoryCache.clear();
     storage.initStorage();
     set({
       platforms: storage.getPlatforms(),
@@ -207,6 +218,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   },
 
   importData: (data) => {
+    navHistoryCache.clear();
     storage.importAllData(data);
     set({
       platforms: data.platforms,

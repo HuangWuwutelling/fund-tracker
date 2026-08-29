@@ -17,21 +17,26 @@ export default function DcaPlans() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
 
-  // DCA statistics: count each fund only once, use only DCA-linked amounts
+  // DCA statistics: each plan claims only the buy transactions whose amount matches (within ¥1).
+  // When a fund has multiple plans, txs are attributed in plan order to avoid double-counting.
   const stats = useMemo(() => {
-    const seenFundIds = new Set<string>();
     let totalInvested = 0;
     let totalMarketValue = 0;
+    const usedTxIds = new Set<string>();
 
     for (const plan of dcaPlans) {
       const fund = funds.find((f) => f.id === plan.fundId);
-      if (!fund || seenFundIds.has(plan.fundId)) continue;
-      seenFundIds.add(plan.fundId);
+      if (!fund) continue;
 
-      // Only count buy transactions that match the DCA amount (approximate DCA buys)
       const planTxs = transactions.filter(
-        (t) => t.fundId === plan.fundId && t.type === 'buy' && Math.abs(t.amount - plan.amount) < 1
+        (t) =>
+          t.fundId === plan.fundId &&
+          t.type === 'buy' &&
+          !usedTxIds.has(t.id) &&
+          Math.abs(t.amount - plan.amount) < 1
       );
+      for (const t of planTxs) usedTxIds.add(t.id);
+
       const shares = calcShares(planTxs);
       const cost = calcCost(planTxs);
       const marketValue = calcMarketValue(shares, fund.currentNav);
@@ -43,8 +48,6 @@ export default function DcaPlans() {
     const returnRate = totalInvested > 0 ? (totalReturn / totalInvested) * 100 : 0;
     return { totalInvested, totalMarketValue, totalReturn, returnRate };
   }, [dcaPlans, funds, transactions]);
-  // Note: when a fund has multiple DCA plans, only the first plan's transactions are counted.
-  // For accurate aggregation, ensure each fund has at most one plan, or filter transactions by all plan amounts.
 
   const handleSave = async () => {
     try {
@@ -91,9 +94,9 @@ export default function DcaPlans() {
   const getNextDate = (plan: DcaPlan): string => {
     const now = dayjs();
     if (plan.frequency === 'daily') {
-      // Next trading day: if today is a weekday and past 15:00, assume tomorrow
-      // For simplicity, just show next weekday
-      let next = now.add(1, 'day');
+      // 15:00 之前定投当天，15:00 之后顺延到下一交易日（周末顺延到周一）
+      const cutoff = now.hour(15).minute(0).second(0).millisecond(0);
+      let next = now.isBefore(cutoff) ? now : now.add(1, 'day');
       while (next.day() === 0 || next.day() === 6) {
         next = next.add(1, 'day');
       }

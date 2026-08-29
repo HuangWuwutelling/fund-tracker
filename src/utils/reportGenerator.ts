@@ -2,6 +2,7 @@ import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform } from '../typ
 import { calcShares, calcCost, calcMarketValue } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
 import { countTradingDays } from './navLookup';
+import dayjs from 'dayjs';
 
 export interface FundPerformance {
   fundId: string;
@@ -35,23 +36,17 @@ export interface MonthlyReport {
 }
 
 function getWeekRange(date: Date): [string, string] {
-  const d = new Date(date);
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  const monday = new Date(d.setDate(diff));
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  return [
-    monday.toISOString().slice(0, 10),
-    sunday.toISOString().slice(0, 10),
-  ];
+  // 用 dayjs 算本地周一/周日，避免 toISOString 的 UTC 偏移
+  const monday = dayjs(date).startOf('week').add(1, 'day'); // dayjs 默认周日为周首，需要 +1 天到周一
+  const sunday = monday.add(6, 'day');
+  return [monday.format('YYYY-MM-DD'), sunday.format('YYYY-MM-DD')];
 }
 
 function getMonthRange(year: number, month: number): [string, string] {
-  const start = `${year}-${String(month).padStart(2, '0')}-01`;
-  const lastDay = new Date(year, month, 0).getDate();
-  const end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-  return [start, end];
+  // month is 1-12 (dayjs convention); dayjs is 1-12 too
+  const start = dayjs(`${year}-${String(month).padStart(2, '0')}-01`);
+  const end = start.endOf('month');
+  return [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')];
 }
 
 function findNearestSnapshot(snapshots: DailySnapshot[], date: string): DailySnapshot | undefined {

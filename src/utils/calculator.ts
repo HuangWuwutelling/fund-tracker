@@ -21,7 +21,10 @@ export function calcShares(transactions: Transaction[]): number {
   }, 0);
 }
 
-/** 计算某只基金的持仓成本（卖出时按成本比例扣减） */
+/** 计算某只基金的持仓成本（卖出时按成本比例扣减）
+ *  约定：fee 内扣——用户总付出 = tx.amount，其中 tx.fee 从中扣减用于支付手续费，
+ *  净买入 = (amount - fee) / nav。所以 cost 直接累加 amount。
+ */
 export function calcCost(transactions: Transaction[]): number {
   let totalCost = 0;
   let totalShares = 0;
@@ -29,7 +32,7 @@ export function calcCost(transactions: Transaction[]): number {
   for (const tx of transactions) {
     switch (tx.type) {
       case 'buy':
-        totalCost += tx.amount + tx.fee;
+        totalCost += tx.amount;
         totalShares += tx.shares;
         break;
       case 'sell': {
@@ -95,7 +98,7 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
   const flows: { t: number; amount: number }[] = [];
   for (const tx of transactions) {
     let amount = 0;
-    if (tx.type === 'buy') amount = -(tx.amount + tx.fee);
+    if (tx.type === 'buy') amount = -tx.amount; // fee 内扣：用户总付出就是 amount
     else if (tx.type === 'sell') amount = tx.amount - tx.fee;
     else if (tx.type === 'dividend') amount = tx.amount;
     if (amount !== 0) {
@@ -126,7 +129,7 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
     return sum;
   };
 
-  // Newton-Raphson
+  // Newton-Raphson with generous bounds to handle large gains/losses
   let r = 0.1;
   let converged = false;
   for (let i = 0; i < 100; i++) {
@@ -140,16 +143,17 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
       converged = true;
       break;
     }
-    r = Math.max(-0.99, Math.min(next, 10));
+    // 上界放到 100，足以覆盖 1 万倍以内的回报率；下界 -0.99 避免 (1+r) 变负
+    r = Math.max(-0.99, Math.min(next, 100));
   }
 
   // Bisection fallback if NR didn't converge
   if (!converged) {
     let lo = -0.99;
-    let hi = 10;
+    let hi = 100;
     let flo = npv(lo);
     let fhi = npv(hi);
-    if (flo * fhi > 0) return 0; // no sign change → no real IRR in range
+    if (flo * fhi > 0) return r * 100; // no sign change → 返回 NR 最后一步的最佳估计
     for (let i = 0; i < 200; i++) {
       const mid = (lo + hi) / 2;
       const fmid = npv(mid);
@@ -166,7 +170,7 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
         flo = fmid;
       }
     }
-    if (!converged) return 0;
+    // 不收敛也返回当前 r（总比 0 更有信息量）
   }
 
   return r * 100;

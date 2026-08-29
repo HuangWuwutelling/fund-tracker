@@ -145,9 +145,24 @@ export function importAllData(data: ExportData): void {
   saveSnapshots(data.snapshots);
   saveSettings(data.settings);
   if (data.navHistories) {
+    // 完整备份：用备份内的净值历史覆盖
     for (const [fundCode, records] of Object.entries(data.navHistories)) {
       saveNavHistory(fundCode, records);
     }
+    // 清理掉备份里没有、但本地还残留的旧 nav（避免孤儿数据干扰显示）
+    const importedFundIds = new Set(Object.keys(data.navHistories));
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(`${PREFIX}:nav:`)) {
+        const fundCode = k.slice(`${PREFIX}:nav:`.length);
+        if (!importedFundIds.has(fundCode)) {
+          localStorage.removeItem(k);
+        }
+      }
+    }
+  } else {
+    // v0 备份没有 navHistories 字段 → 保留 localStorage 现有的净值历史作为后备
+    // （这里什么都不做：save* 没有动 nav:* 这些 key，原有数据自然保留）
   }
 }
 

@@ -24,19 +24,18 @@ export default function Dashboard() {
     }));
   }, [funds, transactions, getNavHistory]);
 
-  const totalValue = summaries.reduce((sum, s) => sum + s.marketValue, 0);
-  const totalCost = summaries.reduce((sum, s) => sum + s.cost, 0);
-  const totalReturn = totalValue - totalCost;
-  const totalReturnRate = totalCost > 0 ? (totalReturn / totalCost) * 100 : 0;
+  // 衍生统计：memoize 避免每次渲染重算 + 重复 getNavHistory 调用
+  const totals = useMemo(() => {
+    const totalValue = summaries.reduce((sum, s) => sum + s.marketValue, 0);
+    const totalCost = summaries.reduce((sum, s) => sum + s.cost, 0);
+    const totalReturn = totalValue - totalCost;
+    const totalReturnRate = totalCost > 0 ? (totalReturn / totalCost) * 100 : 0;
+    const totalDailyPnl = summaries.reduce((sum, s) => sum + (s.dailyPnl ?? 0), 0);
+    return { totalValue, totalCost, totalReturn, totalReturnRate, totalDailyPnl };
+  }, [summaries]);
 
-  // Daily P&L: sum of all funds' daily P&L
-  const totalDailyPnl = summaries.reduce((sum, s) => sum + (s.dailyPnl ?? 0), 0);
-
-  // 累计分红(全平台)
   const totalDividend = calcDividendTotal(transactions);
-
-  // XIRR(全平台):把 currentValue 作为终值,所有交易视为现金流
-  const totalXIRR = calcXIRR(transactions, totalValue);
+  const totalXIRR = calcXIRR(transactions, totals.totalValue);
 
   // 未确认定投(pending):不计入持仓/收益,但提示用户去确认
   const pendingTransactions = transactions.filter((t) => t.status === 'pending');
@@ -85,7 +84,7 @@ export default function Dashboard() {
     ],
   });
 
-  const lineOption = {
+  const lineOption = useMemo(() => ({
     tooltip: {
       trigger: 'axis' as const,
       formatter: (params: Array<{ name: string; value: number }>) => {
@@ -97,7 +96,7 @@ export default function Dashboard() {
     xAxis: { type: 'category' as const, data: lineData.map((d) => d.date) },
     yAxis: { type: 'value' as const, axisLabel: { formatter: '{value}' } },
     series: [{ type: 'line', data: lineData.map((d) => d.value), smooth: true, areaStyle: { opacity: 0.1 } }],
-  };
+  }), [lineData]);
 
   const columns = [
     {
@@ -199,16 +198,16 @@ export default function Dashboard() {
       <Row gutter={[16, 16]}>
         <Col xs={12} sm={6}>
           <Card>
-            <Statistic title="总资产" value={totalValue} precision={2} />
+            <Statistic title="总资产" value={totals.totalValue} precision={2} />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
           <Card>
             <Statistic
               title="总收益"
-              value={totalReturn}
+              value={totals.totalReturn}
               precision={2}
-              valueStyle={{ color: pnlColor(totalReturn) }}
+              valueStyle={{ color: pnlColor(totals.totalReturn) }}
             />
           </Card>
         </Col>
@@ -216,10 +215,10 @@ export default function Dashboard() {
           <Card>
             <Statistic
               title="总收益率"
-              value={totalReturnRate}
+              value={totals.totalReturnRate}
               suffix="%"
               precision={2}
-              valueStyle={{ color: pnlColor(totalReturnRate) }}
+              valueStyle={{ color: pnlColor(totals.totalReturnRate) }}
             />
           </Card>
         </Col>
@@ -227,9 +226,9 @@ export default function Dashboard() {
           <Card>
             <Statistic
               title="当日盈亏"
-              value={totalDailyPnl}
+              value={totals.totalDailyPnl}
               precision={2}
-              valueStyle={{ color: pnlColor(totalDailyPnl) }}
+              valueStyle={{ color: pnlColor(totals.totalDailyPnl) }}
             />
           </Card>
         </Col>

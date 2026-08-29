@@ -179,7 +179,8 @@ export async function fetchFundEstimate(fundCode: string): Promise<FundEstimate 
       changePercent,
       navDate,
     };
-  } catch {
+  } catch (err) {
+    console.error('[fundApi] fetchFundEstimate failed for', fundCode, err);
     return null;
   }
 }
@@ -203,7 +204,8 @@ export async function fetchNavHistory(
 
     // Filter by date range
     return records.filter((r) => r.date >= startDate && r.date <= endDate);
-  } catch {
+  } catch (err) {
+    console.error('[fundApi] fetchNavHistory failed for', fundCode, err);
     return [];
   }
 }
@@ -237,7 +239,8 @@ export async function fetchFundWithHistory(fundCode: string): Promise<{
       estimate: { name, code, nav: lastNav, lastNav, changePercent, navDate },
       navHistory,
     };
-  } catch {
+  } catch (err) {
+    console.error('[fundApi] fetchFundWithHistory failed for', fundCode, err);
     return null;
   }
 }

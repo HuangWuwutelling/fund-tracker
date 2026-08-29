@@ -97,21 +97,21 @@ function MonthlyReportView() {
     [date, funds, transactions, snapshots, platforms]
   );
 
-  const lineOption = {
+  const lineOption = useMemo(() => ({
     tooltip: { trigger: 'axis' as const },
     grid: { left: 60, right: 20, top: 10, bottom: 30 },
     xAxis: { type: 'category' as const, data: report.snapshots.map((s) => s.date) },
     yAxis: { type: 'value' as const, axisLabel: { formatter: '{value}' } },
     series: [{ type: 'line', data: report.snapshots.map((s) => s.totalValue), smooth: true, areaStyle: { opacity: 0.1 } }],
-  };
+  }), [report.snapshots]);
 
-  const platformBarOption = {
+  const platformBarOption = useMemo(() => ({
     tooltip: { trigger: 'axis' as const },
     grid: { left: 100, right: 20, top: 10, bottom: 30 },
     xAxis: { type: 'value' as const, axisLabel: { formatter: '{value}' } },
     yAxis: { type: 'category' as const, data: report.platformContributions.map((p) => p.name) },
     series: [{ type: 'bar', data: report.platformContributions.map((p) => p.returnAmount) }],
-  };
+  }), [report.platformContributions]);
 
   return (
     <div>

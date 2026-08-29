@@ -4,7 +4,7 @@ import { WarningTwoTone, CheckCircleTwoTone } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
-import { formatMoney, formatPercent } from '../utils/formatter';
+import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
 import type { Transaction } from '../types';
 
 interface Props {
@@ -148,6 +148,11 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
           setAutoFilledField(null);
 
           const filled = [isFilled(all.shares), isFilled(all.price), isFilled(all.cost)].filter(Boolean).length;
+          // filled 下降（用户清空字段）：重置 prev，避免后续 1→2 转换被旧的 3→2 阻塞
+          if (filled < prevFilledCount.current) {
+            prevFilledCount.current = filled;
+            return;
+          }
           if (filled === 2 && prevFilledCount.current === 1) {
             if (!isFilled(all.shares) && isFilled(all.price) && isFilled(all.cost)) {
               aboutToAutoFillRef.current = 'shares';
@@ -209,7 +214,7 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
             {formatMoney(preview.marketValue)}
           </Descriptions.Item>
           <Descriptions.Item label="持仓收益">
-            <span style={{ color: preview.pnl > 0 ? '#cf1322' : preview.pnl < 0 ? '#389e0d' : undefined }}>
+            <span style={{ color: preview.pnl !== 0 ? pnlColor(preview.pnl) : undefined }}>
               {formatMoney(preview.pnl)}（{formatPercent(preview.returnRate)}）
             </span>
           </Descriptions.Item>

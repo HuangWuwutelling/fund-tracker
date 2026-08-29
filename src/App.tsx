@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, theme, message } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
@@ -21,14 +21,22 @@ export default function App() {
     loadFromStorage();
   }, [loadFromStorage]);
 
+  // Generation counter to bail out stale refreshAll calls when a newer one starts.
+  // refreshAll's deps include `transactions`, so adding a tx fires a new refresh —
+  // the in-flight old one must not overwrite with stale state.
+  const refreshGenerationRef = useRef(0);
+
   // Auto-refresh NAV + generate snapshot when funds are loaded
   const refreshAll = useCallback(async () => {
+    const myGen = ++refreshGenerationRef.current;
     if (funds.length === 0) return;
 
     for (let i = 0; i < funds.length; i++) {
+      if (refreshGenerationRef.current !== myGen) return; // superseded
       const fund = funds[i]!;
       try {
         const result = await fetchFundWithHistory(fund.id);
+        if (refreshGenerationRef.current !== myGen) return;
         if (result && result.estimate.lastNav > 0) {
           updateFund(fund.id, {
             currentNav: result.estimate.lastNav,
@@ -39,15 +47,15 @@ export default function App() {
             updateNavHistory(fund.id, result.navHistory);
           }
         }
-      } catch {
-        // Skip failed funds silently
+      } catch (err) {
+        console.error('[App] refreshAll failed for', fund.id, err);
       }
       if (i < funds.length - 1) {
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
 
-    // Generate today's snapshot after refresh
+    if (refreshGenerationRef.current !== myGen) return;
     const updatedFunds = useStore.getState().funds;
     const updatedTxs = useStore.getState().transactions;
     const snapshot = generateSnapshot(updatedFunds, updatedTxs);
@@ -55,13 +63,16 @@ export default function App() {
   }, [funds.length, updateFund, updateNavHistory, addSnapshot, transactions]);
 
   useEffect(() => {
-    if (settings.navAutoRefresh && funds.length > 0) {
-      refreshAll().then(() => {
-        message.success('净值已更新');
-      }).catch(() => {
-        message.warning('净值刷新失败，请检查网络');
-      });
-    }
+    if (!settings.navAutoRefresh || funds.length === 0) return;
+    const myGen = refreshGenerationRef.current + 1;
+    refreshAll().then(() => {
+      if (refreshGenerationRef.current !== myGen) return; // a newer refresh is in flight
+      message.success('净值已更新');
+    }).catch((err) => {
+      if (refreshGenerationRef.current !== myGen) return;
+      console.error('[App] refreshAll error:', err);
+      message.warning('净值刷新失败，请检查网络');
+    });
   }, [settings.navAutoRefresh, funds.length, refreshAll]);
 
   return (

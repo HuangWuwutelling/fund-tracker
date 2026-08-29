@@ -56,7 +56,7 @@ export default function FundDetail() {
       : navHistory;
   }, [navHistory, navRange]);
 
-  const navChartOption = {
+  const navChartOption = useMemo(() => ({
     tooltip: {
       trigger: 'axis' as const,
       formatter: (params: Array<{ name: string; value: number }>) => {
@@ -68,7 +68,7 @@ export default function FundDetail() {
     xAxis: { type: 'category' as const, data: filteredNav.map((r) => r.date) },
     yAxis: { type: 'value' as const, min: 'dataMin', axisLabel: { formatter: (v: number) => v.toFixed(2) } },
     series: [{ type: 'line', data: filteredNav.map((r) => r.nav), smooth: true }],
-  };
+  }), [filteredNav]);
 
   const handleAddTransaction = async () => {
     try {
