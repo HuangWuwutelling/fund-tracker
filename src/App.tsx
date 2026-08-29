@@ -4,8 +4,12 @@ import { ConfigProvider, theme, message } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
+import updateLocale from 'dayjs/plugin/updateLocale';
 
+dayjs.extend(updateLocale);
 dayjs.locale('zh-cn');
+// 周一作为一周第一天（中国习惯）
+dayjs.updateLocale('zh-cn', { weekStart: 1 });
 import { useStore } from './stores';
 import { fetchFundWithHistory } from './api/fundApi';
 import { generateSnapshot } from './utils/snapshot';
