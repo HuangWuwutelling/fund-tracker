@@ -79,16 +79,26 @@ export function calcDailyPnl(shares: number, navHistory: NavRecord[]): number | 
   return shares * (today.nav - yesterday.nav);
 }
 
-/** 累计分红金额（所有 dividend 类型交易） */
+/**
+ * 累计分红金额（所有 dividend 类型交易）
+ * 表单约定：
+ *   - 红利再投资：amount = 再投资金额(元)，shares = 获得的再投资份额
+ *   - 现金分红：amount = 0（表单 required 占位），shares = 获得的现金金额(元)
+ * 取 amount 和 shares 中较大的那个作为分红金额，兼容两种情况。
+ */
 export function calcDividendTotal(transactions: Transaction[]): number {
   return onlyConfirmed(transactions)
     .filter((tx) => tx.type === 'dividend')
-    .reduce((sum, tx) => sum + tx.amount, 0);
+    .reduce((sum, tx) => sum + Math.max(tx.amount, tx.shares), 0);
 }
 
 /**
  * 计算 XIRR（不规则现金流的年化收益率）
- * 约定: 买入 amount+fee 为负现金流,卖出 amount-fee 为正,分红 amount 为正;currentValue 作为终值
+ * 约定（fee 内扣）:
+ *   - 买入: 用户总付出 = amount，现金流 = -amount
+ *   - 卖出: 用户净收入 = amount - fee，现金流 = +(amount - fee)
+ *   - 分红: 现金流 = +amount（或 +shares，取较大值，兼容现金分红/红利再投资）
+ *   - currentValue 作为终值（正现金流）
  * 返回: 年化收益率(百分比,例如 12.5 表示 12.5%);无数据或不收敛返回 0
  */
 export function calcXIRR(transactions: Transaction[], currentValue: number): number {
@@ -100,7 +110,7 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
     let amount = 0;
     if (tx.type === 'buy') amount = -tx.amount; // fee 内扣：用户总付出就是 amount
     else if (tx.type === 'sell') amount = tx.amount - tx.fee;
-    else if (tx.type === 'dividend') amount = tx.amount;
+    else if (tx.type === 'dividend') amount = Math.max(tx.amount, tx.shares); // 兼容现金分红(amount=0, shares=现金) 和红利再投资(amount=金额)
     if (amount !== 0) {
       flows.push({ t: new Date(tx.date).getTime(), amount });
     }
