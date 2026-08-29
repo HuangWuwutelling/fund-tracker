@@ -7,3 +7,9 @@
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
+
+/* DatePicker 弹窗头部：年份和月份按钮之间的间距从默认 8px 收到 2px，
+   否则 "2026年" 和 "8月" 之间看起来像 "8" 前面多了个空格 */
+.ant-picker-header-view > button:not(:first-child) {
+  margin-inline-start: 2px;
+}
