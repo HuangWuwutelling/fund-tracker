@@ -1,11 +1,10 @@
-import { useRef, useEffect, useMemo } from 'react';
+import { useRef, useEffect, useMemo, useState } from 'react';
 import { Modal, Form, DatePicker, InputNumber, Alert, message, Descriptions, Tag, Space } from 'antd';
 import { WarningTwoTone, CheckCircleTwoTone } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { formatMoney, formatPercent } from '../utils/formatter';
-import { calcSharesFromAmount } from '../utils/calculator';
 import type { Transaction } from '../types';
 
 interface Props {
@@ -17,6 +16,8 @@ interface Props {
 /** 字段是否填了合法正数 */
 const isFilled = (v: unknown): v is number => typeof v === 'number' && v > 0;
 
+type FieldName = 'shares' | 'price' | 'cost';
+
 /**
  * 初始持仓 Modal：把"已有持仓的开始状态"作为一笔 buy 交易写入历史。
  * 任意填入 份额/单价/本金 三项中的两项，第三项自动算出。
@@ -26,9 +27,13 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
   const { addTransaction, getFundById } = useStore();
   const [form] = Form.useForm();
   const prevFilledCount = useRef(0);
+  // 区分"用户手动改"vs"setFieldValue 触发的二次回调"：
+  // 调用 form.setFieldValue 之前先把目标字段记到这里，onValuesChange 中比对后跳过
+  const aboutToAutoFillRef = useRef<FieldName | null>(null);
+  // 当前哪个字段是"自动算出来的"——驱动蓝色"自动算出"标签
+  const [autoFilledField, setAutoFilledField] = useState<FieldName | null>(null);
   const fund = fundId ? getFundById(fundId) : null;
 
-  // 实时跟踪三个字段，自动算第三项 + 预览市值/收益率
   const sharesWatch = Form.useWatch('shares', form);
   const priceWatch = Form.useWatch('price', form);
   const costWatch = Form.useWatch('cost', form);
@@ -38,25 +43,18 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
     if (!open) {
       form.resetFields();
       prevFilledCount.current = 0;
+      aboutToAutoFillRef.current = null;
+      setAutoFilledField(null);
     }
   }, [open, form]);
 
-  // 计算"已知两个，第三个会自动算出"的值
+  // 当前"自动算出"的字段及其值
   const computed = useMemo(() => {
-    const filled: number = [isFilled(sharesWatch), isFilled(priceWatch), isFilled(costWatch)].filter(Boolean).length;
-    if (filled === 2) {
-      if (!isFilled(sharesWatch) && isFilled(priceWatch) && isFilled(costWatch)) {
-        return { field: 'shares' as const, value: +(costWatch! / priceWatch!).toFixed(4) };
-      }
-      if (!isFilled(priceWatch) && isFilled(sharesWatch) && isFilled(costWatch)) {
-        return { field: 'price' as const, value: +(costWatch! / sharesWatch!).toFixed(4) };
-      }
-      if (!isFilled(costWatch) && isFilled(sharesWatch) && isFilled(priceWatch)) {
-        return { field: 'cost' as const, value: +(sharesWatch! * priceWatch!).toFixed(2) };
-      }
-    }
-    return null;
-  }, [sharesWatch, priceWatch, costWatch]);
+    if (!autoFilledField) return null;
+    const value = form.getFieldValue(autoFilledField) as number;
+    if (!isFilled(value)) return null;
+    return { field: autoFilledField, value };
+  }, [autoFilledField, sharesWatch, priceWatch, costWatch]);
 
   // 全部填齐后才显示市值 / 收益率预览
   const preview = useMemo(() => {
@@ -67,42 +65,34 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
     return { marketValue, pnl, returnRate };
   }, [sharesWatch, priceWatch, costWatch, fund]);
 
-  // 数量级校验：份额 < 0.1 且 净值 > 1，提示"是否少输了几位"
+  // 数量级校验：份额与 cost/price 推算的预期份额相差超过 10 倍，提示"是否漏输了数字"
   const magnitudeWarning = useMemo(() => {
     if (!isFilled(sharesWatch) || !isFilled(priceWatch) || !isFilled(costWatch)) return null;
     const expectedShares = costWatch! / priceWatch!;
-    // 期望份额与用户输入差距超过 10 倍，且期望份额 > 1
     if (expectedShares > 1 && sharesWatch! * 10 < expectedShares) {
-      const ratio = expectedShares / sharesWatch!;
+      const ratio = Math.round(expectedShares / sharesWatch!);
       return {
-        expected: expectedShares,
-        ratio: Math.round(ratio),
         message: `份额似乎过小：按 ${formatMoney(costWatch!)} ÷ ${priceWatch!.toFixed(4)} 应为 ${expectedShares.toFixed(4)} 份（约是当前输入的 ${ratio} 倍）。请检查是否漏输了数字。`,
       };
     }
     return null;
   }, [sharesWatch, priceWatch, costWatch]);
 
-  // 标签标记：哪个字段是自动算的
-  const fieldLabel = (name: 'shares' | 'price' | 'cost', base: string) => {
-    const isAuto = computed?.field === name;
-    return (
-      <Space>
-        <span>{base}</span>
-        {isAuto && <Tag color="blue">自动算出</Tag>}
-      </Space>
-    );
-  };
+  const fieldLabel = (name: FieldName, base: string) => (
+    <Space>
+      <span>{base}</span>
+      {computed?.field === name && <Tag color="blue">自动算出</Tag>}
+    </Space>
+  );
 
   const handleOk = async () => {
     if (!fundId) return;
     try {
       const values = await form.validateFields();
-      // 用计算后的最新值（即使有"自动算出"字段被用户清空过）
-      const shares = (values.shares as number) ?? computed?.value ?? 0;
-      const totalCost = (values.cost as number) ?? (shares * (values.price as number));
+      const shares = values.shares as number;
+      const totalCost = values.cost as number;
       const startDate = (values.startDate as dayjs.Dayjs).format('YYYY-MM-DD');
-      const nav = (values.price as number) ?? ((totalCost / shares) || 0);
+      const nav = values.price as number;
 
       const tx: Transaction = {
         id: uuid(),
@@ -147,13 +137,29 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
         onValuesChange={(changed, all) => {
           const changedField = Object.keys(changed)[0] as string | undefined;
           if (!changedField || !['shares', 'price', 'cost'].includes(changedField)) return;
+
+          // setFieldValue 自动触发的二次回调：清掉 ref 后跳过，不破坏 prev 状态机
+          if (changedField === aboutToAutoFillRef.current) {
+            aboutToAutoFillRef.current = null;
+            return;
+          }
+
+          // 用户主动改：清掉"自动算出"标记
+          setAutoFilledField(null);
+
           const filled = [isFilled(all.shares), isFilled(all.price), isFilled(all.cost)].filter(Boolean).length;
           if (filled === 2 && prevFilledCount.current === 1) {
             if (!isFilled(all.shares) && isFilled(all.price) && isFilled(all.cost)) {
+              aboutToAutoFillRef.current = 'shares';
+              setAutoFilledField('shares');
               form.setFieldValue('shares', +(all.cost! / all.price!).toFixed(4));
             } else if (!isFilled(all.price) && isFilled(all.shares) && isFilled(all.cost)) {
+              aboutToAutoFillRef.current = 'price';
+              setAutoFilledField('price');
               form.setFieldValue('price', +(all.cost! / all.shares!).toFixed(4));
             } else if (!isFilled(all.cost) && isFilled(all.shares) && isFilled(all.price)) {
+              aboutToAutoFillRef.current = 'cost';
+              setAutoFilledField('cost');
               form.setFieldValue('cost', +(all.shares! * all.price!).toFixed(2));
             }
           }
@@ -229,6 +235,3 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
     </Modal>
   );
 }
-
-// 抑制未使用警告（保留供将来使用）
-void calcSharesFromAmount;
