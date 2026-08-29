@@ -30,6 +30,8 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
   // 区分"用户手动改"vs"setFieldValue 触发的二次回调"：
   // 调用 form.setFieldValue 之前先把目标字段记到这里，onValuesChange 中比对后跳过
   const aboutToAutoFillRef = useRef<FieldName | null>(null);
+  // 当前哪个字段是自动算出的——用 ref 跨闭包追踪，避免闭包陷阱
+  const autoFilledFieldRef = useRef<FieldName | null>(null);
   // 当前哪个字段是"自动算出来的"——驱动蓝色"自动算出"标签
   const [autoFilledField, setAutoFilledField] = useState<FieldName | null>(null);
   const fund = fundId ? getFundById(fundId) : null;
@@ -44,6 +46,7 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
       form.resetFields();
       prevFilledCount.current = 0;
       aboutToAutoFillRef.current = null;
+      autoFilledFieldRef.current = null;
       setAutoFilledField(null);
     }
   }, [open, form]);
@@ -73,6 +76,13 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
       const ratio = Math.round(expectedShares / sharesWatch!);
       return {
         message: `份额似乎过小：按 ${formatMoney(costWatch!)} ÷ ${priceWatch!.toFixed(4)} 应为 ${expectedShares.toFixed(4)} 份（约是当前输入的 ${ratio} 倍）。请检查是否漏输了数字。`,
+      };
+    }
+    if (sharesWatch! > 1 && expectedShares * 10 < sharesWatch!) {
+      // 反向：输入的份额比 cost/price 推算出来的份数大 10 倍以上——典型"先输份额 5、价格正常、cost 自动算出 8.40，再把份额改成 568.55"的场景
+      const ratio = Math.round(sharesWatch! / expectedShares);
+      return {
+        message: `份额似乎过大：按 ${formatMoney(costWatch!)} ÷ ${priceWatch!.toFixed(4)} 应为 ${expectedShares.toFixed(4)} 份（约是当前输入的 1/${ratio}）。请检查是否漏输了数字，或先清空 cost 让它重算。`,
       };
     }
     return null;
@@ -135,7 +145,7 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
         layout="vertical"
         initialValues={{ startDate: dayjs() }}
         onValuesChange={(changed, all) => {
-          const changedField = Object.keys(changed)[0] as string | undefined;
+          const changedField = Object.keys(changed)[0] as FieldName | undefined;
           if (!changedField || !['shares', 'price', 'cost'].includes(changedField)) return;
 
           // setFieldValue 自动触发的二次回调：清掉 ref 后跳过，不破坏 prev 状态机
@@ -146,6 +156,10 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
 
           // 用户主动改：清掉"自动算出"标记
           setAutoFilledField(null);
+          // 先记住之前是哪个字段被自动算出的——如果用户改的是另一个字段，
+          // 说明那个自动算出的值是基于错误的中间值算出来的，需要重新算
+          const prevAutoFilled = autoFilledFieldRef.current;
+          autoFilledFieldRef.current = null;
 
           const filled = [isFilled(all.shares), isFilled(all.price), isFilled(all.cost)].filter(Boolean).length;
           // filled 下降（用户清空字段）：重置 prev，避免后续 1→2 转换被旧的 3→2 阻塞
@@ -153,19 +167,36 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
             prevFilledCount.current = filled;
             return;
           }
+
+          const doAutoFill = (field: FieldName, value: number) => {
+            aboutToAutoFillRef.current = field;
+            autoFilledFieldRef.current = field;
+            setAutoFilledField(field);
+            form.setFieldValue(field, value);
+          };
+
           if (filled === 2 && prevFilledCount.current === 1) {
             if (!isFilled(all.shares) && isFilled(all.price) && isFilled(all.cost)) {
-              aboutToAutoFillRef.current = 'shares';
-              setAutoFilledField('shares');
-              form.setFieldValue('shares', +(all.cost! / all.price!).toFixed(4));
+              doAutoFill('shares', +(all.cost! / all.price!).toFixed(4));
             } else if (!isFilled(all.price) && isFilled(all.shares) && isFilled(all.cost)) {
-              aboutToAutoFillRef.current = 'price';
-              setAutoFilledField('price');
-              form.setFieldValue('price', +(all.cost! / all.shares!).toFixed(4));
+              doAutoFill('price', +(all.cost! / all.shares!).toFixed(4));
             } else if (!isFilled(all.cost) && isFilled(all.shares) && isFilled(all.price)) {
-              aboutToAutoFillRef.current = 'cost';
-              setAutoFilledField('cost');
-              form.setFieldValue('cost', +(all.shares! * all.price!).toFixed(2));
+              doAutoFill('cost', +(all.shares! * all.price!).toFixed(2));
+            }
+          } else if (
+            // 用户在已有自动填充的基础上又改了另一个字段（典型：先输 shares=5、price=1.679 算出 cost=8.40，再把 shares 改成 568.55）
+            // 此时之前自动算出的字段（cost=8.40）已经过时，必须用新的 shares×price 重新算
+            filled === 3 &&
+            prevFilledCount.current >= 2 &&
+            prevAutoFilled &&
+            changedField !== prevAutoFilled
+          ) {
+            if (prevAutoFilled === 'shares' && isFilled(all.price) && isFilled(all.cost)) {
+              doAutoFill('shares', +(all.cost! / all.price!).toFixed(4));
+            } else if (prevAutoFilled === 'price' && isFilled(all.shares) && isFilled(all.cost)) {
+              doAutoFill('price', +(all.cost! / all.shares!).toFixed(4));
+            } else if (prevAutoFilled === 'cost' && isFilled(all.shares) && isFilled(all.price)) {
+              doAutoFill('cost', +(all.shares! * all.price!).toFixed(2));
             }
           }
           prevFilledCount.current = filled;
