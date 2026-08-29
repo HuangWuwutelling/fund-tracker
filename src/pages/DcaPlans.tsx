@@ -229,14 +229,30 @@ export default function DcaPlans() {
             rowKey="fundId"
             pagination={false}
             columns={[
-              { title: '基金', dataIndex: 'fundName', key: 'fundName', align: 'left' as const },
-              { title: '交易笔数', dataIndex: 'txCount', key: 'txCount', align: 'right' as const, width: 100 },
+              {
+                title: '基金',
+                dataIndex: 'fundName',
+                key: 'fundName',
+                align: 'left' as const,
+                sorter: (a: typeof stats.perFund[0], b: typeof stats.perFund[0]) =>
+                  a.fundName.localeCompare(b.fundName, 'zh-CN'),
+              },
+              {
+                title: '交易笔数',
+                dataIndex: 'txCount',
+                key: 'txCount',
+                align: 'right' as const,
+                width: 100,
+                sorter: (a: typeof stats.perFund[0], b: typeof stats.perFund[0]) => a.txCount - b.txCount,
+              },
               {
                 title: '累计投入',
                 dataIndex: 'invested',
                 key: 'invested',
                 align: 'right' as const,
                 width: 160,
+                defaultSortOrder: 'descend' as const,
+                sorter: (a: typeof stats.perFund[0], b: typeof stats.perFund[0]) => a.invested - b.invested,
                 render: (v: number) => formatMoney(v),
               },
             ]}
