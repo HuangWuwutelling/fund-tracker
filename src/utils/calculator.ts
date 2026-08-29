@@ -127,6 +127,15 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
   flows.push({ t: Date.now(), amount: currentValue });
 
   const t0 = flows[0]!.t;
+  const tEnd = flows[flows.length - 1]!.t;
+  const totalDays = (tEnd - t0) / (24 * 60 * 60 * 1000);
+
+  // 持仓不足 7 天：年化收益率无实际参考意义，返回 0
+  if (totalDays < 7) return 0;
+
+  // 必须有负现金流（投入），否则方程无解
+  if (!flows.some((f) => f.amount < 0)) return 0;
+
   const years = flows.map((f) => (f.t - t0) / (365.25 * 24 * 60 * 60 * 1000));
 
   const npv = (r: number): number => {
