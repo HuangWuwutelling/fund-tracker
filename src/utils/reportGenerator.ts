@@ -1,7 +1,7 @@
 import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform } from '../types';
-import { calcShares, calcCost, calcMarketValue } from './calculator';
+import { calcShares } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
-import { countTradingDays } from './navLookup';
+import { countTradingDays, lookupNavForDate } from './navLookup';
 import dayjs from 'dayjs';
 
 export interface FundPerformance {
@@ -49,54 +49,59 @@ function getMonthRange(year: number, month: number): [string, string] {
   return [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')];
 }
 
-function findNearestSnapshot(snapshots: DailySnapshot[], date: string): DailySnapshot | undefined {
-  const sorted = [...snapshots]
-    .filter((s) => s.date <= date)
-    .sort((a, b) => b.date.localeCompare(a.date));
-  return sorted[0];
+/**
+ * 计算某日期的总持仓市值（基于交易 + 历史净值查询）
+ * 替代 snapshot.totalValue：解决"没有期初快照时 startValue=0，把本金算成收益"的 bug
+ */
+function calcPortfolioValueAtDate(
+  date: string,
+  funds: Fund[],
+  transactions: Transaction[]
+): number {
+  let total = 0;
+  for (const fund of funds) {
+    const txs = transactions.filter((t) => t.fundId === fund.id && t.date <= date);
+    const shares = calcShares(txs);
+    if (shares <= 0) continue;
+    const nav = lookupNavForDate(fund.id, date);
+    if (nav) total += shares * nav.nav;
+  }
+  return total;
 }
 
 function calcFundPerformanceInRange(
   fund: Fund,
   transactions: Transaction[],
-  snapshots: DailySnapshot[],
   startDate: string,
   endDate: string
 ): FundPerformance {
-  const txBeforeEnd = transactions.filter((t) => t.fundId === fund.id && t.date <= endDate);
   const txBeforeStart = transactions.filter((t) => t.fundId === fund.id && t.date < startDate);
+  const txBeforeEnd = transactions.filter((t) => t.fundId === fund.id && t.date <= endDate);
 
   const sharesStart = calcShares(txBeforeStart);
-
   const sharesEnd = calcShares(txBeforeEnd);
-  const costEnd = calcCost(txBeforeEnd);
 
-  // Use fund's current nav as approximation if no snapshot available
-  const startSnapshot = findNearestSnapshot(snapshots, startDate);
-  const endSnapshot = findNearestSnapshot(snapshots, endDate);
+  const navStart = lookupNavForDate(fund.id, startDate);
+  const navEnd = lookupNavForDate(fund.id, endDate);
 
-  // Simplified: use transaction data to estimate return
-  const buyInRange = transactions
-    .filter((t) => t.fundId === fund.id && t.type === 'buy' && t.date >= startDate && t.date <= endDate)
-    .reduce((sum, t) => sum + t.amount + t.fee, 0);
-  const sellInRange = transactions
-    .filter((t) => t.fundId === fund.id && t.type === 'sell' && t.date >= startDate && t.date <= endDate)
-    .reduce((sum, t) => sum + t.amount - t.fee, 0);
-
-  // If we have snapshots, use them
-  if (startSnapshot && endSnapshot) {
-    const valueStart = sharesStart * fund.currentNav; // approximation
-    const valueEnd = sharesEnd * fund.currentNav;
-    const returnAmount = valueEnd - valueStart + sellInRange - buyInRange;
-    const returnRate = valueStart > 0 ? (returnAmount / valueStart) * 100 : 0;
-    return { fundId: fund.id, fundName: fund.name, returnAmount, returnRate };
+  // 拿不到期初或期末净值，无法计算区间收益
+  if (!navStart || !navEnd) {
+    return { fundId: fund.id, fundName: fund.name, returnAmount: 0, returnRate: 0 };
   }
 
-  // Fallback: use cost-based calculation
-  const valueEnd = calcMarketValue(sharesEnd, fund.currentNav);
-  const returnAmount = valueEnd - costEnd + sellInRange - buyInRange;
-  const returnRate = costEnd > 0 ? (returnAmount / costEnd) * 100 : 0;
+  const valueStart = sharesStart * navStart.nav;
+  const valueEnd = sharesEnd * navEnd.nav;
 
+  // fee 内扣：用户的总付出/总收入就是 tx.amount（不再额外加/减 fee，否则重复计算）
+  const buyInRange = transactions
+    .filter((t) => t.fundId === fund.id && t.type === 'buy' && t.date >= startDate && t.date <= endDate)
+    .reduce((sum, t) => sum + t.amount, 0);
+  const sellInRange = transactions
+    .filter((t) => t.fundId === fund.id && t.type === 'sell' && t.date >= startDate && t.date <= endDate)
+    .reduce((sum, t) => sum + (t.amount - t.fee), 0);
+
+  const returnAmount = valueEnd - valueStart - buyInRange + sellInRange;
+  const returnRate = valueStart > 0 ? (returnAmount / valueStart) * 100 : 0;
   return { fundId: fund.id, fundName: fund.name, returnAmount, returnRate };
 }
 
@@ -105,15 +110,15 @@ export function generateWeeklyReport(
   funds: Fund[],
   transactions: Transaction[],
   dcaPlans: DcaPlan[],
-  snapshots: DailySnapshot[]
+  _snapshots: DailySnapshot[]
 ): WeeklyReport {
   const [weekStart, weekEnd] = getWeekRange(date);
 
-  const startSnap = findNearestSnapshot(snapshots, weekStart);
-  const endSnap = findNearestSnapshot(snapshots, weekEnd);
-
-  const startValue = startSnap?.totalValue ?? 0;
-  const endValue = endSnap?.totalValue ?? 0;
+  // 用"期初持仓×期初净值"和"期末持仓×期末净值"算总市值——比 snapshot 更可靠：
+  //   1) 没有期初快照时 startValue 不会是 0（不再把本金算成收益）
+  //   2) 净值用真实历史数据，能正确反映期内涨跌
+  const startValue = calcPortfolioValueAtDate(weekStart, funds, transactions);
+  const endValue = calcPortfolioValueAtDate(weekEnd, funds, transactions);
 
   const weekTxs = transactions.filter((t) => t.date >= weekStart && t.date <= weekEnd);
   const buyCount = weekTxs.filter((t) => t.type === 'buy').length;
@@ -125,13 +130,13 @@ export function generateWeeklyReport(
     .reduce((sum, t) => sum + t.amount, 0);
   const sellTotal = weekTxs
     .filter((t) => t.type === 'sell')
-    .reduce((sum, t) => sum + t.amount, 0);
+    .reduce((sum, t) => sum + (t.amount - t.fee), 0);
 
-  const totalReturn = endValue - startValue + sellTotal - buyTotal;
+  const totalReturn = endValue - startValue - buyTotal + sellTotal;
   const returnRate = startValue > 0 ? (totalReturn / startValue) * 100 : 0;
 
   const fundRankings = funds
-    .map((f) => calcFundPerformanceInRange(f, transactions, snapshots, weekStart, weekEnd))
+    .map((f) => calcFundPerformanceInRange(f, transactions, weekStart, weekEnd))
     .sort((a, b) => b.returnRate - a.returnRate);
 
   // DCA: count expected vs actual for active plans
@@ -196,11 +201,9 @@ export function generateMonthlyReport(
     .filter((s) => s.date >= monthStart && s.date <= monthEnd)
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  const startSnap = findNearestSnapshot(snapshots, monthStart);
-  const endSnap = findNearestSnapshot(snapshots, monthEnd);
-
-  const startValue = startSnap?.totalValue ?? 0;
-  const endValue = endSnap?.totalValue ?? 0;
+  // 用"期初持仓×期初净值"和"期末持仓×期末净值"算总市值
+  const startValue = calcPortfolioValueAtDate(monthStart, funds, transactions);
+  const endValue = calcPortfolioValueAtDate(monthEnd, funds, transactions);
 
   const monthTxs = transactions.filter((t) => t.date >= monthStart && t.date <= monthEnd);
   const buyTotal = monthTxs
@@ -208,16 +211,16 @@ export function generateMonthlyReport(
     .reduce((sum, t) => sum + t.amount, 0);
   const sellTotal = monthTxs
     .filter((t) => t.type === 'sell')
-    .reduce((sum, t) => sum + t.amount, 0);
+    .reduce((sum, t) => sum + (t.amount - t.fee), 0);
 
-  const totalReturn = endValue - startValue + sellTotal - buyTotal;
+  const totalReturn = endValue - startValue - buyTotal + sellTotal;
   const returnRate = startValue > 0 ? (totalReturn / startValue) * 100 : 0;
 
   // Per-platform contribution
   const platformContributions = platforms.map((p) => {
     const platformFunds = funds.filter((f) => f.platformId === p.id);
     const returnAmount = platformFunds.reduce((sum, f) => {
-      const perf = calcFundPerformanceInRange(f, transactions, snapshots, monthStart, monthEnd);
+      const perf = calcFundPerformanceInRange(f, transactions, monthStart, monthEnd);
       return sum + perf.returnAmount;
     }, 0);
     return { name: p.name, returnAmount };
@@ -228,7 +231,7 @@ export function generateMonthlyReport(
   const typeContributions = types.map((type) => {
     const typeFunds = funds.filter((f) => f.type === type);
     const returnAmount = typeFunds.reduce((sum, f) => {
-      const perf = calcFundPerformanceInRange(f, transactions, snapshots, monthStart, monthEnd);
+      const perf = calcFundPerformanceInRange(f, transactions, monthStart, monthEnd);
       return sum + perf.returnAmount;
     }, 0);
     return { type: FUND_TYPE_LABELS[type], returnAmount };
@@ -236,7 +239,7 @@ export function generateMonthlyReport(
 
   // Fund rankings
   const rankings = funds
-    .map((f) => calcFundPerformanceInRange(f, transactions, snapshots, monthStart, monthEnd))
+    .map((f) => calcFundPerformanceInRange(f, transactions, monthStart, monthEnd))
     .sort((a, b) => b.returnRate - a.returnRate);
 
   const bestFund = rankings[0] ?? null;
