@@ -17,9 +17,9 @@ const DAY_OF_WEEK_LABELS = ['周日', '周一', '周二', '周三', '周四', '�
  * - 必须在 plan.startDate 之后
  * - 交易日期必须落在该计划"预期执行日"的合理窗口内
  *   - daily: 任意交易日
- *   - weekly: weekday 偏差 ≤ 3 天（容忍周末顺延）
+ *   - weekly: weekday 偏差 ≤ 1 天（容忍"周一忘了周二补"，拒绝"周三手动买入"被误算）
  *   - biweekly: 同 weekly + 与 startDate 所在周奇偶相同
- *   - monthly: 与当月目标日偏差 ≤ 5 天
+ *   - monthly: 与当月目标日偏差 ≤ 3 天（容忍节假日顺延到下周一）
  */
 function isInPlanWindow(plan: DcaPlan, txDate: string): boolean {
   const tx = dayjs(txDate);
@@ -30,7 +30,8 @@ function isInPlanWindow(plan: DcaPlan, txDate: string): boolean {
 
   if (plan.frequency === 'weekly' || plan.frequency === 'biweekly') {
     if (plan.dayOfWeek === undefined) return false;
-    if (Math.abs(tx.day() - plan.dayOfWeek) > 3) return false;
+    // weekday 偏差 ≤ 1 天：容忍"周一忘了周二补"，但拒绝"周三手动买入"被误算
+    if (Math.abs(tx.day() - plan.dayOfWeek) > 1) return false;
     if (plan.frequency === 'biweekly') {
       // tx 所在周与 startDate 所在周的奇偶性需一致
       const txWeekStart = tx.startOf('week');
@@ -46,7 +47,8 @@ function isInPlanWindow(plan: DcaPlan, txDate: string): boolean {
     const txDay = tx.date();
     const daysInMonth = tx.daysInMonth();
     const actualTargetDay = Math.min(plan.dayOfMonth, daysInMonth);
-    return Math.abs(txDay - actualTargetDay) <= 5;
+    // 偏差 ≤ 3 天：容忍节假日顺延到下周一
+    return Math.abs(txDay - actualTargetDay) <= 3;
   }
 
   return false;
