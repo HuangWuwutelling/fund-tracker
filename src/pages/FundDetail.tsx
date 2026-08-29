@@ -89,15 +89,17 @@ export default function FundDetail() {
         message.error('无法保存：未找到该日期的成交净值，请检查历史净值或切换为待确认');
         return;
       }
+      // 分红：表单"获得份额"字段实际存的是现金金额(元)，挪到 amount 字段，shares=0
+      const dividendCash = txType === 'dividend' ? ((values.shares as number) ?? 0) : 0;
       const shares = txType === 'dividend'
-        ? (values.shares as number) ?? 0
+        ? 0
         : pending ? 0 : calcSharesFromAmount(amount, fee, nav);
 
       const txData: Partial<Transaction> = {
         type: txType,
         date: (values.date as dayjs.Dayjs).format('YYYY-MM-DD'),
-        amount,
-        fee,
+        amount: txType === 'dividend' ? dividendCash : amount,
+        fee: txType === 'dividend' ? 0 : fee,
         shares: Math.round(shares * 10000) / 10000,
         nav,
         note: values.note as string | undefined,

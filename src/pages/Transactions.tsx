@@ -57,6 +57,9 @@ export default function Transactions() {
         return;
       }
 
+      // 分红：表单"获得份额"字段实际存的是现金金额(元)，挪到 amount 字段，shares=0
+      // 这样 calcDividendTotal / calcShares / calcCost 都能正确处理
+      const dividendCash = txType === 'dividend' ? ((values.shares as number) ?? 0) : 0;
       const shares = txType === 'dividend'
         ? 0
         : pending ? 0 : calcSharesFromAmount(amount, fee, nav ?? 0);
@@ -66,8 +69,8 @@ export default function Transactions() {
         fundId: values.fundId as string,
         type: txType,
         date: (values.date as dayjs.Dayjs).format('YYYY-MM-DD'),
-        amount,
-        fee,
+        amount: txType === 'dividend' ? dividendCash : amount,
+        fee: txType === 'dividend' ? 0 : fee,
         shares: Math.round(shares * 10000) / 10000,
         nav: pending ? 0 : (nav ?? 0),
         note: values.note as string | undefined,

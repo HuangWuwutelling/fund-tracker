@@ -5,9 +5,10 @@ export function onlyConfirmed(transactions: Transaction[]): Transaction[] {
   return transactions.filter((t) => t.status !== 'pending');
 }
 
-/** 计算某只基金的持有份额 */
+/** 计算某只基金的持有份额（按日期排序，加法交换律保证结果正确） */
 export function calcShares(transactions: Transaction[]): number {
-  return transactions.reduce((sum, tx) => {
+  const sorted = [...transactions].sort((a, b) => a.date.localeCompare(b.date));
+  return sorted.reduce((sum, tx) => {
     switch (tx.type) {
       case 'buy':
         return sum + tx.shares;
@@ -24,23 +25,28 @@ export function calcShares(transactions: Transaction[]): number {
 /** 计算某只基金的持仓成本（卖出时按成本比例扣减）
  *  约定：fee 内扣——用户总付出 = tx.amount，其中 tx.fee 从中扣减用于支付手续费，
  *  净买入 = (amount - fee) / nav。所以 cost 直接累加 amount。
+ *  按日期排序处理，确保卖出不会超过当前持有份额。
  */
 export function calcCost(transactions: Transaction[]): number {
   let totalCost = 0;
   let totalShares = 0;
 
-  for (const tx of transactions) {
+  // 按日期排序，确保时序正确（用户可能先录入后面的交易再补前面的）
+  const sorted = [...transactions].sort((a, b) => a.date.localeCompare(b.date));
+
+  for (const tx of sorted) {
     switch (tx.type) {
       case 'buy':
         totalCost += tx.amount;
         totalShares += tx.shares;
         break;
       case 'sell': {
-        // 按平均成本比例扣减
+        // 按平均成本比例扣减，卖出不超过实际持有
         if (totalShares > 0) {
+          const actualSell = Math.min(tx.shares, totalShares);
           const avgCost = totalCost / totalShares;
-          totalCost -= avgCost * tx.shares;
-          totalShares -= tx.shares;
+          totalCost -= avgCost * actualSell;
+          totalShares -= actualSell;
         }
         break;
       }
