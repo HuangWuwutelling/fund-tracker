@@ -41,7 +41,3 @@ npm run preview    # 预览构建产物
 push 到 `main` 分支触发 `.github/workflows/deploy.yml`：先 build，再把 `dist/` 部署到 GitHub Pages。Vite 已配置 `base: '/fund-tracker/'`，与仓库名一致。
 
 数据完全在浏览器本地，不上传到任何服务器。备份靠手动导出 JSON。
-
-## 设计文档
-
-完整规格说明、数据模型、计算公式：[`docs/superpowers/specs/2026-08-27-fund-tracker-design.md`](./docs/superpowers/specs/2026-08-27-fund-tracker-design.md)
