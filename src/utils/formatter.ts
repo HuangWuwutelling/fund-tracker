@@ -1,6 +1,8 @@
 /** 格式化金额，带千分位（负数自带 - 号） */
 export function formatMoney(value: number, decimals = 2): string {
-  return value.toLocaleString('zh-CN', {
+  // 把 -0 归一化为 +0，避免出现 "-0.00"（如 0 × -1 = -0，或 0 - 0 = -0）
+  const normalized = value === 0 ? 0 : value;
+  return normalized.toLocaleString('zh-CN', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });

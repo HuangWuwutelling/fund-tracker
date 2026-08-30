@@ -9,6 +9,7 @@ import { calcSharesFromAmount, calcShares, onlyConfirmed } from '../utils/calcul
 import { formatMoney, formatDate } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
 import InitialPositionModal from '../components/InitialPositionModal';
+import NavLink from '../components/NavLink';
 import { TRANSACTION_TYPE_LABELS } from '../types';
 import type { Transaction } from '../types';
 
@@ -153,10 +154,13 @@ export default function Transactions() {
     // 推断分红方式：amount > 0 → 现金分红；shares > 0 → 红利再投资
     const dividendType: 'cash' | 'reinvest' | undefined =
       tx.type === 'dividend' ? (tx.amount > 0 ? 'cash' : 'reinvest') : undefined;
+    // 同步 pending 表单字段，否则编辑 pending 交易时 checkbox 默认未勾选，
+    // 会触发 nav 缺失校验导致无法保存（T+1 净值未发布的 pending 交易 nav=0）
     form.setFieldsValue({
       ...tx,
       date: dayjs(tx.date),
       dividendType,
+      pending: tx.status === 'pending',
     });
     setPreview({ shares: tx.shares, nav: tx.nav, navDate: tx.date });
     setModalOpen(true);
@@ -231,7 +235,7 @@ export default function Transactions() {
       key: 'fund',
       render: (id: string) => {
         const name = funds.find((f) => f.id === id)?.name ?? id;
-        return <a onClick={() => navigate(`/funds/${id}`)}>{name}</a>;
+        return <NavLink onClick={() => navigate(`/funds/${id}`)}>{name}</NavLink>;
       },
     },
     {
@@ -252,8 +256,8 @@ export default function Transactions() {
       render: (v: string | undefined) =>
         v === 'pending' ? <Tag color="orange">待确认</Tag> : <Tag>已确认</Tag>,
     },
-    { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
-    { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
+    { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => formatMoney(v) },
+    { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => formatMoney(v) },
     { title: '份额', dataIndex: 'shares', key: 'shares', align: 'right' as const, render: (v: number) => v.toFixed(4) },
     { title: '净值', dataIndex: 'nav', key: 'nav', align: 'right' as const, render: (v: number) => v.toFixed(4) },
     { title: '备注', dataIndex: 'note', key: 'note', render: (v: string) => v || '—' },

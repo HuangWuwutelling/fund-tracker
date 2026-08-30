@@ -4,9 +4,9 @@ import { PlusOutlined, SearchOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../stores';
 import { fetchFundWithHistory, loadFundSearchList, searchFunds, getFundTypeFromSearch } from '../api/fundApi';
-import { getNavHistory } from '../utils/storage';
 import { formatDate } from '../utils/formatter';
 import InitialPositionModal from '../components/InitialPositionModal';
+import NavLink from '../components/NavLink';
 import { FUND_TYPE_LABELS } from '../types';
 import type { Fund } from '../types';
 import type { FundSearchItem } from '../api/fundApi';
@@ -14,7 +14,7 @@ import type { FundSearchItem } from '../api/fundApi';
 const { Text } = Typography;
 
 export default function FundList() {
-  const { funds, platforms, addFund, removeFund, updateNavHistory, updateFund } = useStore();
+  const { funds, platforms, addFund, removeFund, updateNavHistory, updateFund, getNavHistory } = useStore();
   const navigate = useNavigate();
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
@@ -99,8 +99,25 @@ export default function FundList() {
       }
 
       setLoading(true);
-      const result = await fetchFundWithHistory(code);
-      const estimate = result?.estimate;
+      let result: Awaited<ReturnType<typeof fetchFundWithHistory>>;
+      try {
+        result = await fetchFundWithHistory(code);
+      } catch (err) {
+        console.error('[FundList] fetchFundWithHistory failed', err);
+        message.error('获取基金数据失败，请检查网络或基金代码');
+        setLoading(false);
+        return;
+      }
+
+      // API 返回 null 通常表示代码无效或暂时无法访问——拒绝添加，
+      // 避免后续所有"净值缺失"症状都被静默累积（持仓、市值、当日盈亏全为空）
+      if (!result) {
+        message.error('未找到该基金，请确认代码后重试');
+        setLoading(false);
+        return;
+      }
+
+      const estimate = result.estimate;
       const fund: Fund = {
         id: code,
         name: estimate?.name ?? values.name,
@@ -112,12 +129,12 @@ export default function FundList() {
 
       addFund(fund);
 
-      const records = result?.navHistory ?? [];
+      const records = result.navHistory ?? [];
       if (records.length > 0) {
         updateNavHistory(code, records);
         message.success(`添加成功，已加载 ${records.length} 条历史净值`);
       } else {
-        message.success('添加成功（暂无历史净值数据）');
+        message.warning('添加成功，但暂无历史净值数据，建议稍后刷新');
       }
 
       // 询问是否设置初始持仓
@@ -142,7 +159,7 @@ export default function FundList() {
       width: 220,
       sorter: (a: Fund, b: Fund) => a.name.localeCompare(b.name, 'zh-CN'),
       render: (name: string, record: Fund) => (
-        <a onClick={() => navigate(`/funds/${record.id}`)}>{name}</a>
+        <NavLink onClick={() => navigate(`/funds/${record.id}`)}>{name}</NavLink>
       ),
     },
     {

@@ -87,13 +87,16 @@ export function generateDailyReturns(
   const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
   if (sorted.length === 0) return [];
 
+  // 一次性过滤 confirmed，避免每个循环迭代重复 filter
+  const confirmed = onlyConfirmed(transactions);
+
   const result: DailyReturn[] = [];
   for (let i = 0; i < sorted.length; i++) {
     const currDate = sorted[i]!.date;
     const prevDate = i > 0 ? sorted[i - 1]!.date : null;
 
     // 当天内所有 confirmed buy/sell 净额（用来排除本金影响）
-    const netFlow = onlyConfirmed(transactions)
+    const netFlow = confirmed
       .filter((t) => t.date === currDate)
       .reduce((sum, t) => {
         if (t.type === 'buy') return sum + t.amount;
@@ -104,8 +107,8 @@ export function generateDailyReturns(
     // 总收益：curr 当天末持仓市值（含今天的买入）− prev 当天末持仓市值 − 当天净投入
     // 没有"昨天"的第一个日期：无法计算收益（避免把首日买入金额当成负收益）
     const totalReturn = prevDate
-      ? calcPortfolioValueAtDate(currDate, funds, transactions) -
-        calcPortfolioValueAtDate(prevDate, funds, transactions) -
+      ? calcPortfolioValueAtDate(currDate, funds, confirmed) -
+        calcPortfolioValueAtDate(prevDate, funds, confirmed) -
         netFlow
       : 0;
 
@@ -114,9 +117,9 @@ export function generateDailyReturns(
     const perFund = prevDate
       ? funds
           .map((fund) => {
-            const prevValue = calcPortfolioValueAtDate(prevDate, [fund], transactions);
-            const currValue = calcPortfolioValueAtDate(currDate, [fund], transactions);
-            const fundFlow = onlyConfirmed(transactions)
+            const prevValue = calcPortfolioValueAtDate(prevDate, [fund], confirmed);
+            const currValue = calcPortfolioValueAtDate(currDate, [fund], confirmed);
+            const fundFlow = confirmed
               .filter((t) => t.fundId === fund.id && t.date === currDate)
               .reduce((sum, t) => {
                 if (t.type === 'buy') return sum + t.amount;
@@ -129,7 +132,7 @@ export function generateDailyReturns(
               returnAmount: currValue - prevValue - fundFlow,
             };
           })
-          .filter((f) => Math.abs(f.returnAmount) > 0.01 || onlyConfirmed(transactions).some((t) => t.fundId === f.fundId && t.date === currDate))
+          .filter((f) => Math.abs(f.returnAmount) > 0.01 || confirmed.some((t) => t.fundId === f.fundId && t.date === currDate))
       : [];
 
     result.push({ date: currDate, totalReturn, perFund });
@@ -140,7 +143,7 @@ export function generateDailyReturns(
 /**
  * 计算某日期的总持仓市值（基于交易 + 历史净值查询）
  * 替代 snapshot.totalValue：解决"没有期初快照时 startValue=0，把本金算成收益"的 bug
- * 只看已确认交易——pending 买入尚未成交，不应计入持仓市值
+ * 调用方传入已 confirmed 过滤的数组，避免每次循环重新 filter
  */
 function calcPortfolioValueAtDate(
   date: string,
@@ -149,7 +152,7 @@ function calcPortfolioValueAtDate(
 ): number {
   let total = 0;
   for (const fund of funds) {
-    const txs = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id && t.date <= date);
+    const txs = transactions.filter((t) => t.fundId === fund.id && t.date <= date);
     const shares = calcShares(txs);
     if (shares <= 0) continue;
     const nav = lookupNavForDate(fund.id, date);
@@ -351,13 +354,19 @@ export function generateMonthlyReport(
   const totalReturn = endValue - startValue - buyTotal + sellTotal;
   const returnRate = startValue > 0 ? (totalReturn / startValue) * 100 : 0;
 
+  // 每只基金算一次，Map 缓存供下面三处复用
+  const perfByFund = new Map<string, FundPerformance>();
+  for (const f of funds) {
+    perfByFund.set(f.id, calcFundPerformanceInRange(f, transactions, monthStart, monthEnd));
+  }
+
   // Per-platform contribution
   const platformContributions = platforms.map((p) => {
     const platformFunds = funds.filter((f) => f.platformId === p.id);
-    const returnAmount = platformFunds.reduce((sum, f) => {
-      const perf = calcFundPerformanceInRange(f, transactions, monthStart, monthEnd);
-      return sum + perf.returnAmount;
-    }, 0);
+    const returnAmount = platformFunds.reduce(
+      (sum, f) => sum + (perfByFund.get(f.id)?.returnAmount ?? 0),
+      0
+    );
     return { name: p.name, returnAmount };
   });
 
@@ -365,17 +374,15 @@ export function generateMonthlyReport(
   const types: Fund['type'][] = ['index', 'bond', 'qdii', 'mixed'];
   const typeContributions = types.map((type) => {
     const typeFunds = funds.filter((f) => f.type === type);
-    const returnAmount = typeFunds.reduce((sum, f) => {
-      const perf = calcFundPerformanceInRange(f, transactions, monthStart, monthEnd);
-      return sum + perf.returnAmount;
-    }, 0);
+    const returnAmount = typeFunds.reduce(
+      (sum, f) => sum + (perfByFund.get(f.id)?.returnAmount ?? 0),
+      0
+    );
     return { type: FUND_TYPE_LABELS[type], returnAmount };
   });
 
   // Fund rankings
-  const fundRankings = funds
-    .map((f) => calcFundPerformanceInRange(f, transactions, monthStart, monthEnd))
-    .sort((a, b) => b.returnRate - a.returnRate);
+  const fundRankings = Array.from(perfByFund.values()).sort((a, b) => b.returnRate - a.returnRate);
 
   const bestFund = fundRankings[0] ?? null;
   const worstFund = fundRankings[fundRankings.length - 1] ?? null;

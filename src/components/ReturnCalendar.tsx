@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import type { DailyReturn } from '../utils/reportGenerator';
 import { formatMoney, pnlColor } from '../utils/formatter';
+import NavLink from './NavLink';
 
 interface Props {
   /** 按日期升序的每日收益列表 */
@@ -32,7 +33,14 @@ export default function ReturnCalendar({ dailyReturns }: Props) {
   });
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
-  const { cells, maxAbsReturn } = useMemo(() => {
+  // 全局最大绝对收益：仅依赖 dailyReturns，月切换时无需重算
+  const maxAbsReturn = useMemo(
+    () => dailyReturns.reduce((m, d) => Math.max(m, Math.abs(d.totalReturn)), 0),
+    [dailyReturns]
+  );
+
+  // 当月格子：依赖 dailyReturns + viewMonth
+  const cells = useMemo(() => {
     const map = new Map<string, DailyReturn>();
     for (const d of dailyReturns) map.set(d.date, d);
 
@@ -57,8 +65,7 @@ export default function ReturnCalendar({ dailyReturns }: Props) {
       });
     }
 
-    const maxAbsReturn = dailyReturns.reduce((m, d) => Math.max(m, Math.abs(d.totalReturn)), 0);
-    return { cells, maxAbsReturn };
+    return cells;
   }, [dailyReturns, viewMonth]);
 
   const selected = selectedDate ? dailyReturns.find((d) => d.date === selectedDate) ?? null : null;
@@ -205,7 +212,7 @@ export default function ReturnCalendar({ dailyReturns }: Props) {
                 dataIndex: 'fundName',
                 key: 'fundName',
                 render: (name: string, r: { fundId: string }) => (
-                  <a onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</a>
+                  <NavLink onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</NavLink>
                 ),
               },
               {

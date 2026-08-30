@@ -44,9 +44,16 @@ export default function Dashboard() {
     return { totalValue, totalCost, totalReturn, totalReturnRate, totalDailyPnl };
   }, [summaries]);
 
-  const totalDividend = calcDividendTotal(transactions);
-  const totalXIRR = calcXIRR(transactions, totals.totalValue);
-  const todayInvested = calcTodayInvested(transactions, dcaPlans);
+  // XIRR / dividend / todayInvested 都是 O(transactions) 的重计算，用 useMemo 包裹避免每次渲染都跑
+  const totalDividend = useMemo(() => calcDividendTotal(transactions), [transactions]);
+  const totalXIRR = useMemo(
+    () => calcXIRR(transactions, totals.totalValue),
+    [transactions, totals.totalValue]
+  );
+  const todayInvested = useMemo(
+    () => calcTodayInvested(transactions, dcaPlans),
+    [transactions, dcaPlans]
+  );
 
   const dailyReturns = useMemo(
     () => generateDailyReturns(funds, transactions, snapshots),
@@ -150,7 +157,7 @@ export default function Dashboard() {
       width: 130,
       align: 'right' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.cost - b.cost,
-      render: (v: number) => `${formatMoney(v)}`,
+      render: (v: number) => formatMoney(v),
     },
     {
       title: '当前市值',
@@ -160,7 +167,7 @@ export default function Dashboard() {
       align: 'right' as const,
       defaultSortOrder: 'descend' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.marketValue - b.marketValue,
-      render: (v: number) => `${formatMoney(v)}`,
+      render: (v: number) => formatMoney(v),
     },
     {
       title: '持仓收益',
@@ -244,7 +251,7 @@ export default function Dashboard() {
         <Col xs={12} sm={6}>
           <Card>
             <Statistic
-              title={`当日盈亏（${today()})`}
+              title={`当日盈亏（${today()}）`}
               value={totals.totalDailyPnl ?? '—'}
               precision={2}
               valueStyle={{ color: totals.totalDailyPnl !== null ? pnlColor(totals.totalDailyPnl) : undefined }}

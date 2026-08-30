@@ -6,6 +6,7 @@ import { useStore } from '../stores';
 import { generateWeeklyReport, generateMonthlyReport } from '../utils/reportGenerator';
 import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
 import { FREQUENCY_LABELS } from '../types';
+import NavLink from '../components/NavLink';
 import type { DcaPlanExecution } from '../utils/reportGenerator';
 
 const rankingColumns = (navigate: (path: string) => void) => [
@@ -16,7 +17,7 @@ const rankingColumns = (navigate: (path: string) => void) => [
     key: 'fundName',
     sorter: (a: { fundName: string }, b: { fundName: string }) => a.fundName.localeCompare(b.fundName, 'zh-CN'),
     render: (name: string, r: { fundId: string }) => (
-      <a onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</a>
+      <NavLink onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</NavLink>
     ),
   },
   {
@@ -25,7 +26,7 @@ const rankingColumns = (navigate: (path: string) => void) => [
     key: 'returnAmount',
     align: 'right' as const,
     sorter: (a: { returnAmount: number }, b: { returnAmount: number }) => a.returnAmount - b.returnAmount,
-    render: (v: number) => `${formatMoney(v)}`,
+    render: (v: number) => formatMoney(v),
   },
   {
     title: '收益率',
@@ -96,7 +97,7 @@ function WeeklyReportView() {
               dataIndex: 'fundName',
               key: 'fundName',
               render: (name: string, r: DcaPlanExecution) => (
-                <a onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</a>
+                <NavLink onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</NavLink>
               ),
             },
             {
@@ -191,16 +192,16 @@ function MonthlyReportView() {
             <Descriptions column={1} size="small">
               <Descriptions.Item label="最佳基金">
                 {report.bestFund ? (
-                  <a onClick={() => navigate(`/funds/${report.bestFund!.fundId}`)}>
+                  <NavLink onClick={() => navigate(`/funds/${report.bestFund!.fundId}`)}>
                     {report.bestFund.fundName} ({formatPercent(report.bestFund.returnRate)})
-                  </a>
+                  </NavLink>
                 ) : '—'}
               </Descriptions.Item>
               <Descriptions.Item label="最差基金">
                 {report.worstFund ? (
-                  <a onClick={() => navigate(`/funds/${report.worstFund!.fundId}`)}>
+                  <NavLink onClick={() => navigate(`/funds/${report.worstFund!.fundId}`)}>
                     {report.worstFund.fundName} ({formatPercent(report.worstFund.returnRate)})
-                  </a>
+                  </NavLink>
                 ) : '—'}
               </Descriptions.Item>
             </Descriptions>

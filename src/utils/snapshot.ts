@@ -7,8 +7,11 @@ export function generateSnapshot(funds: Fund[], transactions: Transaction[]): Da
   let totalValue = 0;
   let totalCost = 0;
 
+  // 一次性过滤 confirmed，避免每只基金都重跑一遍 filter
+  const confirmed = onlyConfirmed(transactions);
+
   for (const fund of funds) {
-    const fundTxs = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
+    const fundTxs = confirmed.filter((t) => t.fundId === fund.id);
     const shares = calcShares(fundTxs);
     const cost = calcCost(fundTxs);
     const marketValue = calcMarketValue(shares, fund.currentNav);

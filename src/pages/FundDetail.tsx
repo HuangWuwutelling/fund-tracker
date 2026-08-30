@@ -221,10 +221,13 @@ export default function FundDetail() {
     // 推断分红方式：amount > 0 → 现金分红；shares > 0 → 红利再投资
     const dividendType: 'cash' | 'reinvest' | undefined =
       tx.type === 'dividend' ? (tx.amount > 0 ? 'cash' : 'reinvest') : undefined;
+    // 同步 pending 表单字段，否则编辑 pending 交易时 checkbox 默认未勾选，
+    // 会触发 nav 缺失校验导致无法保存（T+1 净值未发布的 pending 交易 nav=0）
     txForm.setFieldsValue({
       ...tx,
       date: dayjs(tx.date),
       dividendType,
+      pending: tx.status === 'pending',
     });
     // 编辑时同步预览该笔交易的净值
     const dateStr = tx.date;
@@ -311,8 +314,8 @@ export default function FundDetail() {
       render: (v: string | undefined) =>
         v === 'pending' ? <Tag color="orange">待确认</Tag> : <Tag>已确认</Tag>,
     },
-    { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
-    { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => `${formatMoney(v)}` },
+    { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => formatMoney(v) },
+    { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => formatMoney(v) },
     { title: '份额', dataIndex: 'shares', key: 'shares', align: 'right' as const, render: (v: number) => v.toFixed(4) },
     { title: '净值', dataIndex: 'nav', key: 'nav', align: 'right' as const, render: (v: number) => v.toFixed(4) },
     { title: '备注', dataIndex: 'note', key: 'note', render: (v: string) => v || '—' },

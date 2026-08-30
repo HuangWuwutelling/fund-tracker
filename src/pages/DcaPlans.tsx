@@ -8,6 +8,7 @@ import { useStore } from '../stores';
 import { formatMoney } from '../utils/formatter';
 import { isInPlanWindow } from '../utils/calculator';
 import { FREQUENCY_LABELS } from '../types';
+import NavLink from '../components/NavLink';
 import type { DcaPlan } from '../types';
 
 const DAY_OF_WEEK_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -151,7 +152,7 @@ export default function DcaPlans() {
       key: 'amount',
       align: 'right' as const,
       sorter: (a: DcaPlan, b: DcaPlan) => a.amount - b.amount,
-      render: (v: number) => `${formatMoney(v)}`,
+      render: (v: number) => formatMoney(v),
     },
     {
       title: '频率',
@@ -242,7 +243,7 @@ export default function DcaPlans() {
                 sorter: (a: typeof stats.perFund[0], b: typeof stats.perFund[0]) =>
                   a.fundName.localeCompare(b.fundName, 'zh-CN'),
                 render: (name: string, r: typeof stats.perFund[0]) => (
-                  <a onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</a>
+                  <NavLink onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</NavLink>
                 ),
               },
               {

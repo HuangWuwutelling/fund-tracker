@@ -133,7 +133,7 @@ function loadPingzhongScript(fundCode: string): Promise<Record<string, unknown>>
         result[key] = w[key];
       }
       result['Data_netWorthTrend'] = w['Data_netWorthTrend'];
-      console.log('[fundApi] Script loaded for', fundCode, 'name:', result['fS_name']);
+      console.debug('[fundApi] Script loaded for', fundCode, 'name:', result['fS_name']);
       cleanup();
       resolve(result);
     };
