@@ -2,3 +2,5 @@ node_modules
 dist
 .DS_Store
 *.tsbuildinfo
+# Claude Code 项目说明文件，包含架构细节/已知坑/内部约定——不上传
+CLAUDE.md
