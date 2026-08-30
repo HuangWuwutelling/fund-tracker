@@ -25,7 +25,7 @@ import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 
 export default function App() {
-  const { settings, funds, transactions, loadFromStorage, updateFund, updateNavHistory, updateTransaction, addSnapshot } = useStore();
+  const { settings, funds, loadFromStorage, updateFund, updateNavHistory, updateTransaction, addSnapshot } = useStore();
 
   useEffect(() => {
     loadFromStorage();
@@ -39,9 +39,10 @@ export default function App() {
   // Auto-confirm pending transactions: any buy/sell whose date is in the past and
   // whose NAV is now available in the fund's NAV history can be confirmed automatically.
   // Today's pending tx stays pending — user confirms manually to avoid stale-NAV mistakes.
+  // 不订阅 transactions（避免 addTransaction 触发 refreshAll 无限循环）；用 useStore.getState() 读最新值
   const autoConfirmPending = useCallback(() => {
     const today = dayjs().format('YYYY-MM-DD');
-    const pendingTxs = transactions.filter((t) => t.status === 'pending');
+    const pendingTxs = useStore.getState().transactions.filter((t) => t.status === 'pending');
     if (pendingTxs.length === 0) return 0;
 
     let confirmed = 0;
@@ -65,7 +66,7 @@ export default function App() {
       confirmed++;
     }
     return confirmed;
-  }, [transactions, updateTransaction]);
+  }, [updateTransaction]);
 
   // Auto-refresh NAV + generate snapshot when funds are loaded
   const refreshAll = useCallback(async () => {
@@ -98,6 +99,7 @@ export default function App() {
 
     if (refreshGenerationRef.current !== myGen) return;
     // NAV history is now fresh — try to auto-confirm pending transactions whose NAV is available
+    // 用 useStore.getState() 读最新 transactions，避免把 transactions 加进依赖
     const confirmedCount = autoConfirmPending();
     if (refreshGenerationRef.current !== myGen) return;
     if (confirmedCount > 0) {
@@ -107,7 +109,7 @@ export default function App() {
     const updatedTxs = useStore.getState().transactions;
     const snapshot = generateSnapshot(updatedFunds, updatedTxs);
     addSnapshot(snapshot);
-  }, [funds.length, updateFund, updateNavHistory, updateTransaction, addSnapshot, autoConfirmPending, transactions]);
+  }, [funds.length, updateFund, updateNavHistory, updateTransaction, addSnapshot, autoConfirmPending]);
 
   useEffect(() => {
     if (!settings.navAutoRefresh || funds.length === 0) return;

@@ -220,13 +220,14 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   importData: (data) => {
     navHistoryCache.clear();
     storage.importAllData(data);
+    // 缺字段时 fallback 到默认值，避免整个 app 崩溃成空白页
     set({
       platforms: data.platforms,
       funds: data.funds,
       transactions: data.transactions,
       dcaPlans: data.dcaPlans,
-      snapshots: data.snapshots,
-      settings: data.settings,
+      snapshots: data.snapshots ?? [],
+      settings: data.settings ?? { theme: 'light', navAutoRefresh: true, reportFrequency: 'both' },
     });
   },
 }));

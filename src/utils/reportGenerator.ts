@@ -1,5 +1,5 @@
 import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform } from '../types';
-import { calcShares, onlyConfirmed } from './calculator';
+import { calcShares, onlyConfirmed, isInPlanWindow } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
 import { countTradingDays, lookupNavForDate } from './navLookup';
 import dayjs from 'dayjs';
@@ -279,15 +279,16 @@ export function generateWeeklyReport(
       // Count actual trading days in this week from the fund's NAV history
       expected = countTradingDays(plan.fundId, weekStart, weekEnd);
     }
-    // 实际笔数：只统计"金额与计划金额匹配（在 ±1 元内）的 buy 交易"
-    // 否则手动买入会被错误地算作定投执行
+    // 实际笔数：只统计"金额匹配 + 日期落在计划执行窗口内"的 buy 交易
+    // 否则手动买入会被错误地算作定投执行；与 DcaPlans.tsx 的统计保持一致
     const planBuyTxs = onlyConfirmed(transactions).filter(
       (t) =>
         t.fundId === plan.fundId &&
         t.type === 'buy' &&
         t.date >= weekStart &&
         t.date <= weekEnd &&
-        Math.abs(t.amount - plan.amount) < 1
+        Math.abs(t.amount - plan.amount) < 1 &&
+        isInPlanWindow(plan, t.date)
     );
     const actual = planBuyTxs.length;
 

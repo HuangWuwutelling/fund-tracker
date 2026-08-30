@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
-import { Card, Table, Button, Input, Switch, Space, message, Popconfirm, Typography } from 'antd';
-import { PlusOutlined, DownloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { Card, Table, Button, Input, Switch, Space, message, Popconfirm, Typography, Modal } from 'antd';
+import { PlusOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { useStore } from '../stores';
 import type { Platform } from '../types';
 
@@ -88,8 +88,31 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
         message.error(`无效的备份文件：${validation.error}`);
         return;
       }
-      importData(data as Parameters<typeof importData>[0]);
-      message.success('数据导入成功');
+      // 二次确认：导入会覆盖所有现有数据
+      Modal.confirm({
+        title: '确认导入数据？',
+        icon: <ExclamationCircleOutlined />,
+        content: (
+          <div>
+            <p>导入将覆盖当前所有数据：</p>
+            <ul>
+              <li>平台：{(data as { platforms?: unknown[] }).platforms?.length ?? 0} 个</li>
+              <li>基金：{(data as { funds?: unknown[] }).funds?.length ?? 0} 个</li>
+              <li>交易：{(data as { transactions?: unknown[] }).transactions?.length ?? 0} 笔</li>
+              <li>定投计划：{(data as { dcaPlans?: unknown[] }).dcaPlans?.length ?? 0} 个</li>
+              <li>快照：{(data as { snapshots?: unknown[] }).snapshots?.length ?? 0} 条</li>
+            </ul>
+            <p style={{ color: '#cf1322' }}>此操作不可撤销，建议先导出当前数据作为备份。</p>
+          </div>
+        ),
+        okText: '确认覆盖',
+        okButtonProps: { danger: true },
+        cancelText: '取消',
+        onOk: () => {
+          importData(data as Parameters<typeof importData>[0]);
+          message.success('数据导入成功');
+        },
+      });
     };
     reader.readAsText(file);
     // Reset input

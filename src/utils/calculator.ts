@@ -95,15 +95,18 @@ export function calcDailyPnl(shares: number, navHistory: NavRecord[], todayStr: 
 
 /**
  * 累计分红金额（所有 dividend 类型交易）
- * 表单约定：
- *   - 红利再投资：amount = 再投资金额(元)，shares = 获得的再投资份额
- *   - 现金分红：amount = 0（表单 required 占位），shares = 获得的现金金额(元)
- * 取 amount 和 shares 中较大的那个作为分红金额，兼容两种情况。
+ * - 现金分红：amount = 现金金额, shares = 0
+ * - 红利再投资：amount = 0, shares = 再投资份额（×nav 折算）
+ * 取 amount 优先；amount=0 时用 shares × nav
  */
 export function calcDividendTotal(transactions: Transaction[]): number {
   return onlyConfirmed(transactions)
     .filter((tx) => tx.type === 'dividend')
-    .reduce((sum, tx) => sum + Math.max(tx.amount, tx.shares), 0);
+    .reduce((sum, tx) => {
+      if (tx.amount > 0) return sum + tx.amount;
+      // 红利再投资：amount 在保存时已经 = shares × nav，所以这里 max(amount, shares) 都能命中
+      return sum + Math.max(tx.amount, tx.shares * tx.nav);
+    }, 0);
 }
 
 /**
@@ -213,6 +216,46 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
 export function calcSharesFromAmount(amount: number, fee: number, nav: number): number {
   if (nav === 0) return 0;
   return (amount - fee) / nav;
+}
+
+/**
+ * 判断某笔 buy 交易是否可能是某个定投计划的执行
+ * 修复"金额相同的手动买入被算进定投投入"的 bug：加上日期窗口约束
+ * - 必须在 plan.startDate 之后
+ * - 交易日期必须落在该计划"预期执行日"的合理窗口内
+ *   - daily: 任意交易日
+ *   - weekly: weekday 偏差 ≤ 1 天（容忍"周一忘了周二补"，拒绝"周三手动买入"被误算）
+ *   - biweekly: 同 weekly + 与 startDate 所在周奇偶相同
+ *   - monthly: 与当月目标日偏差 ≤ 3 天（容忍节假日顺延到下周一）
+ */
+export function isInPlanWindow(plan: DcaPlan, txDate: string): boolean {
+  const tx = dayjs(txDate);
+  const start = dayjs(plan.startDate);
+  if (tx.isBefore(start, 'day')) return false;
+
+  if (plan.frequency === 'daily') return true;
+
+  if (plan.frequency === 'weekly' || plan.frequency === 'biweekly') {
+    if (plan.dayOfWeek === undefined) return false;
+    if (Math.abs(tx.day() - plan.dayOfWeek) > 1) return false;
+    if (plan.frequency === 'biweekly') {
+      const txWeekStart = tx.startOf('week');
+      const startWeekStart = start.startOf('week');
+      const weekDiff = Math.round(txWeekStart.diff(startWeekStart, 'day') / 7);
+      if (weekDiff < 0 || weekDiff % 2 !== 0) return false;
+    }
+    return true;
+  }
+
+  if (plan.frequency === 'monthly') {
+    if (plan.dayOfMonth === undefined) return false;
+    const txDay = tx.date();
+    const daysInMonth = tx.daysInMonth();
+    const actualTargetDay = Math.min(plan.dayOfMonth, daysInMonth);
+    return Math.abs(txDay - actualTargetDay) <= 3;
+  }
+
+  return false;
 }
 
 /**

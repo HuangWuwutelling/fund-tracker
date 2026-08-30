@@ -1,11 +1,11 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Tag, Space, message, Popconfirm, Alert, Checkbox } from 'antd';
+import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Tag, Space, message, Popconfirm, Alert, Checkbox, Radio } from 'antd';
 import { PlusOutlined, ImportOutlined } from '@ant-design/icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
-import { calcSharesFromAmount } from '../utils/calculator';
+import { calcSharesFromAmount, calcShares, onlyConfirmed } from '../utils/calculator';
 import { formatMoney, formatDate } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
 import InitialPositionModal from '../components/InitialPositionModal';
@@ -58,21 +58,54 @@ export default function Transactions() {
         return;
       }
 
-      // 分红：表单"获得份额"字段实际存的是现金金额(元)，挪到 amount 字段，shares=0
-      // 这样 calcDividendTotal / calcShares / calcCost 都能正确处理
-      const dividendCash = txType === 'dividend' ? ((values.shares as number) ?? 0) : 0;
-      const shares = txType === 'dividend'
-        ? 0
-        : pending ? 0 : calcSharesFromAmount(amount, fee, nav ?? 0);
+      // 分红：根据 dividendType 决定 amount 和 shares 的语义
+      // - 现金分红: amount = 现金金额, shares = 0
+      // - 红利再投资: shares = 获得的份额, amount = shares × nav（自动折算）
+      let finalAmount: number;
+      let finalShares: number;
+      let finalFee: number;
+      if (txType === 'dividend') {
+        const dt = (values.dividendType as 'cash' | 'reinvest') ?? 'cash';
+        if (dt === 'cash') {
+          finalAmount = (values.amount as number) ?? 0;
+          finalShares = 0;
+          finalFee = 0;
+        } else {
+          finalShares = (values.shares as number) ?? 0;
+          finalAmount = finalShares * (nav ?? 0);
+          finalFee = 0;
+        }
+      } else {
+        finalAmount = amount;
+        finalFee = fee;
+        finalShares = pending ? 0 : calcSharesFromAmount(amount, fee, nav ?? 0);
+      }
+
+      // 卖出校验：截至当前交易日期的持仓必须 >= 卖出份额
+      if (txType === 'sell' && !pending && finalShares > 0) {
+        const txDate = (values.date as dayjs.Dayjs).format('YYYY-MM-DD');
+        const fundIdVal = values.fundId as string;
+        const priorShares = calcShares(
+          onlyConfirmed(transactions).filter(
+            (t) => t.fundId === fundIdVal && t.id !== editingId && t.date <= txDate
+          )
+        );
+        if (finalShares > priorShares + 0.0001) {
+          message.error(
+            `卖出份额超过当前持仓：当前 ${priorShares.toFixed(4)} 份，最多可卖 ${priorShares.toFixed(4)} 份`
+          );
+          return;
+        }
+      }
 
       const txData: Transaction = {
         id: editingId ?? uuid(),
         fundId: values.fundId as string,
         type: txType,
         date: (values.date as dayjs.Dayjs).format('YYYY-MM-DD'),
-        amount: txType === 'dividend' ? dividendCash : amount,
-        fee: txType === 'dividend' ? 0 : fee,
-        shares: Math.round(shares * 10000) / 10000,
+        amount: finalAmount,
+        fee: finalFee,
+        shares: Math.round(finalShares * 10000) / 10000,
         nav: pending ? 0 : (nav ?? 0),
         note: values.note as string | undefined,
         status: pending ? 'pending' : 'confirmed',
@@ -117,9 +150,13 @@ export default function Transactions() {
 
   const handleEdit = (tx: Transaction) => {
     setEditingId(tx.id);
+    // 推断分红方式：amount > 0 → 现金分红；shares > 0 → 红利再投资
+    const dividendType: 'cash' | 'reinvest' | undefined =
+      tx.type === 'dividend' ? (tx.amount > 0 ? 'cash' : 'reinvest') : undefined;
     form.setFieldsValue({
       ...tx,
       date: dayjs(tx.date),
+      dividendType,
     });
     setPreview({ shares: tx.shares, nav: tx.nav, navDate: tx.date });
     setModalOpen(true);
@@ -292,7 +329,7 @@ export default function Transactions() {
         okText="保存"
         cancelText="取消"
       >
-        <Form form={form} layout="vertical" initialValues={{ date: dayjs(), type: 'buy', fee: 0 }} onValuesChange={handleFormChange}>
+        <Form form={form} layout="vertical" initialValues={{ date: dayjs(), type: 'buy', fee: 0, dividendType: 'cash' }} onValuesChange={handleFormChange}>
           <Form.Item label="基金" name="fundId" rules={[{ required: true, message: '请选择基金' }]}>
             <Select placeholder="选择基金">
               {funds.map((f) => (
@@ -310,20 +347,43 @@ export default function Transactions() {
           <Form.Item label="交易日期" name="date" rules={[{ required: true }]}>
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item label="金额（元）" name="amount" rules={[{ required: true, message: '请输入金额' }]}>
-            <InputNumber style={{ width: '100%' }} min={0} precision={2} />
-          </Form.Item>
-          <Form.Item label="手续费（元）" name="fee">
-            <InputNumber style={{ width: '100%' }} min={0} precision={2} />
-          </Form.Item>
+          {txTypeWatch !== 'dividend' && (
+            <>
+              <Form.Item label="金额（元）" name="amount" rules={[{ required: true, message: '请输入金额' }]}>
+                <InputNumber style={{ width: '100%' }} min={0} precision={2} />
+              </Form.Item>
+              <Form.Item label="手续费（元）" name="fee">
+                <InputNumber style={{ width: '100%' }} min={0} precision={2} />
+              </Form.Item>
+            </>
+          )}
+          {txTypeWatch === 'dividend' && (
+            <>
+              <Form.Item label="分红方式" name="dividendType" rules={[{ required: true }]}>
+                <Radio.Group>
+                  <Radio.Button value="cash">现金分红</Radio.Button>
+                  <Radio.Button value="reinvest">红利再投资</Radio.Button>
+                </Radio.Group>
+              </Form.Item>
+              <Form.Item shouldUpdate noStyle>
+                {() => {
+                  const dt = form.getFieldValue('dividendType') ?? 'cash';
+                  return dt === 'cash' ? (
+                    <Form.Item label="分红金额（元）" name="amount" rules={[{ required: true, message: '请输入分红金额' }]}>
+                      <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="现金分红金额" />
+                    </Form.Item>
+                  ) : (
+                    <Form.Item label="再投资份额" name="shares" rules={[{ required: true, message: '请输入再投资份额' }]}>
+                      <InputNumber style={{ width: '100%' }} min={0} precision={4} placeholder="红利再投资获得的份额" />
+                    </Form.Item>
+                  );
+                }}
+              </Form.Item>
+            </>
+          )}
           <Form.Item name="pending" valuePropName="checked" style={{ marginBottom: 16 }}>
             <Checkbox>待确认（T+1 净值未出，先记账不进入持仓）</Checkbox>
           </Form.Item>
-          {txTypeWatch === 'dividend' && (
-            <Form.Item label="获得份额" name="shares" rules={[{ required: true, message: '请输入获得份额（现金分红填 0）' }]}>
-              <InputNumber style={{ width: '100%' }} min={0} precision={4} placeholder="现金分红填 0" />
-            </Form.Item>
-          )}
           {/* NAV is hidden - auto-filled from history, shown in preview below */}
           {!pendingWatch && preview.nav !== null && (
             <Alert

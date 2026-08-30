@@ -34,9 +34,13 @@ export default function Dashboard() {
     const totalCost = summaries.reduce((sum, s) => sum + s.cost, 0);
     const totalReturn = totalValue - totalCost;
     const totalReturnRate = totalCost > 0 ? (totalReturn / totalCost) * 100 : 0;
-    // 非交易日所有基金 dailyPnl 都是 null → 总和也应为 null（让 UI 显示"—"）
-    const dailyPnlValues = summaries.map((s) => s.dailyPnl).filter((v): v is number => v !== null);
-    const totalDailyPnl = dailyPnlValues.length > 0 ? dailyPnlValues.reduce((sum, v) => sum + v, 0) : null;
+    // 当日盈亏：必须所有基金都有 NAV（即都是交易日）才算总和
+    // 任一基金缺失（如新加基金 NAV 还没拉到、或刷新失败）→ 显示"—"，避免误导
+    const dailyPnlValues = summaries.map((s) => s.dailyPnl);
+    const allHavePnl = summaries.length > 0 && dailyPnlValues.every((v): v is number => v !== null);
+    const totalDailyPnl = allHavePnl
+      ? (dailyPnlValues as number[]).reduce((sum, v) => sum + v, 0)
+      : null;
     return { totalValue, totalCost, totalReturn, totalReturnRate, totalDailyPnl };
   }, [summaries]);
 

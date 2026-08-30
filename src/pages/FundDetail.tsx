@@ -10,12 +10,12 @@ import { CanvasRenderer } from 'echarts/renderers';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
-import { calcFundSummary, calcSharesFromAmount } from '../utils/calculator';
+import { calcFundSummary, calcSharesFromAmount, calcShares, onlyConfirmed } from '../utils/calculator';
 import { pnlColor, formatDate, formatMoney, today } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
 import InitialPositionModal from '../components/InitialPositionModal';
 import { FUND_TYPE_LABELS, TRANSACTION_TYPE_LABELS, FREQUENCY_LABELS } from '../types';
-import type { Transaction, DcaPlan } from '../types';
+import type { Transaction, DcaPlan, Fund } from '../types';
 
 echarts.use([LineChart, TooltipComponent, GridComponent, CanvasRenderer]);
 
@@ -76,15 +76,27 @@ export default function FundDetail() {
   };
 
   const fund = getFundById(id ?? '');
-  if (!fund) {
-    return <Card>基金不存在 <Button onClick={() => navigate('/funds')}>返回</Button></Card>;
-  }
 
-  const navHistory = getNavHistory(fund.id);
-  const fundDcaPlans = dcaPlans.filter((p) => p.fundId === fund.id);
-  const summary = calcFundSummary(fund, transactions, navHistory, today());
-  const fundTxs = transactions.filter((t) => t.fundId === fund.id).sort((a, b) => b.date.localeCompare(a.date));
-  const platformName = platforms.find((p) => p.id === fund.platformId)?.name ?? '—';
+  const navHistory = useMemo(() => (fund ? getNavHistory(fund.id) : []), [fund, getNavHistory]);
+  const fundDcaPlans = useMemo(
+    () => (fund ? dcaPlans.filter((p) => p.fundId === fund.id) : []),
+    [fund, dcaPlans]
+  );
+  const summary = useMemo(
+    () =>
+      fund
+        ? calcFundSummary(fund, transactions, navHistory, today())
+        : { shares: 0, cost: 0, marketValue: 0, totalReturn: 0, returnRate: 0, dailyPnl: null, xirr: 0, dividend: 0 },
+    [fund, transactions, navHistory]
+  );
+  const fundTxs = useMemo(
+    () =>
+      fund
+        ? transactions.filter((t) => t.fundId === fund.id).sort((a, b) => b.date.localeCompare(a.date))
+        : [],
+    [fund, transactions]
+  );
+  const platformName = fund ? platforms.find((p) => p.id === fund.platformId)?.name ?? '—' : '—';
 
   // Filter NAV history by range
   const filteredNav = useMemo(() => {
@@ -133,18 +145,52 @@ export default function FundDetail() {
         message.error('无法保存：未找到该日期的成交净值，请检查历史净值或切换为待确认');
         return;
       }
-      // 分红：表单"获得份额"字段实际存的是现金金额(元)，挪到 amount 字段，shares=0
-      const dividendCash = txType === 'dividend' ? ((values.shares as number) ?? 0) : 0;
-      const shares = txType === 'dividend'
-        ? 0
-        : pending ? 0 : calcSharesFromAmount(amount, fee, nav);
+      // 分红：根据 dividendType 决定 amount 和 shares 的语义
+      // - 现金分红: amount = 现金金额, shares = 0
+      // - 红利再投资: shares = 获得的份额, amount = shares × nav（自动折算）
+      let finalAmount: number;
+      let finalShares: number;
+      let finalFee: number;
+      if (txType === 'dividend') {
+        const dt = (values.dividendType as 'cash' | 'reinvest') ?? 'cash';
+        if (dt === 'cash') {
+          finalAmount = (values.amount as number) ?? 0;
+          finalShares = 0;
+          finalFee = 0;
+        } else {
+          finalShares = (values.shares as number) ?? 0;
+          finalAmount = finalShares * nav;
+          finalFee = 0;
+        }
+      } else {
+        finalAmount = amount;
+        finalFee = fee;
+        finalShares = pending ? 0 : calcSharesFromAmount(amount, fee, nav);
+      }
+
+      // 卖出校验：截至当前交易日期的持仓必须 >= 卖出份额
+      // 编辑时排除自身，避免重复计算
+      if (txType === 'sell' && !pending && finalShares > 0) {
+        const txDate = (values.date as dayjs.Dayjs).format('YYYY-MM-DD');
+        const priorShares = calcShares(
+          onlyConfirmed(transactions).filter(
+            (t) => t.fundId === fundRef.id && t.id !== editingTxId && t.date <= txDate
+          )
+        );
+        if (finalShares > priorShares + 0.0001) {
+          message.error(
+            `卖出份额超过当前持仓：当前 ${priorShares.toFixed(4)} 份，最多可卖 ${priorShares.toFixed(4)} 份`
+          );
+          return;
+        }
+      }
 
       const txData: Partial<Transaction> = {
         type: txType,
         date: (values.date as dayjs.Dayjs).format('YYYY-MM-DD'),
-        amount: txType === 'dividend' ? dividendCash : amount,
-        fee: txType === 'dividend' ? 0 : fee,
-        shares: Math.round(shares * 10000) / 10000,
+        amount: finalAmount,
+        fee: finalFee,
+        shares: Math.round(finalShares * 10000) / 10000,
         nav,
         note: values.note as string | undefined,
         status: pending ? 'pending' : 'confirmed',
@@ -157,7 +203,7 @@ export default function FundDetail() {
         addTransaction({
           ...txData,
           id: uuid(),
-          fundId: fund.id,
+          fundId: fundRef.id,
         } as Transaction);
         message.success(pending ? '已记录为待确认交易' : '交易记录已添加');
       }
@@ -172,13 +218,17 @@ export default function FundDetail() {
 
   const handleEditTx = (tx: Transaction) => {
     setEditingTxId(tx.id);
+    // 推断分红方式：amount > 0 → 现金分红；shares > 0 → 红利再投资
+    const dividendType: 'cash' | 'reinvest' | undefined =
+      tx.type === 'dividend' ? (tx.amount > 0 ? 'cash' : 'reinvest') : undefined;
     txForm.setFieldsValue({
       ...tx,
       date: dayjs(tx.date),
+      dividendType,
     });
     // 编辑时同步预览该笔交易的净值
     const dateStr = tx.date;
-    const result = lookupNavForDate(fund.id, dateStr);
+    const result = lookupNavForDate(fundRef.id, dateStr);
     setNavPreview(result ?? null);
     setTxModalOpen(true);
   };
@@ -193,7 +243,7 @@ export default function FundDetail() {
       setNavPreview(null);
       return;
     }
-    const result = lookupNavForDate(fund.id, date.toDate());
+    const result = lookupNavForDate(fundRef.id, date.toDate());
     setNavPreview(result ?? null);
   };
 
@@ -204,7 +254,7 @@ export default function FundDetail() {
       message.warning('请先选择交易日期');
       return;
     }
-    const result = lookupNavForDate(fund.id, date.toDate());
+    const result = lookupNavForDate(fundRef.id, date.toDate());
     if (result) {
       setNavPreview(result);
       message.success(`使用 ${result.navDate} 的净值 ${result.nav.toFixed(4)}`);
@@ -217,6 +267,13 @@ export default function FundDetail() {
   useEffect(() => {
     if (!txModalOpen) setNavPreview(null);
   }, [txModalOpen]);
+
+  // 所有 hooks 之后再判断 fund 是否存在——避免深链接刷新时 hooks 数量不一致导致 "Rendered more hooks" 崩溃
+  if (!fund) {
+    return <Card>基金不存在 <Button onClick={() => navigate('/funds')}>返回</Button></Card>;
+  }
+  // shadow 让 TS narrow 到 Fund
+  const fundRef: Fund = fund;
 
   const handleConfirmTx = async (tx: Transaction) => {
     if (tx.type === 'dividend') {
@@ -285,12 +342,12 @@ export default function FundDetail() {
 
       <Card>
         <Descriptions column={{ xs: 1, sm: 2, md: 4 }} bordered size="small">
-          <Descriptions.Item label="基金代码">{fund.id}</Descriptions.Item>
-          <Descriptions.Item label="基金名称">{fund.name}</Descriptions.Item>
+          <Descriptions.Item label="基金代码">{fundRef.id}</Descriptions.Item>
+          <Descriptions.Item label="基金名称">{fundRef.name}</Descriptions.Item>
           <Descriptions.Item label="平台">{platformName}</Descriptions.Item>
-          <Descriptions.Item label="类型"><Tag>{FUND_TYPE_LABELS[fund.type]}</Tag></Descriptions.Item>
-          <Descriptions.Item label="最新净值">{fund.currentNav.toFixed(4)}</Descriptions.Item>
-          <Descriptions.Item label="净值日期">{formatDate(fund.navDate)}</Descriptions.Item>
+          <Descriptions.Item label="类型"><Tag>{FUND_TYPE_LABELS[fundRef.type]}</Tag></Descriptions.Item>
+          <Descriptions.Item label="最新净值">{fundRef.currentNav.toFixed(4)}</Descriptions.Item>
+          <Descriptions.Item label="净值日期">{formatDate(fundRef.navDate)}</Descriptions.Item>
         </Descriptions>
       </Card>
 
@@ -478,7 +535,7 @@ export default function FundDetail() {
         okText="保存"
         cancelText="取消"
       >
-        <Form form={txForm} layout="vertical" initialValues={{ date: dayjs(), type: 'buy', fee: 0 }} onValuesChange={handleTxFormChange}>
+        <Form form={txForm} layout="vertical" initialValues={{ date: dayjs(), type: 'buy', fee: 0, dividendType: 'cash' }} onValuesChange={handleTxFormChange}>
           <Form.Item label="交易类型" name="type" rules={[{ required: true }]}>
             <Select>
               {Object.entries(TRANSACTION_TYPE_LABELS).map(([key, label]) => (
@@ -489,16 +546,39 @@ export default function FundDetail() {
           <Form.Item label="交易日期" name="date" rules={[{ required: true }]}>
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item label="金额（元）" name="amount" rules={[{ required: true, message: '请输入金额' }]}>
-            <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="交易金额" />
-          </Form.Item>
-          <Form.Item label="手续费（元）" name="fee">
-            <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="0" />
-          </Form.Item>
+          {txTypeWatch !== 'dividend' && (
+            <>
+              <Form.Item label="金额（元）" name="amount" rules={[{ required: true, message: '请输入金额' }]}>
+                <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="交易金额" />
+              </Form.Item>
+              <Form.Item label="手续费（元）" name="fee">
+                <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="0" />
+              </Form.Item>
+            </>
+          )}
           {txTypeWatch === 'dividend' && (
-            <Form.Item label="获得份额" name="shares" rules={[{ required: true, message: '请输入获得份额（现金分红填 0）' }]}>
-              <InputNumber style={{ width: '100%' }} min={0} precision={4} placeholder="现金分红填 0" />
-            </Form.Item>
+            <>
+              <Form.Item label="分红方式" name="dividendType" rules={[{ required: true }]}>
+                <Radio.Group>
+                  <Radio.Button value="cash">现金分红</Radio.Button>
+                  <Radio.Button value="reinvest">红利再投资</Radio.Button>
+                </Radio.Group>
+              </Form.Item>
+              <Form.Item shouldUpdate noStyle>
+                {() => {
+                  const dt = txForm.getFieldValue('dividendType') ?? 'cash';
+                  return dt === 'cash' ? (
+                    <Form.Item label="分红金额（元）" name="amount" rules={[{ required: true, message: '请输入分红金额' }]}>
+                      <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="现金分红金额" />
+                    </Form.Item>
+                  ) : (
+                    <Form.Item label="再投资份额" name="shares" rules={[{ required: true, message: '请输入再投资份额' }]}>
+                      <InputNumber style={{ width: '100%' }} min={0} precision={4} placeholder="红利再投资获得的份额" />
+                    </Form.Item>
+                  );
+                }}
+              </Form.Item>
+            </>
           )}
           <Form.Item name="pending" valuePropName="checked" style={{ marginBottom: 16 }}>
             <Checkbox>待确认（T+1 净值未出，先记账不进入持仓）</Checkbox>
@@ -583,7 +663,7 @@ export default function FundDetail() {
       </Modal>
 
       <InitialPositionModal
-        fundId={fund.id}
+        fundId={fundRef.id}
         open={initModalOpen}
         onClose={() => setInitModalOpen(false)}
       />

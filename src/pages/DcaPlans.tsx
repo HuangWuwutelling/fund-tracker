@@ -6,53 +6,11 @@ import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { formatMoney } from '../utils/formatter';
+import { isInPlanWindow } from '../utils/calculator';
 import { FREQUENCY_LABELS } from '../types';
 import type { DcaPlan } from '../types';
 
 const DAY_OF_WEEK_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-
-/**
- * 判断某笔 buy 交易是否可能是某个定投计划的执行
- * 修复"金额相同的手动买入被算进定投投入"的 bug：加上日期窗口约束
- * - 必须在 plan.startDate 之后
- * - 交易日期必须落在该计划"预期执行日"的合理窗口内
- *   - daily: 任意交易日
- *   - weekly: weekday 偏差 ≤ 1 天（容忍"周一忘了周二补"，拒绝"周三手动买入"被误算）
- *   - biweekly: 同 weekly + 与 startDate 所在周奇偶相同
- *   - monthly: 与当月目标日偏差 ≤ 3 天（容忍节假日顺延到下周一）
- */
-function isInPlanWindow(plan: DcaPlan, txDate: string): boolean {
-  const tx = dayjs(txDate);
-  const start = dayjs(plan.startDate);
-  if (tx.isBefore(start, 'day')) return false;
-
-  if (plan.frequency === 'daily') return true;
-
-  if (plan.frequency === 'weekly' || plan.frequency === 'biweekly') {
-    if (plan.dayOfWeek === undefined) return false;
-    // weekday 偏差 ≤ 1 天：容忍"周一忘了周二补"，但拒绝"周三手动买入"被误算
-    if (Math.abs(tx.day() - plan.dayOfWeek) > 1) return false;
-    if (plan.frequency === 'biweekly') {
-      // tx 所在周与 startDate 所在周的奇偶性需一致
-      const txWeekStart = tx.startOf('week');
-      const startWeekStart = start.startOf('week');
-      const weekDiff = Math.round(txWeekStart.diff(startWeekStart, 'day') / 7);
-      if (weekDiff < 0 || weekDiff % 2 !== 0) return false;
-    }
-    return true;
-  }
-
-  if (plan.frequency === 'monthly') {
-    if (plan.dayOfMonth === undefined) return false;
-    const txDay = tx.date();
-    const daysInMonth = tx.daysInMonth();
-    const actualTargetDay = Math.min(plan.dayOfMonth, daysInMonth);
-    // 偏差 ≤ 3 天：容忍节假日顺延到下周一
-    return Math.abs(txDay - actualTargetDay) <= 3;
-  }
-
-  return false;
-}
 
 export default function DcaPlans() {
   const { funds, dcaPlans, transactions, addDcaPlan, updateDcaPlan, removeDcaPlan, toggleDcaPlan } = useStore();

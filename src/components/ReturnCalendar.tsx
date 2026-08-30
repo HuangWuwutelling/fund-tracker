@@ -118,8 +118,9 @@ export default function ReturnCalendar({ dailyReturns }: Props) {
           if (data) {
             const intensity = maxAbsReturn > 0 ? Math.min(Math.abs(data.totalReturn) / maxAbsReturn, 1) : 0;
             const opacity = 0.12 + intensity * 0.55;
-            if (data.totalReturn > 0) bg = `rgba(82, 196, 26, ${opacity})`;
-            else if (data.totalReturn < 0) bg = `rgba(255, 77, 79, ${opacity})`;
+            // 中国惯例：红涨绿跌
+            if (data.totalReturn > 0) bg = `rgba(255, 77, 79, ${opacity})`;
+            else if (data.totalReturn < 0) bg = `rgba(82, 196, 26, ${opacity})`;
             else bg = '#f0f0f0';
           }
           const isSelected = selectedDate === date;
@@ -151,7 +152,7 @@ export default function ReturnCalendar({ dailyReturns }: Props) {
                     style={{
                       fontSize: 16,
                       fontWeight: 600,
-                      color: data.totalReturn > 0 ? '#237804' : data.totalReturn < 0 ? '#a8071a' : '#666',
+                      color: data.totalReturn > 0 ? '#a8071a' : data.totalReturn < 0 ? '#237804' : '#666',
                       lineHeight: 1.2,
                       marginTop: 4,
                     }}
@@ -170,11 +171,11 @@ export default function ReturnCalendar({ dailyReturns }: Props) {
 
       {/* 颜色图例 */}
       <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#666' }}>
-        <span>亏损</span>
-        {['rgba(255, 77, 79, 0.85)', 'rgba(255, 77, 79, 0.5)', 'rgba(255, 77, 79, 0.15)'].map((c, i) => (
+        <span>盈利</span>
+        {['rgba(255, 77, 79, 0.15)', 'rgba(255, 77, 79, 0.5)', 'rgba(255, 77, 79, 0.85)'].map((c, i) => (
           <div key={i} style={{ width: 16, height: 16, background: c, borderRadius: 3 }} />
         ))}
-        <span style={{ marginLeft: 8 }}>盈利</span>
+        <span style={{ marginLeft: 8 }}>亏损</span>
         {['rgba(82, 196, 26, 0.15)', 'rgba(82, 196, 26, 0.5)', 'rgba(82, 196, 26, 0.85)'].map((c, i) => (
           <div key={i} style={{ width: 16, height: 16, background: c, borderRadius: 3 }} />
         ))}
