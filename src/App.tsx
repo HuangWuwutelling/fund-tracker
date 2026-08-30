@@ -57,6 +57,12 @@ export default function App() {
       }
       const result = lookupNavForDate(tx.fundId, new Date(tx.date));
       if (!result) continue; // NAV not yet available, leave as pending
+      // 必须等到 tx.date 当天的 NAV 实际发布后才能确认——QDII 等净值延迟基金
+      // 的 lookup 总会 fallback 到 ≤ tx.date 的最新一条（旧日期），如果直接用会被
+      // 误认为当日成交 NAV，导致用历史净值计算份额（南方纳斯达克100 8/26 NAV
+      // 被错误应用到 8/27、8/28 交易）。A 股基金 T+1 NAV 在 D+1 晚间更新到历史，
+      // 等用户下次打开 app 时 navDate === txDate，会正常自动确认。
+      if (result.navDate !== tx.date) continue;
       const shares = calcSharesFromAmount(tx.amount, tx.fee, result.nav);
       updateTransaction(tx.id, {
         status: 'confirmed',
