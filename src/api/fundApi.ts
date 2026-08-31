@@ -1,4 +1,5 @@
 import type { NavRecord, Fund } from '../types';
+import dayjs from 'dayjs';
 
 // --- Fund search: load full fund list once for code/name search ---
 export interface FundSearchItem {
@@ -175,7 +176,7 @@ export async function fetchFundEstimate(fundCode: string): Promise<FundEstimate 
 
     const latest = trend[trend.length - 1]!;
     const prev = trend.length > 1 ? trend[trend.length - 2]! : latest;
-    const navDate = new Date(latest.x).toISOString().slice(0, 10);
+    const navDate = dayjs(latest.x).format('YYYY-MM-DD');
     const lastNav = latest.y;
     const prevNav = prev.y;
     const changePercent = prevNav > 0 ? ((lastNav - prevNav) / prevNav) * 100 : 0;
@@ -206,7 +207,7 @@ export async function fetchNavHistory(
     if (!trend || trend.length === 0) return [];
 
     const records: NavRecord[] = trend.map((item) => ({
-      date: new Date(item.x).toISOString().slice(0, 10),
+      date: dayjs(item.x).format('YYYY-MM-DD'),
       nav: item.y,
       accNav: item.y, // pingzhongdata only provides unit NAV, not accumulated
     }));
@@ -240,7 +241,7 @@ export async function fetchFundWithHistory(fundCode: string): Promise<{
       return null;
     }
     const navHistory: NavRecord[] = (trend ?? []).map((item) => ({
-      date: new Date(item.x).toISOString().slice(0, 10),
+      date: dayjs(item.x).format('YYYY-MM-DD'),
       nav: item.y,
       accNav: item.y,
     }));
@@ -249,7 +250,7 @@ export async function fetchFundWithHistory(fundCode: string): Promise<{
     const prev = trend && trend.length > 1 ? trend[trend.length - 2] : latest;
     const lastNav = latest?.y ?? 0;
     const prevNav = prev?.y ?? lastNav;
-    const navDate = latest ? new Date(latest.x).toISOString().slice(0, 10) : '';
+    const navDate = latest ? dayjs(latest.x).format('YYYY-MM-DD') : '';
     const changePercent = prevNav > 0 ? ((lastNav - prevNav) / prevNav) * 100 : 0;
 
     return {
