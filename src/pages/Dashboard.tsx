@@ -1,22 +1,16 @@
 import { useMemo } from 'react';
-import { Card, Row, Col, Statistic, Table, Tabs, Tag, Alert, Button, Tooltip } from 'antd';
+import { Card, Row, Col, Statistic, Table, Tag, Alert, Button, Tooltip } from 'antd';
 import { useNavigate } from 'react-router-dom';
-import ReactEChartsCore from 'echarts-for-react/lib/core';
-import * as echarts from 'echarts/core';
-import { PieChart, LineChart } from 'echarts/charts';
-import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components';
-import { CanvasRenderer } from 'echarts/renderers';
 import { useStore } from '../stores';
 import { calcFundSummary, calcXIRR, calcDividendTotal, calcTodayInvested } from '../utils/calculator';
 import { today } from '../utils/formatter';
 import ReturnCalendar from '../components/ReturnCalendar';
 import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
-import { FUND_TYPE_LABELS } from '../types';
 
-echarts.use([PieChart, LineChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer]);
+
 
 export default function Dashboard() {
-  const { funds, transactions, platforms, snapshots, dcaPlans, getNavHistory } = useStore();
+  const { funds, transactions, platforms, dcaPlans, getNavHistory } = useStore();
   const navigate = useNavigate();
 
   const summaries = useMemo(() => {
@@ -61,59 +55,7 @@ export default function Dashboard() {
     .filter((t) => t.type === 'buy')
     .reduce((sum, t) => sum + t.amount, 0);
 
-  // Pie chart: by platform
-  const platformPieData = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const s of summaries) {
-      const platform = platforms.find((p) => p.id === s.fund.platformId);
-      const name = platform?.name ?? '未知';
-      map.set(name, (map.get(name) ?? 0) + s.marketValue);
-    }
-    return Array.from(map.entries()).map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }));
-  }, [summaries, platforms]);
-
-  // Pie chart: by type
-  const typePieData = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const s of summaries) {
-      const name = FUND_TYPE_LABELS[s.fund.type];
-      map.set(name, (map.get(name) ?? 0) + s.marketValue);
-    }
-    return Array.from(map.entries()).map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }));
-  }, [summaries]);
-
-  // Line chart: portfolio value over time
-  const lineData = useMemo(() => {
-    const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
-    return sorted.map((s) => ({ date: s.date, value: s.totalValue }));
-  }, [snapshots]);
-
-  const pieOption = (data: { name: string; value: number }[]) => ({
-    tooltip: { trigger: 'item' as const, formatter: '{b}: {c} ({d}%)' },
-    legend: { bottom: 0 },
-    series: [
-      {
-        type: 'pie',
-        radius: ['40%', '70%'],
-        data,
-        label: { formatter: '{b}\n{d}%' },
-      },
-    ],
-  });
-
-  const lineOption = useMemo(() => ({
-    tooltip: {
-      trigger: 'axis' as const,
-      formatter: (params: Array<{ name: string; value: number }>) => {
-        const p = params[0];
-        return p ? `${p.name}<br/>总资产: ${formatMoney(p.value)}` : '';
-      },
-    },
-    grid: { left: 60, right: 20, top: 20, bottom: 30 },
-    xAxis: { type: 'category' as const, data: lineData.map((d) => d.date) },
-    yAxis: { type: 'value' as const, axisLabel: { formatter: '{value}' } },
-    series: [{ type: 'line', data: lineData.map((d) => d.value), smooth: true, areaStyle: { opacity: 0.1 } }],
-  }), [lineData]);
+  // Pie charts removed per user request.
 
   const columns = [
     {
@@ -214,7 +156,6 @@ export default function Dashboard() {
           closable
         />
       )}
-      <ReturnCalendar />
       <Row gutter={[16, 16]}>
         <Col xs={12} sm={6}>
           <Card>
@@ -289,49 +230,9 @@ export default function Dashboard() {
         </Col>
       </Row>
 
-      <Card style={{ marginTop: 16 }}>
-        <Tabs
-          items={[
-            {
-              key: 'platform',
-              label: '按平台分布',
-              children: (
-                <ReactEChartsCore
-                  echarts={echarts}
-                  option={pieOption(platformPieData)}
-                  style={{ height: 300 }}
-                />
-              ),
-            },
-            {
-              key: 'type',
-              label: '按类型分布',
-              children: (
-                <ReactEChartsCore
-                  echarts={echarts}
-                  option={pieOption(typePieData)}
-                  style={{ height: 300 }}
-                />
-              ),
-            },
-            {
-              key: 'trend',
-              label: '资产走势',
-              children: lineData.length > 0 ? (
-                <ReactEChartsCore
-                  echarts={echarts}
-                  option={lineOption}
-                  style={{ height: 300 }}
-                />
-              ) : (
-                <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-                  暂无走势数据，每天打开页面会自动记录快照
-                </div>
-              ),
-            },
-          ]}
-        />
-      </Card>
+      <div style={{ marginTop: 16 }}>
+        <ReturnCalendar />
+      </div>
 
       <Card title="持仓列表" style={{ marginTop: 16 }}>
         <Table
