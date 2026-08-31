@@ -64,6 +64,22 @@ function getMonthRange(year: number, month: number): [string, string] {
   return [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')];
 }
 
+/** 月度收益聚合（沿用 calcPortfolioValueAtDate 算法，与 WeeklyReport/MonthlyReport 一致） */
+export interface MonthlyReturn {
+  month: string;        // 'YYYY-MM'
+  totalReturn: number;  // 整月收益金额（元）
+  returnRate: number;   // 月度收益率 %
+  perFund: { fundId: string; fundName: string; returnAmount: number }[];
+}
+
+/** 年度收益聚合（同上） */
+export interface YearlyReturn {
+  year: string;         // 'YYYY'
+  totalReturn: number;
+  returnRate: number;
+  perFund: { fundId: string; fundName: string; returnAmount: number }[];
+}
+
 export interface DailyReturn {
   date: string;
   /** 当天总收益（已扣除期间投入的本金） */
@@ -114,25 +130,25 @@ export function generateDailyReturns(
 
     // 各基金收益：每只基金今日末市值 − 昨日末市值 − 当日净投入
     // 没有"昨天"时：无法计算单基金收益（首日不算）
+    // 不再过滤 0 收益/无交易基金——保持与 generateMonthlyReturns / generateYearlyReturns 的
+    // perFund 拆分一致（验收清单：日/月/年三者合计自洽）
     const perFund = prevDate
-      ? funds
-          .map((fund) => {
-            const prevValue = calcPortfolioValueAtDate(prevDate, [fund], confirmed);
-            const currValue = calcPortfolioValueAtDate(currDate, [fund], confirmed);
-            const fundFlow = confirmed
-              .filter((t) => t.fundId === fund.id && t.date === currDate)
-              .reduce((sum, t) => {
-                if (t.type === 'buy') return sum + t.amount;
-                if (t.type === 'sell') return sum - (t.amount - t.fee);
-                return sum;
-              }, 0);
-            return {
-              fundId: fund.id,
-              fundName: fund.name,
-              returnAmount: currValue - prevValue - fundFlow,
-            };
-          })
-          .filter((f) => Math.abs(f.returnAmount) > 0.01 || confirmed.some((t) => t.fundId === f.fundId && t.date === currDate))
+      ? funds.map((fund) => {
+          const prevValue = calcPortfolioValueAtDate(prevDate, [fund], confirmed);
+          const currValue = calcPortfolioValueAtDate(currDate, [fund], confirmed);
+          const fundFlow = confirmed
+            .filter((t) => t.fundId === fund.id && t.date === currDate)
+            .reduce((sum, t) => {
+              if (t.type === 'buy') return sum + t.amount;
+              if (t.type === 'sell') return sum - (t.amount - t.fee);
+              return sum;
+            }, 0);
+          return {
+            fundId: fund.id,
+            fundName: fund.name,
+            returnAmount: currValue - prevValue - fundFlow,
+          };
+        })
       : [];
 
     result.push({ date: currDate, totalReturn, perFund });
@@ -398,4 +414,94 @@ export function generateMonthlyReport(
     worstFund,
     fundRankings,
   };
+}
+
+/**
+ * 生成指定年份 12 个月的月度收益列表（升序）
+ * - 不依赖 snapshot 全覆盖：用 calcPortfolioValueAtDate(monthStart) vs calcPortfolioValueAtDate(monthEnd)
+ * - perFund 拆分复用 calcFundPerformanceInRange
+ * - 空月：totalReturn=0, perFund=[]（保证 12 格完整）
+ * - 只算 confirmed 交易
+ */
+export function generateMonthlyReturns(
+  funds: Fund[],
+  transactions: Transaction[],
+  year: number,
+  _platforms?: Platform[]  // 暂未使用，与 generateMonthlyReport 签名保持一致；后续可加平台/类型分布
+): MonthlyReturn[] {
+  const result: MonthlyReturn[] = [];
+  for (let month = 1; month <= 12; month++) {
+    const [monthStart, monthEnd] = getMonthRange(year, month);
+    const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+
+    const startValue = calcPortfolioValueAtDate(monthStart, funds, transactions);
+    const endValue = calcPortfolioValueAtDate(monthEnd, funds, transactions);
+
+    const confirmed = onlyConfirmed(transactions);
+    const monthTxs = confirmed.filter((t) => t.date >= monthStart && t.date <= monthEnd);
+    const buyTotal = monthTxs
+      .filter((t) => t.type === 'buy')
+      .reduce((sum, t) => sum + t.amount, 0);
+    const sellTotal = monthTxs
+      .filter((t) => t.type === 'sell')
+      .reduce((sum, t) => sum + (t.amount - t.fee), 0);
+
+    const totalReturn = endValue - startValue - buyTotal + sellTotal;
+    const returnRate = startValue > 0 ? (totalReturn / startValue) * 100 : 0;
+
+    const perFund: MonthlyReturn['perFund'] = funds.map((f) => {
+      const perf = calcFundPerformanceInRange(f, transactions, monthStart, monthEnd);
+      return { fundId: perf.fundId, fundName: perf.fundName, returnAmount: perf.returnAmount };
+    });
+
+    result.push({ month: monthStr, totalReturn, returnRate, perFund });
+  }
+  return result;
+}
+
+/**
+ * 生成从首笔交易年到今年的年度收益列表（升序）
+ * - 范围推断：Math.min(...transactions.map(t => t.date.slice(0,4))) 到今年
+ * - 算法与 generateMonthlyReturns 一致（用 calcPortfolioValueAtDate）
+ * - 无交易时返回仅含今年一格
+ */
+export function generateYearlyReturns(
+  funds: Fund[],
+  transactions: Transaction[],
+  _platforms?: Platform[]
+): YearlyReturn[] {
+  const currentYear = new Date().getFullYear();
+  const confirmedTxs = onlyConfirmed(transactions);
+  const startYear = confirmedTxs.length > 0
+    ? Math.min(...confirmedTxs.map((t) => parseInt(t.date.slice(0, 4), 10)))
+    : currentYear;
+
+  const result: YearlyReturn[] = [];
+  for (let year = startYear; year <= currentYear; year++) {
+    const yearStart = `${year}-01-01`;
+    const yearEnd = `${year}-12-31`;
+    const yearStr = String(year);
+
+    const startValue = calcPortfolioValueAtDate(yearStart, funds, transactions);
+    const endValue = calcPortfolioValueAtDate(yearEnd, funds, transactions);
+
+    const yearTxs = confirmedTxs.filter((t) => t.date >= yearStart && t.date <= yearEnd);
+    const buyTotal = yearTxs
+      .filter((t) => t.type === 'buy')
+      .reduce((sum, t) => sum + t.amount, 0);
+    const sellTotal = yearTxs
+      .filter((t) => t.type === 'sell')
+      .reduce((sum, t) => sum + (t.amount - t.fee), 0);
+
+    const totalReturn = endValue - startValue - buyTotal + sellTotal;
+    const returnRate = startValue > 0 ? (totalReturn / startValue) * 100 : 0;
+
+    const perFund: YearlyReturn['perFund'] = funds.map((f) => {
+      const perf = calcFundPerformanceInRange(f, transactions, yearStart, yearEnd);
+      return { fundId: perf.fundId, fundName: perf.fundName, returnAmount: perf.returnAmount };
+    });
+
+    result.push({ year: yearStr, totalReturn, returnRate, perFund });
+  }
+  return result;
 }

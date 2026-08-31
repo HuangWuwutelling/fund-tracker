@@ -9,7 +9,6 @@ import { CanvasRenderer } from 'echarts/renderers';
 import { useStore } from '../stores';
 import { calcFundSummary, calcXIRR, calcDividendTotal, calcTodayInvested } from '../utils/calculator';
 import { today } from '../utils/formatter';
-import { generateDailyReturns } from '../utils/reportGenerator';
 import ReturnCalendar from '../components/ReturnCalendar';
 import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
 import { FUND_TYPE_LABELS } from '../types';
@@ -53,11 +52,6 @@ export default function Dashboard() {
   const todayInvested = useMemo(
     () => calcTodayInvested(transactions, dcaPlans),
     [transactions, dcaPlans]
-  );
-
-  const dailyReturns = useMemo(
-    () => generateDailyReturns(funds, transactions, snapshots),
-    [funds, transactions, snapshots]
   );
 
   // 未确认定投(pending):不计入持仓/收益,但提示用户去确认
@@ -220,7 +214,7 @@ export default function Dashboard() {
           closable
         />
       )}
-      <ReturnCalendar dailyReturns={dailyReturns} />
+      <ReturnCalendar />
       <Row gutter={[16, 16]}>
         <Col xs={12} sm={6}>
           <Card>
