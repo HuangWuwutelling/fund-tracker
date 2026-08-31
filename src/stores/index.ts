@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord } from '../types';
 import * as storage from '../utils/storage';
 import { generateSnapshot } from '../utils/snapshot';
+import dayjs from 'dayjs';
 
 /** 净值历史内存缓存：避免每次 getNavHistory 都解析 localStorage JSON。
  *  updateNavHistory 和 loadFromStorage 时清空；getNavHistory 命中后写入。
@@ -234,7 +235,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    const date = new Date().toISOString().slice(0, 10);
+    const date = dayjs().format('YYYY-MM-DD');
     a.href = url;
     a.download = `fund-tracker-backup-${date}.json`;
     a.click();
