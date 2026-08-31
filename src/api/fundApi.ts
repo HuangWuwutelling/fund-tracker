@@ -12,7 +12,8 @@ export interface FundSearchItem {
 
 let fundSearchCache: FundSearchItem[] | null = null;
 
-function mapFundType(rawType: string): Fund['type'] {
+/** 仅当名称不携带类型线索时，退回用 search 接口的 type 字段判断 */
+function mapRawType(rawType: string): Fund['type'] {
   if (rawType.includes('QDII') || rawType.includes('qdi')) return 'qdii';
   if (rawType.includes('债券')) return 'bond';
   if (rawType.includes('指数')) return 'index';
@@ -76,8 +77,18 @@ export function searchFunds(keyword: string, items: FundSearchItem[]): FundSearc
     .slice(0, 20);
 }
 
-export function getFundTypeFromSearch(rawType: string): Fund['type'] {
-  return mapFundType(rawType);
+/**
+ * 判断基金类型，名称优先（比 search 接口的 type 字段可靠）：
+ * - QDII 指数基金（纳指/标普）在 search 里常被标成"指数型"，但名称带 "(QDII)"
+ * - 债券指数基金（中债7-10年国开）同理，名称带"债券"
+ * 顺序：QDII → 债券 → 指数 → 混合；名称无线索时退回 rawType。
+ */
+export function getFundTypeFromSearch(rawType: string, name?: string): Fund['type'] {
+  const n = name ?? '';
+  if (n.includes('(QDII)') || n.includes('QDII')) return 'qdii';
+  if (n.includes('债券') || n.includes('中债') || n.includes('国债')) return 'bond';
+  if (n.includes('ETF') || n.includes('指数') || n.includes('联接') || n.includes('LOF')) return 'index';
+  return mapRawType(rawType);
 }
 
 // --- Fund info + NAV history via pingzhongdata API ---

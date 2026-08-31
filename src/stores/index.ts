@@ -3,6 +3,7 @@ import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, Nav
 import * as storage from '../utils/storage';
 import { generateSnapshot } from '../utils/snapshot';
 import { getPlanDueDates } from '../utils/calculator';
+import { getFundTypeFromSearch } from '../api/fundApi';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 
@@ -30,6 +31,8 @@ interface FundTrackerState {
   updateFund: (id: string, updates: Partial<Fund>) => void;
   removeFund: (id: string) => void;
   getFundById: (id: string) => Fund | undefined;
+  /** 按基金名称重新分类所有基金类型（修正早期版本把 QDII/债券指数误判为"指数型"）；返回变化的基金数 */
+  reclassifyFunds: () => number;
 
   // Actions - Transactions
   addTransaction: (tx: Transaction) => void;
@@ -126,6 +129,23 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   },
 
   getFundById: (id) => get().funds.find((f) => f.id === id),
+
+  reclassifyFunds: () => {
+    const { funds } = get();
+    let changed = 0;
+    const updated = funds.map((f) => {
+      const t = getFundTypeFromSearch('', f.name);
+      if (t !== f.type) {
+        changed++;
+        return { ...f, type: t };
+      }
+      return f;
+    });
+    if (changed === 0) return 0;
+    storage.saveFunds(updated);
+    set({ funds: updated });
+    return changed;
+  },
 
   // --- Transactions ---
   addTransaction: (tx) => {

@@ -6,10 +6,17 @@ import type { Platform } from '../types';
 
 
 export default function Settings() {
-  const { platforms, funds, settings, addPlatform, removePlatform, updateSettings, exportData, importData, resetNavHistory } = useStore();
+  const { platforms, funds, settings, addPlatform, removePlatform, updateSettings, exportData, importData, resetNavHistory, reclassifyFunds } = useStore();
   const [newPlatformName, setNewPlatformName] = useState('');
   const [resetTarget, setResetTarget] = useState<string | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleReclassify = () => {
+    const changed = reclassifyFunds();
+    message.success(
+      changed > 0 ? `已重新分类 ${changed} 只基金（按名称判断）` : '所有基金类型已正确，无需修改'
+    );
+  };
 
   const handleAddPlatform = () => {
     const name = newPlatformName.trim();
@@ -238,6 +245,10 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
               checked={settings.dcaAutoRecord}
               onChange={(checked) => updateSettings({ dcaAutoRecord: checked })}
             />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>按名称重新分类基金类型</span>
+            <Button size="small" onClick={handleReclassify}>重新分类</Button>
           </div>
         </Space>
       </Card>

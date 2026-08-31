@@ -57,7 +57,7 @@ export default function FundList() {
       id: item.code,
       name: item.name,
     });
-    setSelectedType(getFundTypeFromSearch(item.type));
+    setSelectedType(getFundTypeFromSearch(item.type, item.name));
     setSearchKeyword('');
     setSearchResults([]);
   };
@@ -283,7 +283,7 @@ export default function FundList() {
           {searchResults.length > 0 && (
             <Card size="small" style={{ marginTop: 8, maxHeight: 240, overflow: 'auto' }}>
               {searchResults.map((item) => {
-                const mappedType = getFundTypeFromSearch(item.type);
+                const mappedType = getFundTypeFromSearch(item.type, item.name);
                 return (
                   <div
                     key={item.code}
