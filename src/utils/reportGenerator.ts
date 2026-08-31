@@ -130,25 +130,25 @@ export function generateDailyReturns(
 
     // 各基金收益：每只基金今日末市值 − 昨日末市值 − 当日净投入
     // 没有"昨天"时：无法计算单基金收益（首日不算）
+    // 不再过滤 0 收益/无交易基金——保持与 generateMonthlyReturns / generateYearlyReturns 的
+    // perFund 拆分一致（验收清单：日/月/年三者合计自洽）
     const perFund = prevDate
-      ? funds
-          .map((fund) => {
-            const prevValue = calcPortfolioValueAtDate(prevDate, [fund], confirmed);
-            const currValue = calcPortfolioValueAtDate(currDate, [fund], confirmed);
-            const fundFlow = confirmed
-              .filter((t) => t.fundId === fund.id && t.date === currDate)
-              .reduce((sum, t) => {
-                if (t.type === 'buy') return sum + t.amount;
-                if (t.type === 'sell') return sum - (t.amount - t.fee);
-                return sum;
-              }, 0);
-            return {
-              fundId: fund.id,
-              fundName: fund.name,
-              returnAmount: currValue - prevValue - fundFlow,
-            };
-          })
-          .filter((f) => Math.abs(f.returnAmount) > 0.01 || confirmed.some((t) => t.fundId === f.fundId && t.date === currDate))
+      ? funds.map((fund) => {
+          const prevValue = calcPortfolioValueAtDate(prevDate, [fund], confirmed);
+          const currValue = calcPortfolioValueAtDate(currDate, [fund], confirmed);
+          const fundFlow = confirmed
+            .filter((t) => t.fundId === fund.id && t.date === currDate)
+            .reduce((sum, t) => {
+              if (t.type === 'buy') return sum + t.amount;
+              if (t.type === 'sell') return sum - (t.amount - t.fee);
+              return sum;
+            }, 0);
+          return {
+            fundId: fund.id,
+            fundName: fund.name,
+            returnAmount: currValue - prevValue - fundFlow,
+          };
+        })
       : [];
 
     result.push({ date: currDate, totalReturn, perFund });
