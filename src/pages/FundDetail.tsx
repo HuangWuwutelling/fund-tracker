@@ -86,7 +86,7 @@ export default function FundDetail() {
     () =>
       fund
         ? calcFundSummary(fund, transactions, navHistory, today())
-        : { shares: 0, cost: 0, marketValue: 0, totalReturn: 0, returnRate: 0, dailyPnl: null, latestNavDate: '', xirr: 0, dividend: 0 },
+        : { shares: 0, cost: 0, marketValue: 0, totalReturn: 0, returnRate: 0, dailyPnl: null, latestNavDate: '', isDailyPnlToday: false, xirr: 0, dividend: 0 },
     [fund, transactions, navHistory]
   );
   const fundTxs = useMemo(
@@ -384,25 +384,20 @@ export default function FundDetail() {
             <Tooltip
               title={
                 summary.dailyPnl === null
-                  ? '尚无净值数据'
-                  : summary.latestNavDate === today()
-                  ? '当日净值已发布'
-                  : `数据截至 ${summary.latestNavDate}`
+                  ? summary.latestNavDate
+                    ? `今日净值未发布（最新 ${summary.latestNavDate}，QDII 通常 T+2 延迟）`
+                    : '尚无净值数据'
+                  : '当日净值已发布'
               }
             >
               <Statistic
-                title={
-                  summary.latestNavDate && summary.latestNavDate !== today()
-                    ? `当日盈亏（更新中）`
-                    : '当日盈亏'
-                }
+                title="当日盈亏"
                 value={summary.dailyPnl ?? '—'}
                 precision={2}
-                prefix={summary.dailyPnl !== null && summary.latestNavDate !== today() ? '≈ ' : undefined}
                 valueStyle={{ color: summary.dailyPnl !== null ? pnlColor(summary.dailyPnl) : undefined }}
               />
-              {summary.latestNavDate && summary.latestNavDate !== today() && summary.dailyPnl !== null && (
-                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>数据截至 {summary.latestNavDate}</div>
+              {summary.dailyPnl === null && summary.latestNavDate && (
+                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>净值更新中（最新 {summary.latestNavDate}）</div>
               )}
             </Tooltip>
           </Card>

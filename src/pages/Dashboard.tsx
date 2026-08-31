@@ -27,37 +27,29 @@ export default function Dashboard() {
     const totalCost = summaries.reduce((sum, s) => sum + s.cost, 0);
     const totalReturn = totalValue - totalCost;
     const totalReturnRate = totalCost > 0 ? (totalReturn / totalCost) * 100 : 0;
-    // 当日盈亏：滚动更新——只要某只基金最新 NAV 已发布（不要求 = 今天），就把它纳入汇总。
-    // 数据日期不一致时用最新已发布日期作为 "数据截至"。完全没数据的基金不计入。
-    const todayStr = today();
+    // 当日盈亏：仅汇总"今日 NAV 已发布"的基金。QDII 等延迟基金当日 NAV 未发布，
+    // 单独列入 pending，不打包多日累计——与收益日历和业内通用口径一致。
     let totalDailyPnl: number | null = null;
-    let latestNavDate = '';
     let updatedCount = 0;
     let pendingCount = 0;
     for (const s of summaries) {
-      if (s.dailyPnl === null || !s.latestNavDate) {
+      if (s.isDailyPnlToday && s.dailyPnl !== null) {
+        totalDailyPnl = (totalDailyPnl ?? 0) + s.dailyPnl;
+        updatedCount++;
+      } else {
         pendingCount++;
-        continue;
       }
-      totalDailyPnl = (totalDailyPnl ?? 0) + s.dailyPnl;
-      if (!latestNavDate || s.latestNavDate > latestNavDate) {
-        latestNavDate = s.latestNavDate;
-      }
-      updatedCount++;
     }
-    // 全部都没数据 → 显示"—"
-    if (totalDailyPnl === null) latestNavDate = '';
-    // 全部都已发布到今天 → 数据完整；否则显示 "数据截至 X"
-    const isUpToDate = updatedCount > 0 && latestNavDate === todayStr && pendingCount === 0;
+    const isComplete = summaries.length > 0 && pendingCount === 0;
     return {
       totalValue,
       totalCost,
       totalReturn,
       totalReturnRate,
       totalDailyPnl,
-      dailyPnlLatestDate: latestNavDate,
+      dailyPnlUpdatedCount: updatedCount,
       dailyPnlPendingCount: pendingCount,
-      isDailyPnlUpToDate: isUpToDate,
+      isDailyPnlComplete: isComplete,
     };
   }, [summaries]);
 
@@ -154,18 +146,17 @@ export default function Dashboard() {
       width: 130,
       align: 'right' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
-      render: (v: number | null, record: typeof summaries[0]) => {
-        if (v === null) return '—';
-        const todayStr = today();
-        const upToDate = record.latestNavDate === todayStr;
-        return (
-          <div>
-            <span style={{ color: pnlColor(v) }}>{formatMoney(v)}</span>
-            {!upToDate && (
-              <div style={{ fontSize: 11, color: '#999' }}>截至 {record.latestNavDate}</div>
-            )}
-          </div>
-        );
+      render: (v: number | null) => {
+        if (v === null) {
+          // pnl 为 null：今日 NAV 未发布（QDII T+2 / 节假日 / 刷新失败）
+          return (
+            <div>
+              <span style={{ color: '#999' }}>—</span>
+              <div style={{ fontSize: 11, color: '#999' }}>净值更新中</div>
+            </div>
+          );
+        }
+        return <span style={{ color: pnlColor(v) }}>{formatMoney(v)}</span>;
       },
     },
   ];
@@ -218,31 +209,30 @@ export default function Dashboard() {
           <Card>
             <Tooltip
               title={
-                totals.isDailyPnlUpToDate
+                totals.isDailyPnlComplete
                   ? '当日净值已全部发布'
                   : totals.totalDailyPnl === null
-                  ? '尚无基金净值数据'
-                  : `数据截至 ${totals.dailyPnlLatestDate}，还有 ${totals.dailyPnlPendingCount} 只基金净值待发布（QDII 通常 T+2 延迟）`
+                  ? '今日尚无基金发布净值'
+                  : `${totals.dailyPnlUpdatedCount} 只基金已发布今日净值，${totals.dailyPnlPendingCount} 只净值待发布（QDII 通常 T+2 延迟）`
               }
             >
               <Statistic
                 title={
-                  totals.isDailyPnlUpToDate
+                  totals.isDailyPnlComplete
                     ? `当日盈亏（${today()}）`
                     : totals.totalDailyPnl === null
                     ? `当日盈亏（${today()}）`
-                    : `当日盈亏（更新中）`
+                    : `当日盈亏（${today()}，部分更新）`
                 }
                 value={totals.totalDailyPnl ?? '—'}
                 precision={2}
-                prefix={totals.totalDailyPnl !== null && !totals.isDailyPnlUpToDate ? '≈ ' : undefined}
                 valueStyle={{
                   color: totals.totalDailyPnl !== null ? pnlColor(totals.totalDailyPnl) : undefined,
                 }}
               />
-              {!totals.isDailyPnlUpToDate && totals.totalDailyPnl !== null && (
+              {!totals.isDailyPnlComplete && totals.totalDailyPnl !== null && (
                 <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
-                  数据截至 {totals.dailyPnlLatestDate}
+                  已更新 {totals.dailyPnlUpdatedCount} / {summaries.length} 只
                 </div>
               )}
             </Tooltip>

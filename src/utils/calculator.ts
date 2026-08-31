@@ -77,21 +77,28 @@ export function calcReturnRate(totalReturn: number, cost: number): number {
 }
 
 /**
- * 计算单只基金的当日盈亏（支持滚动更新——最新 NAV 不必等于今天）
- * 返回 { pnl, latestDate }：
+ * 计算单只基金的当日盈亏（严格按"今日"对齐）
+ * 返回 { pnl, latestDate, isToday }：
  *   - pnl = null：完全无 NAV 历史或不足 2 条
- *   - pnl = 数字：当日盈亏；latestDate 是这只基金最新可用 NAV 的日期，
- *     UI 据此显示"已更新(YYYY-MM-DD)"或"更新中(数据截至 YYYY-MM-DD)"
- * 这样多只基金 NAV 发布节奏不同时（如 QDII T+2 vs A 股 T+1），能滚动汇总
- * 已更新的那几只，避免被 1 只延迟基金拖累整体显示为 "—"
+ *   - pnl = 数字：当日盈亏；仅当这只基金今日 NAV 已发布（latest.date === today）才计入，
+ *     其他情况（QDII T+2 延迟 / 节假日 / 刷新失败）pnl = null，由 UI 显示"— 净值更新中"
+ *   - isToday = true：今日 NAV 已发布（正常显示）；false：今日 NAV 尚未发布
+ *
+ * 口径与天天基金/蚂蚁基金等业内通用一致：当日盈亏必须 = 今天，多日累计不打包。
+ * QDII 这类延迟基金单独标识"净值更新中"，避免把 8/23→8/26 的 3 天累计错误归到 8/31。
  */
-export function calcDailyPnl(shares: number, navHistory: NavRecord[]): { pnl: number | null; latestDate: string } {
-  if (navHistory.length < 2) return { pnl: null, latestDate: '' };
+export function calcDailyPnl(
+  shares: number,
+  navHistory: NavRecord[],
+  todayStr: string
+): { pnl: number | null; latestDate: string; isToday: boolean } {
+  if (navHistory.length < 2) return { pnl: null, latestDate: '', isToday: false };
   const sorted = [...navHistory].sort((a, b) => b.date.localeCompare(a.date));
   const latest = sorted[0]!;
   const prev = sorted[1];
-  if (!prev) return { pnl: null, latestDate: latest.date };
-  return { pnl: shares * (latest.nav - prev.nav), latestDate: latest.date };
+  if (!prev) return { pnl: null, latestDate: latest.date, isToday: latest.date === todayStr };
+  const isToday = latest.date === todayStr;
+  return { pnl: isToday ? shares * (latest.nav - prev.nav) : null, latestDate: latest.date, isToday };
 }
 
 /**
@@ -374,7 +381,7 @@ export function calcFundSummary(
   fund: Fund,
   transactions: Transaction[],
   navHistory: NavRecord[],
-  _todayStr: string
+  todayStr: string
 ) {
   const fundTransactions = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
   const shares = calcShares(fundTransactions);
@@ -382,9 +389,9 @@ export function calcFundSummary(
   const marketValue = calcMarketValue(shares, fund.currentNav);
   const totalReturn = calcReturn(marketValue, cost);
   const returnRate = calcReturnRate(totalReturn, cost);
-  const dailyPnlResult = calcDailyPnl(shares, navHistory);
+  const dailyPnlResult = calcDailyPnl(shares, navHistory, todayStr);
   const xirr = calcXIRR(fundTransactions, marketValue);
   const dividend = calcDividendTotal(fundTransactions);
 
-  return { shares, cost, marketValue, totalReturn, returnRate, dailyPnl: dailyPnlResult.pnl, latestNavDate: dailyPnlResult.latestDate, xirr, dividend };
+  return { shares, cost, marketValue, totalReturn, returnRate, dailyPnl: dailyPnlResult.pnl, latestNavDate: dailyPnlResult.latestDate, isDailyPnlToday: dailyPnlResult.isToday, xirr, dividend };
 }
