@@ -97,6 +97,15 @@ const PINGZHONG_GLOBALS = [
   'fS_name', 'fS_code', 'Data_netWorthTrend',
 ] as const;
 
+/** 检测 pingzhongdata API 新格式：部分基金返回 { y: 小整数, sc: "..." }，
+ *  sc 字段编码规则官方未公开且与基金类型相关，无法通用解码。
+ *  检测到任一记录含 sc 字段时，整只基金放弃更新（避免写入错 NAV）。
+ *  TODO 长期方案：换数据源或加 Cloudflare Worker 代理 api.fund.eastmoney.com/f10/lsjz（那个端点有 CORS）
+ */
+function isNewFormat(trend: Array<{ x: number; y: number; sc?: unknown }>): boolean {
+  return trend.some((item) => typeof item.sc === 'string');
+}
+
 function loadPingzhongScript(fundCode: string): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const script = document.createElement('script');
@@ -221,7 +230,15 @@ export async function fetchFundWithHistory(fundCode: string): Promise<{
     const code = data['fS_code'] as string;
     if (!name || !code) return null;
 
-    const trend = data['Data_netWorthTrend'] as Array<{ x: number; y: number }> | undefined;
+    const trend = data['Data_netWorthTrend'] as Array<{ x: number; y: number; sc?: unknown }> | undefined;
+    // 新格式检测：任何记录含 sc 字段则放弃更新整只基金
+    if (trend && isNewFormat(trend)) {
+      console.warn(
+        '[fundApi] pingzhongdata returned new NAV format (sc field) for',
+        code, '— skipping update to avoid writing incorrect NAV'
+      );
+      return null;
+    }
     const navHistory: NavRecord[] = (trend ?? []).map((item) => ({
       date: new Date(item.x).toISOString().slice(0, 10),
       nav: item.y,

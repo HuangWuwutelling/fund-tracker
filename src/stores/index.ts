@@ -48,6 +48,11 @@ interface FundTrackerState {
   // Actions - Nav
   updateNavHistory: (fundCode: string, records: NavRecord[]) => void;
   getNavHistory: (fundCode: string) => NavRecord[];
+  resetNavHistory: (fundCode?: string) => void;
+
+  // Actions - Refresh trigger (App.tsx subscribes to bump to re-run refreshAll)
+  refreshTrigger: number;
+  requestRefresh: () => void;
 
   // Actions - Init & Bulk
   loadFromStorage: () => void;
@@ -103,7 +108,8 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     storage.saveTransactions(transactions);
     const dcaPlans = get().dcaPlans.filter((p) => p.fundId !== id);
     storage.saveDcaPlans(dcaPlans);
-    localStorage.removeItem(`fund-tracker:nav:${id}`);
+    navHistoryCache.delete(id);
+    storage.removeNavHistory(id);
 
     // Regenerate today's snapshot to reflect the removal
     const newSnapshot = generateSnapshot(funds, transactions);
@@ -188,6 +194,24 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     const records = storage.getNavHistory(fundCode);
     navHistoryCache.set(fundCode, records);
     return records;
+  },
+
+  resetNavHistory: (fundCode) => {
+    if (fundCode) {
+      navHistoryCache.delete(fundCode);
+      storage.removeNavHistory(fundCode);
+    } else {
+      navHistoryCache.clear();
+      storage.removeAllNavHistory();
+    }
+    set((s) => ({ refreshTrigger: s.refreshTrigger + 1 }));
+  },
+
+  // --- Refresh trigger ---
+  refreshTrigger: 0,
+
+  requestRefresh: () => {
+    set((s) => ({ refreshTrigger: s.refreshTrigger + 1 }));
   },
 
   // --- Init & Bulk ---

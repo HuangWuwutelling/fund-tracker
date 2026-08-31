@@ -105,6 +105,19 @@ export function saveNavHistory(fundCode: string, records: NavRecord[]): void {
   setItem(`nav:${fundCode}`, records);
 }
 
+export function removeNavHistory(fundCode: string): void {
+  localStorage.removeItem(key(`nav:${fundCode}`));
+}
+
+export function removeAllNavHistory(): void {
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(`${PREFIX}:nav:`)) {
+      localStorage.removeItem(k);
+    }
+  }
+}
+
 // --- Export / Import ---
 interface ExportData {
   version: number;

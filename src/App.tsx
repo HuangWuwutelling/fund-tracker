@@ -25,7 +25,7 @@ import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 
 export default function App() {
-  const { settings, funds, loadFromStorage, updateFund, updateNavHistory, updateTransaction, addSnapshot } = useStore();
+  const { settings, funds, refreshTrigger, loadFromStorage, updateFund, updateNavHistory, updateTransaction, addSnapshot } = useStore();
 
   useEffect(() => {
     loadFromStorage();
@@ -91,8 +91,34 @@ export default function App() {
             navDate: result.estimate.navDate,
           });
 
+          // 增量合并净值历史：避免每次刷新都 JSON.stringify + 写 localStorage 全量历史
+          // - API 强制返回全量（pingzhongdata 无增量接口），但本地写入可以只追加尾部
+          // - 边界日期（localLatest）保留本地值，不覆盖——若 API 修正历史净值，
+          //   用户可在 Settings 里点"重置净值历史"强制全量刷新
           if (result.navHistory.length > 0) {
-            updateNavHistory(fund.id, result.navHistory);
+            const localHistory = useStore.getState().getNavHistory(fund.id);
+            const localLatest = localHistory[localHistory.length - 1]?.date;
+            const remoteLatest = result.navHistory[result.navHistory.length - 1]?.date;
+            if (remoteLatest === undefined) continue;
+
+            if (!localLatest) {
+              // 本地无历史（首次添加 / import 后被清空）→ 全量写
+              updateNavHistory(fund.id, result.navHistory);
+            } else if (localLatest === remoteLatest) {
+              // 尾部日期一致 → 跳过 navHistory 写入，只更新 Fund 字段（已上面完成）
+            } else if (localLatest < remoteLatest) {
+              // 远程有更新 → 只追加严格晚于 localLatest 的尾部
+              const tail = result.navHistory.filter((r) => r.date > localLatest);
+              if (tail.length > 0) {
+                updateNavHistory(fund.id, [...localHistory, ...tail]);
+              }
+            } else {
+              // localLatest > remoteLatest：API 缓存陈旧 → 信任本地，跳过 navHistory 写入
+              console.debug('[App] nav history remote is older than local for', fund.id, {
+                local: localLatest,
+                remote: remoteLatest,
+              });
+            }
           }
         }
       } catch (err) {
@@ -129,6 +155,23 @@ export default function App() {
       message.warning('净值刷新失败，请检查网络');
     });
   }, [settings.navAutoRefresh, funds.length, refreshAll]);
+
+  // Manual refresh trigger: Settings 的 "重置净值历史" 会调用 store.requestRefresh()
+  // 把 refreshTrigger 计数 +1，本 effect 借此触发一次全量刷新
+  // （refreshTrigger 初始为 0，跳过首次挂载——交给上面的自动刷新 effect 处理）
+  useEffect(() => {
+    if (refreshTrigger === 0) return;
+    if (funds.length === 0) return;
+    const myGen = refreshGenerationRef.current + 1;
+    refreshAll().then(() => {
+      if (refreshGenerationRef.current !== myGen) return;
+      message.success('净值已更新');
+    }).catch((err) => {
+      if (refreshGenerationRef.current !== myGen) return;
+      console.error('[App] refreshAll error:', err);
+      message.warning('净值刷新失败，请检查网络');
+    });
+  }, [refreshTrigger, funds.length, refreshAll]);
 
   return (
     <ConfigProvider

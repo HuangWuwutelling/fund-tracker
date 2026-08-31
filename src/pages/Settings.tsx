@@ -1,13 +1,14 @@
 import { useState, useRef } from 'react';
-import { Card, Table, Button, Input, Switch, Space, message, Popconfirm, Typography, Modal } from 'antd';
-import { PlusOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
+import { Card, Table, Button, Input, Switch, Space, message, Popconfirm, Typography, Modal, Select } from 'antd';
+import { PlusOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useStore } from '../stores';
 import type { Platform } from '../types';
 
 
 export default function Settings() {
-  const { platforms, funds, settings, addPlatform, removePlatform, updateSettings, exportData, importData } = useStore();
+  const { platforms, funds, settings, addPlatform, removePlatform, updateSettings, exportData, importData, resetNavHistory } = useStore();
   const [newPlatformName, setNewPlatformName] = useState('');
+  const [resetTarget, setResetTarget] = useState<string | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleAddPlatform = () => {
@@ -28,6 +29,55 @@ export default function Settings() {
     } else {
       message.success('平台已删除');
     }
+  };
+
+  // 清除指定基金的本地净值历史（不动 Fund/交易/快照）。
+  // 用于 API 修正历史净值但增量同步识别不出的场景；下次 refreshAll 会走"全量写"分支。
+  const handleResetOne = () => {
+    if (!resetTarget) return;
+    const fund = funds.find((f) => f.id === resetTarget);
+    const label = fund ? `${fund.name} (${fund.id})` : resetTarget;
+    Modal.confirm({
+      title: '确认清除该基金的净值历史？',
+      icon: <ExclamationCircleOutlined />,
+      content: (
+        <div>
+          <p>将删除本地缓存的 <b>{label}</b> 净值历史。</p>
+          <p>下次刷新净值时会重新拉取全量数据。</p>
+          <p style={{ color: '#cf1322' }}>此操作不可撤销。</p>
+        </div>
+      ),
+      okText: '确认清除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => {
+        resetNavHistory(resetTarget);
+        setResetTarget(undefined);
+        message.success(`已清除 ${label} 的净值历史`);
+      },
+    });
+  };
+
+  const handleResetAll = () => {
+    if (funds.length === 0) return;
+    Modal.confirm({
+      title: '确认清除全部基金的净值历史？',
+      icon: <ExclamationCircleOutlined />,
+      content: (
+        <div>
+          <p>将删除本地缓存的全部 <b>{funds.length}</b> 只基金的净值历史。</p>
+          <p>下次刷新净值时会重新拉取全量数据（耗时取决于基金数量）。</p>
+          <p style={{ color: '#cf1322' }}>此操作不可撤销。</p>
+        </div>
+      ),
+      okText: '确认清除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => {
+        resetNavHistory();
+        message.success('已清除全部净值历史');
+      },
+    });
   };
 
 /** 校验导入的备份 JSON 是否结构合法；返回 ok=true 或错误描述 */
@@ -177,6 +227,45 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
               checked={settings.navAutoRefresh}
               onChange={(checked) => updateSettings({ navAutoRefresh: checked })}
             />
+          </div>
+        </Space>
+      </Card>
+
+      <Card title="净值历史" style={{ marginBottom: 16 }}>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Typography.Text type="secondary">
+            若某只基金的净值历史异常（如基金公司发布净值修正但本地增量同步未识别），
+            可在此清除本地缓存，下次刷新净值时会重新拉取全量数据。
+          </Typography.Text>
+          <Space wrap>
+            <Select
+              placeholder={funds.length === 0 ? '暂无基金' : '选择要重置的基金'}
+              style={{ width: 280 }}
+              value={resetTarget}
+              onChange={setResetTarget}
+              disabled={funds.length === 0}
+              options={funds.map((f) => ({ label: `${f.name} (${f.id})`, value: f.id }))}
+              showSearch
+              optionFilterProp="label"
+            />
+            <Button
+              danger
+              icon={<ReloadOutlined />}
+              disabled={!resetTarget}
+              onClick={handleResetOne}
+            >
+              重置选中基金
+            </Button>
+          </Space>
+          <div>
+            <Button
+              danger
+              icon={<ReloadOutlined />}
+              disabled={funds.length === 0}
+              onClick={handleResetAll}
+            >
+              重置全部净值历史
+            </Button>
           </div>
         </Space>
       </Card>
