@@ -298,9 +298,12 @@ export function generateWeeklyReport(
       // Count actual trading days in this week from the fund's NAV history
       expected = countTradingDays(plan.fundId, weekStart, weekEnd);
     }
-    // 实际笔数：只统计"金额匹配 + 日期落在计划执行窗口内"的 buy 交易
-    // 否则手动买入会被错误地算作定投执行；与 DcaPlans.tsx 的统计保持一致
-    const planBuyTxs = onlyConfirmed(transactions).filter(
+    // 实际笔数：金额匹配 + 日期落在计划执行窗口内的 buy 交易（含 pending——定投自动生成的
+    // 待确认记录应立刻计入"定投执行"，否则周报/月报要等 T+1（QDII 还要 T+2）净值确认
+    // 后才显示数字，与累计投入口径不一致）。
+    // 手动买入也会被命中（同样满足"金额±¥1 + 窗口内"），但这是预期行为：
+    // 手动操作本身就是在执行计划，无需区分自动/手动来源。
+    const planBuyTxs = transactions.filter(
       (t) =>
         t.fundId === plan.fundId &&
         t.type === 'buy' &&
