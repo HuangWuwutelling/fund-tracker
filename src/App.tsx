@@ -29,6 +29,15 @@ export default function App() {
 
   useEffect(() => {
     loadFromStorage();
+    // 定投自动记录：用 getState() 读刚加载的最新 settings（渲染闭包里的还是默认值），
+    // 启用时把到期计划补成待确认买入。放在 refreshAll 之前，让刚生成的过去日期
+    // pending 记录能在同一次刷新里被 autoConfirmPending 确认。
+    if (useStore.getState().settings.dcaAutoRecord) {
+      const autoCreated = useStore.getState().autoRecordDcaPlans();
+      if (autoCreated > 0) {
+        message.success(`已按定投计划自动生成 ${autoCreated} 笔待确认买入，请到「交易记录」核对`);
+      }
+    }
   }, [loadFromStorage]);
 
   // Generation counter to bail out stale refreshAll calls when a newer one starts.

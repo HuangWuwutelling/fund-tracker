@@ -260,7 +260,17 @@ export default function Transactions() {
     { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => formatMoney(v) },
     { title: '份额', dataIndex: 'shares', key: 'shares', align: 'right' as const, render: (v: number) => v.toFixed(4) },
     { title: '净值', dataIndex: 'nav', key: 'nav', align: 'right' as const, render: (v: number) => v.toFixed(4) },
-    { title: '备注', dataIndex: 'note', key: 'note', render: (v: string) => v || '—' },
+    {
+      title: '备注',
+      dataIndex: 'note',
+      key: 'note',
+      render: (v: string, r: Transaction) => (
+        <Space size={4}>
+          {r.planId && <Tag color="blue">定投</Tag>}
+          <span>{v || '—'}</span>
+        </Space>
+      ),
+    },
     {
       title: '操作',
       key: 'actions',

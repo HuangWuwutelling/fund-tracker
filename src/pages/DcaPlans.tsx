@@ -21,7 +21,8 @@ export default function DcaPlans() {
   const [form] = Form.useForm();
 
   // DCA statistics: 一笔交易要算作某个计划的执行，必须同时满足：
-  //   1) 同基金、买入、已确认
+  //   1) 同基金、买入（pending 也算——定投自动生成的待确认记录应立刻计入累计投入，
+  //      净值发布后自动确认，不会长期停留在 pending）
   //   2) 金额匹配（±¥1）
   //   3) 落在该计划的预期执行窗口内（避免金额相同的非定投买入被误算）
   // 多个计划按 dcaPlans 顺序 claim，每笔交易只归属第一个匹配的 plan，避免重复计算。
@@ -39,7 +40,6 @@ export default function DcaPlans() {
         (t) =>
           t.fundId === plan.fundId &&
           t.type === 'buy' &&
-          t.status !== 'pending' &&
           !usedTxIds.has(t.id) &&
           Math.abs(t.amount - plan.amount) < 1 &&
           isInPlanWindow(plan, t.date)
@@ -213,7 +213,7 @@ export default function DcaPlans() {
               title={
                 stats.matchedTxs.length > 0 ? (
                   <div>
-                    <div>以下已确认买入交易被计入：</div>
+                    <div>以下买入交易被计入（含待确认）：</div>
                     {stats.matchedTxs.map((m, i) => (
                       <div key={i}>{m.fundName} · {m.date} · {formatMoney(m.amount)}</div>
                     ))}

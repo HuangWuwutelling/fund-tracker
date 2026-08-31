@@ -82,14 +82,16 @@ export function saveSnapshots(snapshots: DailySnapshot[]): void {
 }
 
 // --- Settings ---
-const DEFAULT_SETTINGS: Settings = {
+export const DEFAULT_SETTINGS: Settings = {
   theme: 'light',
   navAutoRefresh: true,
   reportFrequency: 'both',
+  dcaAutoRecord: true,
 };
 
 export function getSettings(): Settings {
-  return getItem<Settings>('settings', DEFAULT_SETTINGS);
+  // 合并默认值：老数据缺新字段（如 dcaAutoRecord）时自动补齐，不依赖 storage 版本迁移
+  return { ...DEFAULT_SETTINGS, ...getItem<Settings>('settings', DEFAULT_SETTINGS) };
 }
 
 export function saveSettings(settings: Settings): void {

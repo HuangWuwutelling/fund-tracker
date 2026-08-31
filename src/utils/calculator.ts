@@ -294,6 +294,52 @@ export function isDcaPlanDueToday(plan: DcaPlan, today: Date = new Date()): bool
 }
 
 /**
+ * 生成某个定投计划从 startDate 到 endDate（含）之间所有"应执行日"。
+ * 语义与 isDcaPlanDueToday 对齐：跳过周末；daily 每个工作日；
+ * weekly 按 dayOfWeek；biweekly 额外校验与 startDate 所在周奇偶一致；
+ * monthly 按 dayOfMonth（月末 clamp，与 isInPlanWindow 一致）。
+ * 用于"定投自动生成交易记录"：把到期日批量补成待确认买入。
+ */
+export function getPlanDueDates(plan: DcaPlan, endDate: string | Date): string[] {
+  const end = dayjs(endDate).format('YYYY-MM-DD');
+  const start = dayjs(plan.startDate).format('YYYY-MM-DD');
+  if (end < start) return [];
+
+  const dates: string[] = [];
+  let cursor = dayjs(start);
+  while (cursor.format('YYYY-MM-DD') <= end) {
+    const isWeekend = cursor.day() === 0 || cursor.day() === 6;
+    let due = false;
+
+    switch (plan.frequency) {
+      case 'daily':
+        due = !isWeekend;
+        break;
+      case 'weekly':
+        due = !isWeekend && plan.dayOfWeek !== undefined && cursor.day() === plan.dayOfWeek;
+        break;
+      case 'biweekly': {
+        if (isWeekend || plan.dayOfWeek === undefined || cursor.day() !== plan.dayOfWeek) break;
+        const startWeekStart = dayjs(start).startOf('week');
+        const weekDiff = Math.round(cursor.startOf('week').diff(startWeekStart, 'day') / 7);
+        due = weekDiff >= 0 && weekDiff % 2 === 0;
+        break;
+      }
+      case 'monthly': {
+        if (isWeekend || plan.dayOfMonth === undefined) break;
+        const target = Math.min(plan.dayOfMonth, cursor.daysInMonth());
+        due = cursor.date() === target;
+        break;
+      }
+    }
+
+    if (due) dates.push(cursor.format('YYYY-MM-DD'));
+    cursor = cursor.add(1, 'day');
+  }
+  return dates;
+}
+
+/**
  * 计算当日投入金额（交易记录 + 定投计划预期）
  * - 交易记录：今天所有买入的 amount 之和（含 pending 和 confirmed）
  * - 定投计划：今天应执行的计划 amount 之和（去重：若当日已有该基金的买入交易，则该计划不重复计入）

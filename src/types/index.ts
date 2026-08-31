@@ -28,6 +28,8 @@ export interface Transaction {
   shares: number;
   nav: number;
   note?: string;
+  /** 若该交易由定投计划自动生成，记录来源计划 id（便于去重/打标签） */
+  planId?: string;
   status?: 'pending' | 'confirmed';
 }
 
@@ -52,6 +54,8 @@ export interface Settings {
   theme: 'light' | 'dark';
   navAutoRefresh: boolean;
   reportFrequency: 'weekly' | 'monthly' | 'both';
+  /** 定投计划自动生成交易记录（打开页面时把到期计划补成待确认买入） */
+  dcaAutoRecord: boolean;
 }
 
 export const FUND_TYPE_LABELS: Record<Fund['type'], string> = {

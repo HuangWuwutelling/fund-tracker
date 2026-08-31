@@ -159,8 +159,12 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
         okButtonProps: { danger: true },
         cancelText: '取消',
         onOk: () => {
-          importData(data as Parameters<typeof importData>[0]);
-          message.success('数据导入成功');
+          const autoCreated = importData(data as Parameters<typeof importData>[0]);
+          message.success(
+            autoCreated > 0
+              ? `数据导入成功，已按定投计划自动生成 ${autoCreated} 笔待确认买入`
+              : '数据导入成功'
+          );
         },
       });
     };
@@ -226,6 +230,13 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
             <Switch
               checked={settings.navAutoRefresh}
               onChange={(checked) => updateSettings({ navAutoRefresh: checked })}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>定投计划自动生成交易记录</span>
+            <Switch
+              checked={settings.dcaAutoRecord}
+              onChange={(checked) => updateSettings({ dcaAutoRecord: checked })}
             />
           </div>
         </Space>
