@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Descriptions, Row, Col, Statistic, Table, Button, Tag, Modal, Form, Input, Select, DatePicker, InputNumber, message, Space, Radio, Checkbox, Popconfirm, Alert } from 'antd';
+import { Card, Descriptions, Row, Col, Statistic, Table, Button, Tag, Modal, Form, Input, Select, DatePicker, InputNumber, message, Space, Radio, Checkbox, Popconfirm, Alert, Tooltip } from 'antd';
 import { ArrowLeftOutlined, PlusOutlined, ImportOutlined } from '@ant-design/icons';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts/core';
@@ -86,7 +86,7 @@ export default function FundDetail() {
     () =>
       fund
         ? calcFundSummary(fund, transactions, navHistory, today())
-        : { shares: 0, cost: 0, marketValue: 0, totalReturn: 0, returnRate: 0, dailyPnl: null, xirr: 0, dividend: 0 },
+        : { shares: 0, cost: 0, marketValue: 0, totalReturn: 0, returnRate: 0, dailyPnl: null, latestNavDate: '', xirr: 0, dividend: 0 },
     [fund, transactions, navHistory]
   );
   const fundTxs = useMemo(
@@ -381,12 +381,30 @@ export default function FundDetail() {
         </Col>
         <Col xs={12} sm={12} md={8}>
           <Card>
-            <Statistic
-              title="当日盈亏"
-              value={summary.dailyPnl ?? '—'}
-              precision={2}
-              valueStyle={{ color: summary.dailyPnl !== null ? pnlColor(summary.dailyPnl) : undefined }}
-            />
+            <Tooltip
+              title={
+                summary.dailyPnl === null
+                  ? '尚无净值数据'
+                  : summary.latestNavDate === today()
+                  ? '当日净值已发布'
+                  : `数据截至 ${summary.latestNavDate}`
+              }
+            >
+              <Statistic
+                title={
+                  summary.latestNavDate && summary.latestNavDate !== today()
+                    ? `当日盈亏（更新中）`
+                    : '当日盈亏'
+                }
+                value={summary.dailyPnl ?? '—'}
+                precision={2}
+                prefix={summary.dailyPnl !== null && summary.latestNavDate !== today() ? '≈ ' : undefined}
+                valueStyle={{ color: summary.dailyPnl !== null ? pnlColor(summary.dailyPnl) : undefined }}
+              />
+              {summary.latestNavDate && summary.latestNavDate !== today() && summary.dailyPnl !== null && (
+                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>数据截至 {summary.latestNavDate}</div>
+              )}
+            </Tooltip>
           </Card>
         </Col>
         <Col xs={12} sm={12} md={8}>

@@ -77,20 +77,21 @@ export function calcReturnRate(totalReturn: number, cost: number): number {
 }
 
 /**
- * 计算当日盈亏
- * 用今天日期找 NAV，找不到（非交易日）就返回 null
- * - 非交易日（周末/节假日）：返回 null，让 UI 显示"—"而非虚假的盈亏
- * - 交易日：用今日 NAV − 昨日 NAV
+ * 计算单只基金的当日盈亏（支持滚动更新——最新 NAV 不必等于今天）
+ * 返回 { pnl, latestDate }：
+ *   - pnl = null：完全无 NAV 历史或不足 2 条
+ *   - pnl = 数字：当日盈亏；latestDate 是这只基金最新可用 NAV 的日期，
+ *     UI 据此显示"已更新(YYYY-MM-DD)"或"更新中(数据截至 YYYY-MM-DD)"
+ * 这样多只基金 NAV 发布节奏不同时（如 QDII T+2 vs A 股 T+1），能滚动汇总
+ * 已更新的那几只，避免被 1 只延迟基金拖累整体显示为 "—"
  */
-export function calcDailyPnl(shares: number, navHistory: NavRecord[], todayStr: string): number | null {
-  if (navHistory.length < 2) return null;
+export function calcDailyPnl(shares: number, navHistory: NavRecord[]): { pnl: number | null; latestDate: string } {
+  if (navHistory.length < 2) return { pnl: null, latestDate: '' };
   const sorted = [...navHistory].sort((a, b) => b.date.localeCompare(a.date));
-  // 今天必须是交易日才有"当日盈亏"
-  if (sorted[0]?.date !== todayStr) return null;
-  const today = sorted[0]!;
-  const yesterday = sorted[1];
-  if (!yesterday) return null;
-  return shares * (today.nav - yesterday.nav);
+  const latest = sorted[0]!;
+  const prev = sorted[1];
+  if (!prev) return { pnl: null, latestDate: latest.date };
+  return { pnl: shares * (latest.nav - prev.nav), latestDate: latest.date };
 }
 
 /**
@@ -373,7 +374,7 @@ export function calcFundSummary(
   fund: Fund,
   transactions: Transaction[],
   navHistory: NavRecord[],
-  todayStr: string
+  _todayStr: string
 ) {
   const fundTransactions = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
   const shares = calcShares(fundTransactions);
@@ -381,9 +382,9 @@ export function calcFundSummary(
   const marketValue = calcMarketValue(shares, fund.currentNav);
   const totalReturn = calcReturn(marketValue, cost);
   const returnRate = calcReturnRate(totalReturn, cost);
-  const dailyPnl = calcDailyPnl(shares, navHistory, todayStr);
+  const dailyPnlResult = calcDailyPnl(shares, navHistory);
   const xirr = calcXIRR(fundTransactions, marketValue);
   const dividend = calcDividendTotal(fundTransactions);
 
-  return { shares, cost, marketValue, totalReturn, returnRate, dailyPnl, xirr, dividend };
+  return { shares, cost, marketValue, totalReturn, returnRate, dailyPnl: dailyPnlResult.pnl, latestNavDate: dailyPnlResult.latestDate, xirr, dividend };
 }
