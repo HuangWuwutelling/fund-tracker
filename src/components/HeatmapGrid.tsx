@@ -9,6 +9,10 @@ export interface HeatmapCell {
   label?: string;
   /** 透明度 0~1，可选，省略则按 |value|/maxAbsValue 自动计算 */
   intensity?: number;
+  /** 强调样式；'today' → 1.5px solid #1677ff 边框（与选中态区分） */
+  accent?: 'today';
+  /** 暗淡样式：单元格 opacity 0.3 + 副文本用浅色（用于月历里的"非本月"格子） */
+  dim?: boolean;
 }
 
 export interface HeatmapGridProps {
@@ -32,8 +36,9 @@ const DEFAULT_COLUMNS = 7;
  * 通用红绿热力格（日 / 月 / 年 三类粒度共用）
  * - value > 0 红（rgba(255,77,79,*)）、value < 0 绿（rgba(82,196,26,*)）、无数据灰
  * - 透明度 = 0.12 + intensity * 0.55，intensity 由 |value|/maxAbsValue 算得（0~1）
- * - 选中态边框：2px solid #1677ff
- * - 今日边框：1.5px solid #1677ff（由调用方通过 label 或 formatTooltip 区分；本组件不感知）
+ * - 选中态边框：2px solid #1677ff（最高优先级）
+ * - 今日边框（cell.accent === 'today'）：1.5px solid #1677ff
+ * - 暗淡态（cell.dim === true）：opacity 0.3 + 副文本用 #bbb（用于月历非本月格子）
  */
 export default function HeatmapGrid({
   cells,
@@ -92,6 +97,12 @@ export default function HeatmapGrid({
             else bg = '#f0f0f0';
           }
           const isSelected = selectedKey === cell.key;
+          // 边框优先级 selected > today > default
+          const border = isSelected
+            ? '2px solid #1677ff'
+            : cell.accent === 'today'
+            ? '1.5px solid #1677ff'
+            : '1px solid #e8e8e8';
           const tooltipText = formatTooltip
             ? formatTooltip(cell)
             : `${cell.key}: ${cell.value.toFixed(0)}`;
@@ -103,9 +114,10 @@ export default function HeatmapGrid({
                   minHeight: 84,
                   padding: 8,
                   background: bg,
-                  border: isSelected ? '2px solid #1677ff' : '1px solid #e8e8e8',
+                  border,
                   borderRadius: 6,
                   cursor: onCellClick ? 'pointer' : 'default',
+                  opacity: cell.dim ? 0.3 : 1,
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
@@ -120,7 +132,13 @@ export default function HeatmapGrid({
                 }}
               >
                 {cell.label !== undefined && (
-                  <div style={{ fontSize: 13, color: '#666', alignSelf: 'flex-start' }}>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      color: cell.dim ? '#bbb' : '#666',
+                      alignSelf: 'flex-start',
+                    }}
+                  >
                     {cell.label}
                   </div>
                 )}

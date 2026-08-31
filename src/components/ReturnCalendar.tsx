@@ -101,6 +101,7 @@ function DayView({
     const totalCells = gridEnd.diff(gridStart, 'day') + 1;
 
     const out: HeatmapCell[] = [];
+    const todayStr = dayjs().format('YYYY-MM-DD');
     for (let i = 0; i < totalCells; i++) {
       const d = gridStart.add(i, 'day');
       const date = d.format('YYYY-MM-DD');
@@ -108,8 +109,10 @@ function DayView({
       const inMonth = d.format('YYYY-MM') === viewMonth;
       out.push({
         key: date,
-        label: inMonth ? String(d.date()) : undefined,
+        label: String(d.date()),
         value: data?.totalReturn ?? 0,
+        dim: !inMonth,
+        accent: date === todayStr ? 'today' : undefined,
       });
     }
     return out;
