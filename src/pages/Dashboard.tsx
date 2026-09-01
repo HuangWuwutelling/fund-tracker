@@ -213,7 +213,7 @@ export default function Dashboard() {
                   ? '当日净值已全部发布'
                   : totals.totalDailyPnl === null
                   ? '今日尚无基金发布净值'
-                  : `${totals.dailyPnlUpdatedCount} 只基金已发布今日净值，${totals.dailyPnlPendingCount} 只净值待发布（QDII 通常 T+2 延迟）`
+                  : `${totals.dailyPnlUpdatedCount} 只基金已发布今日净值，${totals.dailyPnlPendingCount} 只净值待发布（QDII 通常 T+2 延迟）。运行中会自动刷新，无需手动操作`
               }
             >
               <Statistic

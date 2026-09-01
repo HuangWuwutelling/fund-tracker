@@ -233,7 +233,7 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
             />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>自动刷新净值（打开页面时）</span>
+            <span>自动刷新净值（打开/运行中；晚间 NAV 发布后会自动拉取）</span>
             <Switch
               checked={settings.navAutoRefresh}
               onChange={(checked) => updateSettings({ navAutoRefresh: checked })}
