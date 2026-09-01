@@ -13,6 +13,11 @@ export interface HeatmapCell {
   accent?: 'today';
   /** 暗淡样式：单元格 opacity 0.3 + 副文本用浅色（用于月历里的"非本月"格子） */
   dim?: boolean;
+  /**
+   * 待更新样式：用于"今日 NAV 未完整发布"的格子——灰底 + 主数字显示为 "—"
+   * 优先级高于 accent/dim（但低于 selected 边框）
+   */
+  pending?: boolean;
 }
 
 export interface HeatmapGridProps {
@@ -39,6 +44,7 @@ const DEFAULT_COLUMNS = 7;
  * - 选中态边框：2px solid #1677ff（最高优先级）
  * - 今日边框（cell.accent === 'today'）：1.5px solid #1677ff
  * - 暗淡态（cell.dim === true）：opacity 0.3 + 副文本用 #bbb（用于月历非本月格子）
+ * - 待更新态（cell.pending === true）：淡灰底 + 主数字显示 "—"（用于今日 NAV 未发布）
  */
 export default function HeatmapGrid({
   cells,
@@ -86,7 +92,10 @@ export default function HeatmapGrid({
       >
         {cells.map((cell) => {
           let bg = '#fafafa';
-          if (cell.value !== 0 || cell.intensity !== undefined) {
+          if (cell.pending) {
+            // 净值未发布：淡灰底，跳过红绿热力配色
+            bg = '#f0f0f0';
+          } else if (cell.value !== 0 || cell.intensity !== undefined) {
             const intensity =
               cell.intensity ??
               (maxAbsValue > 0 ? Math.min(Math.abs(cell.value) / maxAbsValue, 1) : 0);
@@ -135,7 +144,7 @@ export default function HeatmapGrid({
                   <div
                     style={{
                       fontSize: 13,
-                      color: cell.dim ? '#bbb' : '#666',
+                      color: cell.dim || cell.pending ? '#bbb' : '#666',
                       alignSelf: 'flex-start',
                     }}
                   >
@@ -146,18 +155,18 @@ export default function HeatmapGrid({
                   style={{
                     fontSize: 16,
                     fontWeight: 600,
-                    color:
-                      cell.value > 0
-                        ? '#a8071a'
-                        : cell.value < 0
-                        ? '#237804'
-                        : '#666',
+                    color: cell.pending
+                      ? '#bbb'
+                      : cell.value > 0
+                      ? '#a8071a'
+                      : cell.value < 0
+                      ? '#237804'
+                      : '#666',
                     lineHeight: 1.2,
                     marginTop: 4,
                   }}
                 >
-                  {cell.value > 0 ? '+' : ''}
-                  {cell.value.toFixed(0)}
+                  {cell.pending ? '—' : `${cell.value > 0 ? '+' : ''}${cell.value.toFixed(0)}`}
                 </div>
               </div>
             </Tooltip>

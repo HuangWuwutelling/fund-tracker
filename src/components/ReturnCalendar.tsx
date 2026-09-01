@@ -110,9 +110,11 @@ function DayView({
       out.push({
         key: date,
         label: String(d.date()),
-        value: data?.totalReturn ?? 0,
+        // pending 时强制传 0，避免红绿热力上色（HeatmapGrid 内部用 pending 短路）
+        value: data?.isPending ? 0 : (data?.totalReturn ?? 0),
         dim: !inMonth,
         accent: date === todayStr ? 'today' : undefined,
+        pending: data?.isPending,
       });
     }
     return out;
@@ -157,16 +159,26 @@ function DayView({
         selectedKey={selectedKey}
         onCellClick={onSelect}
         formatTooltip={(c) =>
-          c.value === 0 ? c.key : `${c.key}: ${formatMoney(c.value)}`
+          c.pending
+            ? `${c.key}：净值更新中`
+            : c.value === 0
+            ? c.key
+            : `${c.key}: ${formatMoney(c.value)}`
         }
       />
 
       {selected && (
-        <PeriodDetail
-          dateLabel={selected.date}
-          total={selected.totalReturn}
-          perFund={selected.perFund}
-        />
+        selected.isPending ? (
+          <div style={{ marginTop: 16, padding: 12, background: '#fafafa', borderRadius: 6, color: '#999', fontSize: 13 }}>
+            {selected.date}：净值更新中（QDII 通常 T+2 延迟，或当日 NAV 尚未发布）
+          </div>
+        ) : (
+          <PeriodDetail
+            dateLabel={selected.date}
+            total={selected.totalReturn}
+            perFund={selected.perFund}
+          />
+        )
       )}
     </>
   );

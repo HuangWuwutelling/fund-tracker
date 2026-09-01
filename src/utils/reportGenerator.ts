@@ -2,6 +2,7 @@ import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform } from '../typ
 import { calcShares, onlyConfirmed, isInPlanWindow } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
 import { countTradingDays, lookupNavForDate } from './navLookup';
+import { today } from './formatter';
 import dayjs from 'dayjs';
 
 export interface FundPerformance {
@@ -86,6 +87,33 @@ export interface DailyReturn {
   totalReturn: number;
   /** 各基金贡献的收益 */
   perFund: { fundId: string; fundName: string; returnAmount: number }[];
+  /**
+   * 今日 NAV 未完全发布（如 QDII T+2 / 节假日 / 尚未刷新）时为 true。
+   * 此时 totalReturn=0、perFund 全为 0；UI 用灰格 + "净值更新中" 提示。
+   * 与 Dashboard 顶部 / 持仓列表的当日盈亏口径保持严格一致。
+   */
+  isPending?: boolean;
+}
+
+/**
+ * 判断"今日"是否所有持有基金的 NAV 都已发布。
+ * 任一有正份额的基金，其 navDate !== today 即视为不完整（QDII T+2 / 节假日 / 尚未刷新）。
+ * 历史日期（< today）走 fallback 是合理的，不需要 strict。
+ */
+function isTodayIncomplete(
+  funds: Fund[],
+  confirmed: Transaction[],
+  todayStr: string
+): boolean {
+  for (const fund of funds) {
+    const shares = calcShares(
+      confirmed.filter((t) => t.fundId === fund.id && t.date <= todayStr)
+    );
+    if (shares <= 0) continue; // 未持仓，不需 NAV
+    const nav = lookupNavForDate(fund.id, todayStr);
+    if (!nav || nav.navDate !== todayStr) return true;
+  }
+  return false;
 }
 
 /**
@@ -93,6 +121,8 @@ export interface DailyReturn {
  * - 不依赖 snapshot：用 calcPortfolioValueAtDate 按日期算持仓市值，避免"snapshot 不含当天买入"的 bug
  * - 只有 prev 存在时才计算收益（第一个日期没有基线）
  * - perFund 用 "当天每只基金期末市值 − 期初市值 − 期内净投入" 推算
+ * - 今日（最新 snapshot 日期 = today）若任一持有基金 NAV 未发布，标 isPending=true，
+ *   totalReturn/perFund 全部置 0，与 Dashboard 当日盈亏口径一致
  */
 export function generateDailyReturns(
   funds: Fund[],
@@ -105,11 +135,18 @@ export function generateDailyReturns(
 
   // 一次性过滤 confirmed，避免每个循环迭代重复 filter
   const confirmed = onlyConfirmed(transactions);
+  const todayStr = today();
+  const latestDate = sorted[sorted.length - 1]!.date;
+  // "今日"严格判定：必须是最新 snapshot 日期 + 等于 today 才走 strict 校验
+  const todayIsLatest = latestDate === todayStr;
+  const todayIncomplete = todayIsLatest && isTodayIncomplete(funds, confirmed, todayStr);
 
   const result: DailyReturn[] = [];
   for (let i = 0; i < sorted.length; i++) {
     const currDate = sorted[i]!.date;
     const prevDate = i > 0 ? sorted[i - 1]!.date : null;
+    const isToday = currDate === todayStr;
+    const isPending = isToday && todayIncomplete;
 
     // 当天内所有 confirmed buy/sell 净额（用来排除本金影响）
     const netFlow = confirmed
@@ -122,19 +159,22 @@ export function generateDailyReturns(
 
     // 总收益：curr 当天末持仓市值（含今天的买入）− prev 当天末持仓市值 − 当天净投入
     // 没有"昨天"的第一个日期：无法计算收益（避免把首日买入金额当成负收益）
-    const totalReturn = prevDate
-      ? calcPortfolioValueAtDate(currDate, funds, confirmed) -
-        calcPortfolioValueAtDate(prevDate, funds, confirmed) -
-        netFlow
-      : 0;
+    // 今日 NAV 未完整发布：归零并标 pending（与 Dashboard 当日盈亏口径一致）
+    const totalReturn =
+      !prevDate || isPending
+        ? 0
+        : calcPortfolioValueAtDate(currDate, funds, confirmed) -
+          calcPortfolioValueAtDate(prevDate, funds, confirmed) -
+          netFlow;
 
     // 各基金收益：每只基金今日末市值 − 昨日末市值 − 当日净投入
-    // 没有"昨天"时：无法计算单基金收益（首日不算）
+    // 没有"昨天"或今日 pending 时：returnAmount 全部置 0
     // 不再过滤 0 收益/无交易基金——保持与 generateMonthlyReturns / generateYearlyReturns 的
     // perFund 拆分一致（验收清单：日/月/年三者合计自洽）
-    const perFund = prevDate
-      ? funds.map((fund) => {
-          const prevValue = calcPortfolioValueAtDate(prevDate, [fund], confirmed);
+    const perFund = !prevDate || isPending
+      ? funds.map((fund) => ({ fundId: fund.id, fundName: fund.name, returnAmount: 0 }))
+      : funds.map((fund) => {
+          const prevValue = calcPortfolioValueAtDate(prevDate!, [fund], confirmed);
           const currValue = calcPortfolioValueAtDate(currDate, [fund], confirmed);
           const fundFlow = confirmed
             .filter((t) => t.fundId === fund.id && t.date === currDate)
@@ -148,10 +188,9 @@ export function generateDailyReturns(
             fundName: fund.name,
             returnAmount: currValue - prevValue - fundFlow,
           };
-        })
-      : [];
+        });
 
-    result.push({ date: currDate, totalReturn, perFund });
+    result.push({ date: currDate, totalReturn, perFund, isPending });
   }
   return result;
 }
