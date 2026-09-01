@@ -117,10 +117,45 @@ function isTodayIncomplete(
 }
 
 /**
+ * 单只基金在 (prevDate, currDate) 区间内的"新 NAV 收益"：
+ * - 仅当两次 lookup 的 navDate 不同（即两次 snapshot 之间该基金有新的 NAV 加入本地历史）
+ *   才计入收益，否则视为 0——避免 QDII 等 T+2 延迟基金在节假日/周末 fallback 到同一 NAV 导致"两次都 0"
+ * - 收益 = 份额 × (新 NAV − 旧 NAV) − 当日净投入
+ *   这里的"份额"是截至 currDate 的持仓份额（含当天买入）
+ */
+function fundReturnBetweenSnapshots(
+  fund: Fund,
+  prevDate: string,
+  currDate: string,
+  confirmed: Transaction[]
+): number {
+  const txs = confirmed.filter((t) => t.fundId === fund.id && t.date <= currDate);
+  const shares = calcShares(txs);
+  if (shares <= 0) return 0;
+
+  const prevNav = lookupNavForDate(fund.id, prevDate);
+  const currNav = lookupNavForDate(fund.id, currDate);
+  if (!prevNav || !currNav) return 0;
+  // 没新 NAV（fallback 同值）→ 该基金当日收益视为 0
+  if (prevNav.navDate === currNav.navDate) return 0;
+
+  const fundFlow = confirmed
+    .filter((t) => t.fundId === fund.id && t.date === currDate)
+    .reduce((sum, t) => {
+      if (t.type === 'buy') return sum + t.amount;
+      if (t.type === 'sell') return sum - (t.amount - t.fee);
+      return sum;
+    }, 0);
+
+  return shares * (currNav.nav - prevNav.nav) - fundFlow;
+}
+
+/**
  * 生成每日收益明细（按日期升序）
- * - 不依赖 snapshot：用 calcPortfolioValueAtDate 按日期算持仓市值，避免"snapshot 不含当天买入"的 bug
+ * - 不依赖 snapshot 的 totalValue：用 NAV 历史 + 交易算持仓市值
  * - 只有 prev 存在时才计算收益（第一个日期没有基线）
- * - perFund 用 "当天每只基金期末市值 − 期初市值 − 期内净投入" 推算
+ * - **收益归属依据**：单只基金在 (prevDate, currDate) 之间有"新 NAV"才计入——避免 QDII 等
+ *   T+2 延迟基金 fallback 到同一历史 NAV 导致收益一直显示 0
  * - 今日（最新 snapshot 日期 = today）若任一持有基金 NAV 未发布，标 isPending=true，
  *   totalReturn/perFund 全部置 0，与 Dashboard 当日盈亏口径一致
  */
@@ -148,47 +183,17 @@ export function generateDailyReturns(
     const isToday = currDate === todayStr;
     const isPending = isToday && todayIncomplete;
 
-    // 当天内所有 confirmed buy/sell 净额（用来排除本金影响）
-    const netFlow = confirmed
-      .filter((t) => t.date === currDate)
-      .reduce((sum, t) => {
-        if (t.type === 'buy') return sum + t.amount;
-        if (t.type === 'sell') return sum - (t.amount - t.fee);
-        return sum;
-      }, 0);
-
-    // 总收益：curr 当天末持仓市值（含今天的买入）− prev 当天末持仓市值 − 当天净投入
-    // 没有"昨天"的第一个日期：无法计算收益（避免把首日买入金额当成负收益）
-    // 今日 NAV 未完整发布：归零并标 pending（与 Dashboard 当日盈亏口径一致）
-    const totalReturn =
-      !prevDate || isPending
-        ? 0
-        : calcPortfolioValueAtDate(currDate, funds, confirmed) -
-          calcPortfolioValueAtDate(prevDate, funds, confirmed) -
-          netFlow;
-
-    // 各基金收益：每只基金今日末市值 − 昨日末市值 − 当日净投入
-    // 没有"昨天"或今日 pending 时：returnAmount 全部置 0
-    // 不再过滤 0 收益/无交易基金——保持与 generateMonthlyReturns / generateYearlyReturns 的
-    // perFund 拆分一致（验收清单：日/月/年三者合计自洽）
+    // 没有 prev snapshot 或今日 pending：所有基金收益归零
     const perFund = !prevDate || isPending
       ? funds.map((fund) => ({ fundId: fund.id, fundName: fund.name, returnAmount: 0 }))
-      : funds.map((fund) => {
-          const prevValue = calcPortfolioValueAtDate(prevDate!, [fund], confirmed);
-          const currValue = calcPortfolioValueAtDate(currDate, [fund], confirmed);
-          const fundFlow = confirmed
-            .filter((t) => t.fundId === fund.id && t.date === currDate)
-            .reduce((sum, t) => {
-              if (t.type === 'buy') return sum + t.amount;
-              if (t.type === 'sell') return sum - (t.amount - t.fee);
-              return sum;
-            }, 0);
-          return {
-            fundId: fund.id,
-            fundName: fund.name,
-            returnAmount: currValue - prevValue - fundFlow,
-          };
-        });
+      : funds.map((fund) => ({
+          fundId: fund.id,
+          fundName: fund.name,
+          returnAmount: fundReturnBetweenSnapshots(fund, prevDate, currDate, confirmed),
+        }));
+
+    // 总收益 = 各基金当日收益之和（fundFlow 已在每个 fund 的 returnAmount 里扣除）
+    const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
 
     result.push({ date: currDate, totalReturn, perFund, isPending });
   }
