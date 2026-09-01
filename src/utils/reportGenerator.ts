@@ -89,9 +89,12 @@ export interface DailyReturn {
   /** 各基金贡献的收益 */
   perFund: { fundId: string; fundName: string; returnAmount: number }[];
   /**
-   * 今日 NAV 未完全发布（如 QDII T+2 / 节假日 / 尚未刷新）时为 true。
-   * 此时 totalReturn=0、perFund 全为 0；UI 用灰格 + "净值更新中" 提示。
-   * 与 Dashboard 顶部 / 持仓列表的当日盈亏口径保持严格一致。
+   * 仅对"今日"生效。今天**任何一个**基金都还没归属到今天时为 true（如 QDII
+   * 的 T+2 NAV 尚未发布、或打开 app 时所有基金今日 NAV 都还没刷新）：
+   * totalReturn=0、perFund 全为 0，UI 用灰格 + "净值更新中" 提示。
+   * 今天只要有 ≥1 只基金已归属（部分或全部刷新成功）即为 false；
+   * 未归属的基金对 totalReturn 贡献 0，已归属的正常汇总——与 Dashboard
+   * 当日盈亏"有多少个更新就汇总多少个"的口径完全一致。
    */
   isPending?: boolean;
 }
@@ -109,32 +112,6 @@ function addTradingDays(date: string, days: number): string {
     if (dow !== 0 && dow !== 6) added++;
   }
   return d.format('YYYY-MM-DD');
-}
-
-/**
- * 判断"今日"是否所有持有基金的 NAV 都已发布。
- * - A股/债券/指数/混合：T+0，今日完整当且仅当最新 NAV 日 = 今天
- * - QDII：T+2 交易日（跳过周末），今日完整当且仅当最新 NAV 日 + 2 交易日 = 今天
- *   例：QDII 8/28 NAV（Fri）+ 2 交易日 = 9/1（Tue），所以 9/1 QDII 才算"今日完整"
- * 任一有正份额的基金今日不完整即整个格子 pending。
- */
-function isTodayIncomplete(
-  funds: Fund[],
-  confirmed: Transaction[],
-  todayStr: string
-): boolean {
-  for (const fund of funds) {
-    const shares = calcShares(
-      confirmed.filter((t) => t.fundId === fund.id && t.date <= todayStr)
-    );
-    if (shares <= 0) continue; // 未持仓，不需 NAV
-    const nav = lookupNavForDate(fund.id, todayStr);
-    if (!nav) return true;
-    const expectedPublish =
-      fund.type === 'qdii' ? addTradingDays(nav.navDate, 2) : nav.navDate;
-    if (expectedPublish !== todayStr) return true;
-  }
-  return false;
 }
 
 /**
@@ -187,8 +164,13 @@ function buildAttributionMap(funds: Fund[]): Map<string, Attribution[]> {
  *   - A股/债券/指数/混合：publishDate = NAV 日（T+0）
  *   - QDII：publishDate = NAV 日 + 2 交易日（跳过周末）——T+2 规则
  *   同一 NAV 变化只归属一次，不会跨日重复计入。
- * - 今日（最新 snapshot 日期 = today）若任一持有基金今日 NAV 未发布，
- *   标 isPending=true，totalReturn/perFund 全部置 0，与 Dashboard 当日盈亏口径一致
+ * - **今日的部分归属**：每只基金独立判断——有没有 attribution 落到今天。
+ *   没有就对该日 totalReturn 贡献 0；有就正常算 `shares × (curr.nav - prev.nav)`。
+ *   因此今天就算 QDII T+2 还没到位、或某几只 A 股还没刷到今日 NAV，
+ *   totalReturn 仍会汇总已归属基金的贡献——与 Dashboard 当日盈亏
+ *   "有多少个更新就汇总多少个"的口径完全一致。
+ *   `isPending` 仅在今天**任何**基金都还没归属时才为 true（全员待刷新）。
+ * - 历史日的归属完全是确定性的（NAV 都在历史里），不受"今天是否刷新"影响。
  */
 export function generateDailyReturns(
   funds: Fund[],
@@ -202,10 +184,6 @@ export function generateDailyReturns(
   // 一次性过滤 confirmed，避免每个循环迭代重复 filter
   const confirmed = onlyConfirmed(transactions);
   const todayStr = today();
-  const latestDate = sorted[sorted.length - 1]!.date;
-  // "今日"严格判定：必须是最新 snapshot 日期 + 等于 today 才走 strict 校验
-  const todayIsLatest = latestDate === todayStr;
-  const todayIncomplete = todayIsLatest && isTodayIncomplete(funds, confirmed, todayStr);
 
   // 预计算归属 map：每个相邻 NAV 变化按 publishDate 分组
   // navHistory 会随用户刷新持续更新（晚间 NAV 发布后），所以"当天看"和"隔几天看"会因
@@ -216,33 +194,38 @@ export function generateDailyReturns(
   for (let i = 0; i < sorted.length; i++) {
     const currDate = sorted[i]!.date;
     const isToday = currDate === todayStr;
-    const isPending = isToday && todayIncomplete;
 
     // 找归属于 currDate 的所有 (fund, curr NAV, prev NAV)
     const attributions = attributionMap.get(currDate) ?? [];
 
-    const perFund = isPending
-      ? funds.map((fund) => ({ fundId: fund.id, fundName: fund.name, returnAmount: 0 }))
-      : funds.map((fund) => {
-          const attr = attributions.find((a) => a.fund.id === fund.id);
-          if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+    // 每只基金独立判断：有 attribution 就按归属算收益，没有就 0。
+    // 不再"全员 pending 短路"——只对历史日自然满足（无 attribution = 0），
+    // 对今日则与 Dashboard 当日盈亏一致：有多少更新就汇总多少。
+    const perFund = funds.map((fund) => {
+      const attr = attributions.find((a) => a.fund.id === fund.id);
+      if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
 
-          // 日盈亏 = publish 日持仓份额 × 该日新学到的 NAV 变化（业内通用口径）
-          // 不扣 fundFlow：当日的净投入由 Dashboard 顶部"当日投入"卡片独立显示，
-          // 在此重复扣减会让建仓日看起来"亏了一大笔"，与 Dashboard 当日盈亏口径也不一致。
-          const txs = confirmed.filter((t) => t.fundId === fund.id && t.date <= currDate);
-          const shares = calcShares(txs);
-          if (shares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+      // 日盈亏 = publish 日持仓份额 × 该日新学到的 NAV 变化（业内通用口径）
+      // 不扣 fundFlow：当日的净投入由 Dashboard 顶部"当日投入"卡片独立显示，
+      // 在此重复扣减会让建仓日看起来"亏了一大笔"，与 Dashboard 当日盈亏口径也不一致。
+      const txs = confirmed.filter((t) => t.fundId === fund.id && t.date <= currDate);
+      const shares = calcShares(txs);
+      if (shares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
 
-          return {
-            fundId: fund.id,
-            fundName: fund.name,
-            returnAmount: shares * (attr.curr.nav - attr.prev.nav),
-          };
-        });
+      return {
+        fundId: fund.id,
+        fundName: fund.name,
+        returnAmount: shares * (attr.curr.nav - attr.prev.nav),
+      };
+    });
 
     // 总收益 = 各基金当日价格变动之和（不扣 fundFlow，参见上方注释）
     const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
+
+    // 今日「全员待刷新」才标 pending：所有基金都没 attribution（即今天还没
+    // 任何一只刷出能让它归属到今天的 NAV）；只要有 ≥1 只贡献了，就走 partial
+    // 求和路径，UI 显示真实数字 + perFund 明细（含未更新的 0 项）。
+    const isPending = isToday && attributions.length === 0;
 
     result.push({ date: currDate, totalReturn, perFund, isPending });
   }
