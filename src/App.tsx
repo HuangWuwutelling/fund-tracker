@@ -149,7 +149,7 @@ export default function App() {
     const updatedFunds = useStore.getState().funds;
     const updatedTxs = useStore.getState().transactions;
     const snapshot = generateSnapshot(updatedFunds, updatedTxs);
-    addSnapshot(snapshot);
+    if (snapshot) addSnapshot(snapshot);
   }, [funds.length, updateFund, updateNavHistory, updateTransaction, addSnapshot, autoConfirmPending]);
 
   useEffect(() => {

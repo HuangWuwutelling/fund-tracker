@@ -5,6 +5,7 @@ import { countTradingDays, lookupNavForDate } from './navLookup';
 import { getNavHistory } from './storage';
 import { today } from './formatter';
 import { getPublishDate } from './tradingDays';
+import { isNonTradingDay } from './chineseHolidays';
 import dayjs from 'dayjs';
 
 export interface FundPerformance {
@@ -238,7 +239,9 @@ export function generateDailyReturns(
 ): DailyReturn[] {
   const confirmed = onlyConfirmed(transactions);
   const todayStr = today();
-  const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
+  const sorted = [...snapshots]
+    .filter((s) => !isNonTradingDay(s.date) || s.date === todayStr) // 跳过非交易日（但保留 today，便于今天格判定）
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   // 一次性构建：归属 map + 份额时间线（避免内层每次循环 filter+sort 全表）
   const attributionMap = buildAttributionMap(funds);
@@ -297,7 +300,8 @@ export function generateDailyReturns(
 
   // 今天格：旁路 attribution map，直接用 calcDailyPnl per fund（同 Dashboard 口径）
   // 即便 today 不在 snapshots 列表也照常生成——避免"关闭自动刷新 → today 显示 ¥0"的退化
-  if (funds.length > 0) {
+  // 但如果 today 是非交易日（周末 / 节假日），今天格不生成——与历史格一致
+  if (funds.length > 0 && !isNonTradingDay(todayStr)) {
     const perFund = funds.map((fund) => {
       // 与 calcFundSummary 一致：不限 date（包含未来日期 confirmed 的"预期持仓"），
       // 让两边口径完全相同；这是 Dashboard 已有的 quirk，Calendar 同步跟随

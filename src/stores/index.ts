@@ -3,6 +3,7 @@ import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, Nav
 import * as storage from '../utils/storage';
 import { generateSnapshot } from '../utils/snapshot';
 import { getPlanDueDates } from '../utils/calculator';
+import { today } from '../utils/formatter';
 import { getFundTypeFromName } from '../api/fundApi';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
@@ -120,9 +121,11 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     navHistoryCache.delete(id);
     storage.removeNavHistory(id);
 
-    // Regenerate today's snapshot to reflect the removal
+    // Regenerate today's snapshot to reflect the removal (skip on non-trading days)
     const newSnapshot = generateSnapshot(funds, transactions);
-    const snapshots = [...get().snapshots.filter((s) => s.date !== newSnapshot.date), newSnapshot];
+    const snapshots = newSnapshot
+      ? [...get().snapshots.filter((s) => s.date !== newSnapshot.date), newSnapshot]
+      : get().snapshots.filter((s) => s.date !== today());
     storage.saveSnapshots(snapshots);
 
     set({ funds, transactions, dcaPlans, snapshots });

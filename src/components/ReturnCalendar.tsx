@@ -10,6 +10,7 @@ import {
   generateYearlyReturns,
 } from '../utils/reportGenerator';
 import { formatMoney, pnlColor } from '../utils/formatter';
+import { isNonTradingDay } from '../utils/chineseHolidays';
 import HeatmapGrid, { type HeatmapCell } from './HeatmapGrid';
 import NavLink from './NavLink';
 import { useStore } from '../stores';
@@ -137,6 +138,19 @@ function DayView({
       const date = d.format('YYYY-MM-DD');
       const data = map.get(date);
       const inMonth = d.format('YYYY-MM') === viewMonth;
+      const nonTrading = isNonTradingDay(date);
+      // 非交易日优先：不论 dailyReturns 里有没有这条记录，都画"休市"格子
+      // （防止旧数据残留的非交易日快照被当作 0 涨跌显示）
+      if (nonTrading) {
+        out.push({
+          key: date,
+          label: String(d.date()),
+          value: 0,
+          dim: !inMonth,
+          nonTrading: true,
+        });
+        continue;
+      }
       out.push({
         key: date,
         label: String(d.date()),
@@ -187,9 +201,15 @@ function DayView({
         weekdayLabels={WEEKDAY_LABELS}
         columns={7}
         selectedKey={selectedKey}
-        onCellClick={onSelect}
+        onCellClick={(key) => {
+          // 非交易日没有 PeriodDetail 数据，阻止选中
+          if (isNonTradingDay(key)) return;
+          onSelect(key);
+        }}
         formatTooltip={(c) =>
-          c.pending
+          c.nonTrading
+            ? `${c.key}：非交易日（A 股 / QDII 休市）`
+            : c.pending
             ? `${c.key}：净值更新中`
             : c.value === 0
             ? c.key

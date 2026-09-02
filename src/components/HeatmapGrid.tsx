@@ -18,6 +18,12 @@ export interface HeatmapCell {
    * 优先级高于 accent/dim（但低于 selected 边框）
    */
   pending?: boolean;
+  /**
+   * 非交易日样式：周末 / 节假日——浅灰虚线边 + 主数字留空，
+   * 表示"该日 A 股 / QDII 休市，无数据"，不计入热力配色。
+   * 优先级与 pending 相同，视觉上用虚线边与 pending 区分。
+   */
+  nonTrading?: boolean;
 }
 
 export interface HeatmapGridProps {
@@ -92,7 +98,10 @@ export default function HeatmapGrid({
       >
         {cells.map((cell) => {
           let bg = '#fafafa';
-          if (cell.pending) {
+          if (cell.nonTrading) {
+            // 非交易日（周末 / 节假日）：最淡的灰底，不显示收益数字
+            bg = '#f5f5f5';
+          } else if (cell.pending) {
             // 净值未发布：淡灰底，跳过红绿热力配色
             bg = '#f0f0f0';
           } else if (cell.value !== 0 || cell.intensity !== undefined) {
@@ -106,9 +115,11 @@ export default function HeatmapGrid({
             else bg = '#f0f0f0';
           }
           const isSelected = selectedKey === cell.key;
-          // 边框优先级 selected > today > default
+          // 边框优先级 selected > today > default；非交易日用虚线边（与灰色背景区分）
           const border = isSelected
             ? '2px solid #1677ff'
+            : cell.nonTrading
+            ? '1px dashed #d9d9d9'
             : cell.accent === 'today'
             ? '1.5px solid #1677ff'
             : '1px solid #e8e8e8';
@@ -144,7 +155,7 @@ export default function HeatmapGrid({
                   <div
                     style={{
                       fontSize: 13,
-                      color: cell.dim || cell.pending ? '#bbb' : '#666',
+                      color: cell.dim || cell.pending || cell.nonTrading ? '#bbb' : '#666',
                       alignSelf: 'flex-start',
                     }}
                   >
@@ -155,7 +166,9 @@ export default function HeatmapGrid({
                   style={{
                     fontSize: 16,
                     fontWeight: 600,
-                    color: cell.pending
+                    color: cell.nonTrading
+                      ? '#ccc'
+                      : cell.pending
                       ? '#bbb'
                       : cell.value > 0
                       ? '#a8071a'
@@ -166,7 +179,7 @@ export default function HeatmapGrid({
                     marginTop: 4,
                   }}
                 >
-                  {cell.pending ? '—' : `${cell.value > 0 ? '+' : ''}${cell.value.toFixed(0)}`}
+                  {cell.nonTrading ? '·' : cell.pending ? '—' : `${cell.value > 0 ? '+' : ''}${cell.value.toFixed(0)}`}
                 </div>
               </div>
             </Tooltip>
