@@ -278,8 +278,10 @@ export function generateDailyReturns(
       return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
     });
     const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
-    // 任一基金 pending 时这一格也标 pending，UI 显示"净值更新中"
-    const isPending = perFund.some((p) => p.isPending);
+    // 仅当所有基金都 pending 时这一格才标 pending（整格显示"净值更新中"）。
+    // 部分基金 pending 时整格按 totalReturn 着色，明细面板里 pending 基金单独标。
+    // 例：8/31 A 股有数据 + QDII pending → 整格按 A 股涨跌着色，QDII 在明细里"净值更新中"
+    const isPending = perFund.length > 0 && perFund.every((p) => p.isPending);
     result.push({ date: snap.date, totalReturn, perFund, isPending });
   }
 
