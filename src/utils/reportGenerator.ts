@@ -241,16 +241,17 @@ export function generateDailyReturns(
   const result: DailyReturn[] = [];
 
   // 历史格：用 attribution + 份额时间线（O(M·log K) / 格，替代 O(M·(T + K log K))）
+  // QDII publishDate 判定基准：与 todayStr 比（不是 snap.date）。回看历史时（snap.date < today），
+  // publishDate 通常早已过了，应显示数据；只有"用户到现在还没看到这条 NAV"才 pending。
   for (const snap of sorted) {
     if (snap.date === todayStr) continue; // 今天格单独算，不走 attribution
     const dayAttrs = attributionMap.get(snap.date);
     const perFund = funds.map((fund) => {
       const attr = dayAttrs?.get(fund.id);
       if (attr) {
-        // QDII 跨日判定：归属日 = navDate，但只有 publishDate(curr.date) ≤ snap.date 才"已发布"
-        // 例：9/1 早上看 9/1，QDII 9/1 NAV 还没发布（要 9/3 发布）→ 标 pending
-        //     9/3 晚上看 9/1，QDII 9/1 NAV 已发布 → 计入
-        if (getPublishDate(fund, attr.curr.date) > snap.date) {
+        // publishDate > today：QDII 该 NAV 到现在还没发布 → pending
+        // 例：用户在 9/2 看 8/31，publishDate(QDII, 8/31)=9/2 ≤ today → 显示 8/31−8/28
+        if (getPublishDate(fund, attr.curr.date) > todayStr) {
           return { fundId: fund.id, fundName: fund.name, returnAmount: 0, isPending: true };
         }
         // 历史日 shares 按 snap.date 截断（不能用未来的持仓算当日盈亏）
@@ -262,15 +263,15 @@ export function generateDailyReturns(
           returnAmount: shares * (attr.curr.nav - attr.prev.nav),
         };
       }
-      // 没有 attribution：QDII 可能是"应该有但未发布"（NAV 数据里还没出现）
-      // 例：9/1 那一格 QDII → lastNAV=8/31, lastNAV.date=8/31 ≤ snap.date=9/1,
-      //     publishDate(QDII, 8/31)=9/2 > 9/1 → pending
+      // 没有 attribution：QDII 可能是"应有 NAV 但还没发布"（数据缺漏）
+      // 例：用户在 9/2 看 9/1，QDII 9/1 NAV 应有但 publishDate=9/3 > today → pending
       if (fund.type === 'qdii') {
-        const hist = getNavHistory(fund.id);
-        if (hist.length > 0) {
-          const sorted = [...hist].sort((a, b) => b.date.localeCompare(a.date));
-          const lastNAV = sorted[0]!;
-          if (lastNAV.date <= snap.date && getPublishDate(fund, lastNAV.date) > snap.date) {
+        const d = dayjs(snap.date);
+        const isWeekend = d.day() === 0 || d.day() === 6;
+        if (!isWeekend) {
+          // snap.date 是 QDII 工作日，应有 NAV；publishDate > today → 未发布 → pending
+          const expectedPublishDate = getPublishDate(fund, snap.date);
+          if (expectedPublishDate > todayStr) {
             return { fundId: fund.id, fundName: fund.name, returnAmount: 0, isPending: true };
           }
         }
