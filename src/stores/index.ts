@@ -3,7 +3,7 @@ import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, Nav
 import * as storage from '../utils/storage';
 import { generateSnapshot } from '../utils/snapshot';
 import { getPlanDueDates } from '../utils/calculator';
-import { getFundTypeFromSearch } from '../api/fundApi';
+import { getFundTypeFromName } from '../api/fundApi';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 
@@ -134,12 +134,11 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     const { funds } = get();
     let changed = 0;
     const updated = funds.map((f) => {
-      const t = getFundTypeFromSearch('', f.name);
-      if (t !== f.type) {
-        changed++;
-        return { ...f, type: t };
-      }
-      return f;
+      // 名称无线索时返回 null——保留用户手动设置的原类型，不被覆盖成 'mixed'
+      const t = getFundTypeFromName(f.name);
+      if (t === null || t === f.type) return f;
+      changed++;
+      return { ...f, type: t };
     });
     if (changed === 0) return 0;
     storage.saveFunds(updated);
@@ -199,18 +198,20 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   autoRecordDcaPlans: () => {
     const { dcaPlans, transactions } = get();
     const today = dayjs().format('YYYY-MM-DD');
-    // 已存在的买入（含跨计划）按 fundId+date 去重，避免同一基金多个计划重复补
+    // 去重键改为 planId:fundId:date——不同计划即使同日投同基金也各自独立成单。
+    // 手动买入的 planId 为空，键 = ':fundId:date'，与任何启用计划的 planId 都不同，
+    // 因此不会被误吞；同时也避免旧键 fundId:date 在多计划同日场景下吞掉后续计划。
     const seen = new Set(
       transactions
         .filter((t) => t.type === 'buy')
-        .map((t) => `${t.fundId}:${t.date}`)
+        .map((t) => `${t.planId ?? ''}:${t.fundId}:${t.date}`)
     );
 
     const newTxs: Transaction[] = [];
     for (const plan of dcaPlans) {
       if (!plan.active) continue;
       for (const date of getPlanDueDates(plan, today)) {
-        const dedupeKey = `${plan.fundId}:${date}`;
+        const dedupeKey = `${plan.id}:${plan.fundId}:${date}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);
         newTxs.push({

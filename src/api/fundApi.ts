@@ -91,6 +91,17 @@ export function getFundTypeFromSearch(rawType: string, name?: string): Fund['typ
   return mapRawType(rawType);
 }
 
+/**
+ * 仅按名称分类，无名称线索返回 null（用于"按名称重新分类"场景，避免把手动设置的
+  类型覆盖成 'mixed'）。语义与 getFundTypeFromSearch 的名称分支一致。
+ */
+export function getFundTypeFromName(name: string): Fund['type'] | null {
+  if (name.includes('(QDII)') || name.includes('QDII')) return 'qdii';
+  if (name.includes('债券') || name.includes('中债') || name.includes('国债')) return 'bond';
+  if (name.includes('ETF') || name.includes('指数') || name.includes('联接') || name.includes('LOF')) return 'index';
+  return null;
+}
+
 // --- Fund info + NAV history via pingzhongdata API ---
 // This API returns a JS script with global variables:
 //   fS_name, fS_code, Data_netWorthTrend, etc.
