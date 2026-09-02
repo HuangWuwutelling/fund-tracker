@@ -241,49 +241,27 @@ export function generateDailyReturns(
   const result: DailyReturn[] = [];
 
   // 历史格：用 attribution + 份额时间线（O(M·log K) / 格，替代 O(M·(T + K log K))）
-  // QDII publishDate 判定基准：与 todayStr 比（不是 snap.date）。回看历史时（snap.date < today），
-  // publishDate 通常早已过了，应显示数据；只有"用户到现在还没看到这条 NAV"才 pending。
+  // 历史格只看归属日：QDII 按 navDate 归属，attr 存在就显示数据，不存在就 returnAmount=0。
+  // 不考虑 publishDate——"更新中"只用于当天格（QDII 当天 NAV 还没发布），历史格不应该
+  // 随查看时间变化（9/2 看 9/1、9/3 看 9/1 显示结果应一致）。
   for (const snap of sorted) {
     if (snap.date === todayStr) continue; // 今天格单独算，不走 attribution
     const dayAttrs = attributionMap.get(snap.date);
     const perFund = funds.map((fund) => {
       const attr = dayAttrs?.get(fund.id);
-      if (attr) {
-        // publishDate > today：QDII 该 NAV 到现在还没发布 → pending
-        // 例：用户在 9/2 看 8/31，publishDate(QDII, 8/31)=9/2 ≤ today → 显示 8/31−8/28
-        if (getPublishDate(fund, attr.curr.date) > todayStr) {
-          return { fundId: fund.id, fundName: fund.name, returnAmount: 0, isPending: true };
-        }
-        // 历史日 shares 按 snap.date 截断（不能用未来的持仓算当日盈亏）
-        const shares = getSharesAsOf(sharesTimeline.get(fund.id), snap.date);
-        if (shares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
-        return {
-          fundId: fund.id,
-          fundName: fund.name,
-          returnAmount: shares * (attr.curr.nav - attr.prev.nav),
-        };
-      }
-      // 没有 attribution：QDII 可能是"应有 NAV 但还没发布"（数据缺漏）
-      // 例：用户在 9/2 看 9/1，QDII 9/1 NAV 应有但 publishDate=9/3 > today → pending
-      if (fund.type === 'qdii') {
-        const d = dayjs(snap.date);
-        const isWeekend = d.day() === 0 || d.day() === 6;
-        if (!isWeekend) {
-          // snap.date 是 QDII 工作日，应有 NAV；publishDate > today → 未发布 → pending
-          const expectedPublishDate = getPublishDate(fund, snap.date);
-          if (expectedPublishDate > todayStr) {
-            return { fundId: fund.id, fundName: fund.name, returnAmount: 0, isPending: true };
-          }
-        }
-      }
-      return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+      if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+      // 历史日 shares 按 snap.date 截断（不能用未来的持仓算当日盈亏）
+      const shares = getSharesAsOf(sharesTimeline.get(fund.id), snap.date);
+      if (shares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+      return {
+        fundId: fund.id,
+        fundName: fund.name,
+        returnAmount: shares * (attr.curr.nav - attr.prev.nav),
+      };
     });
     const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
-    // 仅当所有基金都 pending 时这一格才标 pending（整格显示"净值更新中"）。
-    // 部分基金 pending 时整格按 totalReturn 着色，明细面板里 pending 基金单独标。
-    // 例：8/31 A 股有数据 + QDII pending → 整格按 A 股涨跌着色，QDII 在明细里"净值更新中"
-    const isPending = perFund.length > 0 && perFund.every((p) => p.isPending);
-    result.push({ date: snap.date, totalReturn, perFund, isPending });
+    // 历史格不会 pending（QDII 数据滞后时只是 returnAmount=0，不算"更新中"）
+    result.push({ date: snap.date, totalReturn, perFund });
   }
 
   // 今天格：旁路 attribution map，直接用 calcDailyPnl per fund（同 Dashboard 口径）
