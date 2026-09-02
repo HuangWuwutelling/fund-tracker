@@ -187,7 +187,9 @@ function DayView({
       />
 
       {selected && (
-        selected.isPending ? (
+        // 仅当所有基金都 pending 时才显示整格 pending；只要有任一基金有数据，
+        // 就走明细面板（每个基金单独标 isPending，让 A 股能看到自己的涨跌）
+        selected.perFund.every((p) => p.isPending) ? (
           <div style={{ marginTop: 16, padding: 12, background: '#fafafa', borderRadius: 6, color: '#999', fontSize: 13 }}>
             {selected.date}：净值更新中（QDII 通常 T+2 延迟，或当日 NAV 尚未发布）
           </div>

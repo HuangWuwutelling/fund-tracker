@@ -246,21 +246,36 @@ export function generateDailyReturns(
     const dayAttrs = attributionMap.get(snap.date);
     const perFund = funds.map((fund) => {
       const attr = dayAttrs?.get(fund.id);
-      if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
-      // QDII 跨日判定：归属日 = navDate，但只有 publishDate(curr.date) ≤ snap.date 才"已发布"
-      // 例：9/1 早上看 9/1，QDII 9/1 NAV 还没发布（要 9/3 发布）→ 标 pending
-      //     9/3 晚上看 9/1，QDII 9/1 NAV 已发布 → 计入
-      if (getPublishDate(fund, attr.curr.date) > snap.date) {
-        return { fundId: fund.id, fundName: fund.name, returnAmount: 0, isPending: true };
+      if (attr) {
+        // QDII 跨日判定：归属日 = navDate，但只有 publishDate(curr.date) ≤ snap.date 才"已发布"
+        // 例：9/1 早上看 9/1，QDII 9/1 NAV 还没发布（要 9/3 发布）→ 标 pending
+        //     9/3 晚上看 9/1，QDII 9/1 NAV 已发布 → 计入
+        if (getPublishDate(fund, attr.curr.date) > snap.date) {
+          return { fundId: fund.id, fundName: fund.name, returnAmount: 0, isPending: true };
+        }
+        // 历史日 shares 按 snap.date 截断（不能用未来的持仓算当日盈亏）
+        const shares = getSharesAsOf(sharesTimeline.get(fund.id), snap.date);
+        if (shares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+        return {
+          fundId: fund.id,
+          fundName: fund.name,
+          returnAmount: shares * (attr.curr.nav - attr.prev.nav),
+        };
       }
-      // 历史日 shares 按 snap.date 截断（不能用未来的持仓算当日盈亏）
-      const shares = getSharesAsOf(sharesTimeline.get(fund.id), snap.date);
-      if (shares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
-      return {
-        fundId: fund.id,
-        fundName: fund.name,
-        returnAmount: shares * (attr.curr.nav - attr.prev.nav),
-      };
+      // 没有 attribution：QDII 可能是"应该有但未发布"（NAV 数据里还没出现）
+      // 例：9/1 那一格 QDII → lastNAV=8/31, lastNAV.date=8/31 ≤ snap.date=9/1,
+      //     publishDate(QDII, 8/31)=9/2 > 9/1 → pending
+      if (fund.type === 'qdii') {
+        const hist = getNavHistory(fund.id);
+        if (hist.length > 0) {
+          const sorted = [...hist].sort((a, b) => b.date.localeCompare(a.date));
+          const lastNAV = sorted[0]!;
+          if (lastNAV.date <= snap.date && getPublishDate(fund, lastNAV.date) > snap.date) {
+            return { fundId: fund.id, fundName: fund.name, returnAmount: 0, isPending: true };
+          }
+        }
+      }
+      return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
     });
     const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
     // 任一基金 pending 时这一格也标 pending，UI 显示"净值更新中"
