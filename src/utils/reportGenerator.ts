@@ -98,6 +98,11 @@ export interface DailyReturn {
      * 历史日的 perFund 不会出现 isPending=true（归属已确定）。
      */
     isPending?: boolean;
+    /**
+     * 仅对 QDII 历史格生效：显示该 QDII 的"最新已发布 NAV 对"的 NAV 归属日。
+     * 明细面板里加 tooltip 明示 QDII 该日显示的不是 9/1 涨跌，而是"最新已发布对"。
+     */
+    latestPublishedDate?: string;
   }[];
   /**
    * 任一基金的当日 NAV 未发布时为 true（A 股白天 / QDII T+2 延迟 / 节假日 / 刷新失败）。
@@ -240,17 +245,43 @@ export function generateDailyReturns(
   const sharesTimeline = buildSharesTimeline(funds, confirmed);
   const result: DailyReturn[] = [];
 
-  // 历史格：用 attribution + 份额时间线（O(M·log K) / 格，替代 O(M·(T + K log K))）
-  // 历史格只看归属日：QDII 按 navDate 归属，attr 存在就显示数据，不存在就 returnAmount=0。
-  // 不考虑 publishDate——"更新中"只用于当天格（QDII 当天 NAV 还没发布），历史格不应该
-  // 随查看时间变化（9/2 看 9/1、9/3 看 9/1 显示结果应一致）。
+  // 历史格：QDII 与 A 股用不同口径
+  // - A 股：按 navDate 归属（attribution + 份额时间线），每天显示当天涨跌
+  // - QDII：所有日期都显示"该 QDII 最新一笔已发布 NAV 对"的盈亏
+  //   原因：QDII T+2 发布，按 navDate 归属常常没数据（returnAmount=0 不合理，
+  //   "净值更新中" 又跟"历史"语义冲突）；直接用最新已发布对避免 0/pending 混乱。
+  //   代价：QDII 在历史格不区分日期，整格 totalReturn 需要把 QDII 单独列出。
   for (const snap of sorted) {
     if (snap.date === todayStr) continue; // 今天格单独算，不走 attribution
     const dayAttrs = attributionMap.get(snap.date);
     const perFund = funds.map((fund) => {
+      // QDII：所有历史日期都返回"最新已发布对"的盈亏（不分日期）
+      if (fund.type === 'qdii') {
+        const qdiiShares = getSharesAsOf(sharesTimeline.get(fund.id), snap.date);
+        if (qdiiShares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+        // 找 publishDate <= todayStr 的最新一对 NAV
+        const hist = getNavHistory(fund.id);
+        const sortedHist = [...hist].sort((a, b) => b.date.localeCompare(a.date));
+        let curr = null, prev = null;
+        for (let i = 0; i < sortedHist.length - 1; i++) {
+          if (getPublishDate(fund, sortedHist[i]!.date) <= todayStr) {
+            curr = sortedHist[i]!;
+            prev = sortedHist[i + 1]!;
+            break;
+          }
+        }
+        if (!curr || !prev) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+        return {
+          fundId: fund.id,
+          fundName: fund.name,
+          returnAmount: qdiiShares * (curr.nav - prev.nav),
+          // 标记 QDII 用最新已发布对，让明细面板 / UI 明示语义
+          latestPublishedDate: curr.date,
+        };
+      }
+      // A 股 / 其他：按 navDate 归属（attribution + 份额时间线）
       const attr = dayAttrs?.get(fund.id);
       if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
-      // 历史日 shares 按 snap.date 截断（不能用未来的持仓算当日盈亏）
       const shares = getSharesAsOf(sharesTimeline.get(fund.id), snap.date);
       if (shares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
       return {
@@ -260,7 +291,7 @@ export function generateDailyReturns(
       };
     });
     const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
-    // 历史格不会 pending（QDII 数据滞后时只是 returnAmount=0，不算"更新中"）
+    // 历史格不 pending（QDII 永远有"最新已发布对"的数字）
     result.push({ date: snap.date, totalReturn, perFund });
   }
 

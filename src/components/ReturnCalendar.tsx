@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Card, Tabs, Empty, Table, Tag, Space, Button } from 'antd';
+import { Card, Tabs, Empty, Table, Tag, Space, Button, Tooltip } from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -24,6 +24,8 @@ interface PeriodDetailRow {
   fundName: string;
   returnAmount: number;
   isPending?: boolean;
+  /** QDII 历史格用：最新已发布 NAV 对的 NAV 归属日 */
+  latestPublishedDate?: string;
 }
 
 interface PeriodDetailProps {
@@ -62,6 +64,15 @@ function PeriodDetail({ dateLabel, total, perFund }: PeriodDetailProps) {
                   <Tag color="default" style={{ marginLeft: 6, fontSize: 11 }}>
                     净值更新中
                   </Tag>
+                )}
+                {r.latestPublishedDate && !r.isPending && (
+                  <Tooltip
+                    title={`QDII：T+2 发布导致按归属日计算无数据，此格显示最新已发布 NAV 对的盈亏。最新 NAV 归属日 ${r.latestPublishedDate}`}
+                  >
+                    <Tag color="blue" style={{ marginLeft: 6, fontSize: 11, cursor: 'help' }}>
+                      截至 {r.latestPublishedDate}
+                    </Tag>
+                  </Tooltip>
                 )}
               </NavLink>
             ),
