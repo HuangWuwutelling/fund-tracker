@@ -1,4 +1,5 @@
 import type { Transaction, Fund, NavRecord, DcaPlan } from '../types';
+import { getPublishDate } from './tradingDays';
 import dayjs from 'dayjs';
 
 /** 过滤掉 pending(待确认)交易;只保留 confirmed 或未设状态的(向后兼容) */
@@ -77,28 +78,39 @@ export function calcReturnRate(totalReturn: number, cost: number): number {
 }
 
 /**
- * 计算单只基金的当日盈亏（严格按"今日"对齐）
- * 返回 { pnl, latestDate, isToday }：
+ * 计算单只基金的当日盈亏（按"发布日"对齐）
+ * 返回 { pnl, currDate, prevDate, isReady }：
  *   - pnl = null：完全无 NAV 历史或不足 2 条
- *   - pnl = 数字：当日盈亏；仅当这只基金今日 NAV 已发布（latest.date === today）才计入，
- *     其他情况（QDII T+2 延迟 / 节假日 / 刷新失败）pnl = null，由 UI 显示"— 净值更新中"
- *   - isToday = true：今日 NAV 已发布（正常显示）；false：今日 NAV 尚未发布
+ *   - isReady = false：今日还没有"已发布的最新 NAV 对"（A 股白天 / QDII T+2 延迟 / 节假日 / 刷新失败）
+ *     → UI 显示"— 净值更新中"
+ *   - isReady = true：今日发布日已对齐，pnl = shares × (curr.nav − prev.nav)
+ *     - A 股：curr/prev 是今天 vs 昨天 NAV
+ *     - QDII：curr/prev 是 QDII "今日发布"对应的那对 NAV（归属日落后 A 股 2 个交易日）
+ *       例：今天 = 9/3，QDII 9/1 NAV 在 9/3 晚上发布 → pnl = 9/1 NAV − 8/29 NAV
  *
- * 口径与天天基金/蚂蚁基金等业内通用一致：当日盈亏必须 = 今天，多日累计不打包。
- * QDII 这类延迟基金单独标识"净值更新中"，避免把 8/23→8/26 的 3 天累计错误归到 8/31。
+ * 口径：A 股与 QDII 行为完全对称，都是"等到发布 → 才有数字"，区别只在 QDII 的 NAV 归属日落后 2 个交易日。
+ * 历史格归属（reportGenerator）按 navDate（即"准确日期"），与本函数解耦。
  */
 export function calcDailyPnl(
   shares: number,
   navHistory: NavRecord[],
+  fund: Fund,
   todayStr: string
-): { pnl: number | null; latestDate: string; isToday: boolean } {
-  if (navHistory.length < 2) return { pnl: null, latestDate: '', isToday: false };
+): { pnl: number | null; currDate: string; prevDate: string; isReady: boolean } {
+  if (navHistory.length < 2) return { pnl: null, currDate: '', prevDate: '', isReady: false };
   const sorted = [...navHistory].sort((a, b) => b.date.localeCompare(a.date));
-  const latest = sorted[0]!;
-  const prev = sorted[1];
-  if (!prev) return { pnl: null, latestDate: latest.date, isToday: latest.date === todayStr };
-  const isToday = latest.date === todayStr;
-  return { pnl: isToday ? shares * (latest.nav - prev.nav) : null, latestDate: latest.date, isToday };
+  // 找 publishDate === todayStr 的最新 NAV（A 股 publishDate = navDate；QDII = navDate + 2 交易日）
+  const idx = sorted.findIndex((r) => getPublishDate(fund, r.date) === todayStr);
+  if (idx === -1) return { pnl: null, currDate: '', prevDate: '', isReady: false };
+  const curr = sorted[idx]!;
+  const prev = idx + 1 < sorted.length ? sorted[idx + 1] : null;
+  if (!prev) return { pnl: null, currDate: curr.date, prevDate: '', isReady: false };
+  return {
+    pnl: shares * (curr.nav - prev.nav),
+    currDate: curr.date,
+    prevDate: prev.date,
+    isReady: true,
+  };
 }
 
 /**
@@ -389,9 +401,21 @@ export function calcFundSummary(
   const marketValue = calcMarketValue(shares, fund.currentNav);
   const totalReturn = calcReturn(marketValue, cost);
   const returnRate = calcReturnRate(totalReturn, cost);
-  const dailyPnlResult = calcDailyPnl(shares, navHistory, todayStr);
+  const dailyPnlResult = calcDailyPnl(shares, navHistory, fund, todayStr);
   const xirr = calcXIRR(fundTransactions, marketValue);
   const dividend = calcDividendTotal(fundTransactions);
 
-  return { shares, cost, marketValue, totalReturn, returnRate, dailyPnl: dailyPnlResult.pnl, latestNavDate: dailyPnlResult.latestDate, isDailyPnlToday: dailyPnlResult.isToday, xirr, dividend };
+  return {
+    shares,
+    cost,
+    marketValue,
+    totalReturn,
+    returnRate,
+    dailyPnl: dailyPnlResult.pnl,
+    currNavDate: dailyPnlResult.currDate,
+    prevNavDate: dailyPnlResult.prevDate,
+    isDailyPnlToday: dailyPnlResult.isReady,
+    xirr,
+    dividend,
+  };
 }

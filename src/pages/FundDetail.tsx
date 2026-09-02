@@ -86,7 +86,7 @@ export default function FundDetail() {
     () =>
       fund
         ? calcFundSummary(fund, transactions, navHistory, today())
-        : { shares: 0, cost: 0, marketValue: 0, totalReturn: 0, returnRate: 0, dailyPnl: null, latestNavDate: '', isDailyPnlToday: false, xirr: 0, dividend: 0 },
+        : { shares: 0, cost: 0, marketValue: 0, totalReturn: 0, returnRate: 0, dailyPnl: null, currNavDate: '', prevNavDate: '', isDailyPnlToday: false, xirr: 0, dividend: 0 },
     [fund, transactions, navHistory]
   );
   const fundTxs = useMemo(
@@ -384,10 +384,10 @@ export default function FundDetail() {
             <Tooltip
               title={
                 summary.dailyPnl === null
-                  ? summary.latestNavDate
-                    ? `今日净值未发布（最新 ${summary.latestNavDate}，QDII 通常 T+2 延迟）`
+                  ? summary.currNavDate
+                    ? `今日净值未发布（最新 ${summary.currNavDate}，QDII 通常 T+2 延迟）`
                     : '尚无净值数据'
-                  : '当日净值已发布'
+                  : `NAV 归属日 ${summary.currNavDate}（vs ${summary.prevNavDate}）`
               }
             >
               <Statistic
@@ -396,8 +396,8 @@ export default function FundDetail() {
                 precision={2}
                 valueStyle={{ color: summary.dailyPnl !== null ? pnlColor(summary.dailyPnl) : undefined }}
               />
-              {summary.dailyPnl === null && summary.latestNavDate && (
-                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>净值更新中（最新 {summary.latestNavDate}）</div>
+              {summary.dailyPnl === null && summary.currNavDate && (
+                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>净值更新中（最新 {summary.currNavDate}）</div>
               )}
             </Tooltip>
           </Card>

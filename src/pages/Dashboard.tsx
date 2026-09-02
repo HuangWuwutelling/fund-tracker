@@ -146,17 +146,24 @@ export default function Dashboard() {
       width: 130,
       align: 'right' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
-      render: (v: number | null) => {
-        if (v === null) {
+      render: (_v: number | null, record: typeof summaries[0]) => {
+        if (record.dailyPnl === null) {
           // pnl 为 null：今日 NAV 未发布（QDII T+2 / 节假日 / 刷新失败）
           return (
-            <div>
-              <span style={{ color: '#999' }}>—</span>
-              <div style={{ fontSize: 11, color: '#999' }}>净值更新中</div>
-            </div>
+            <Tooltip title={record.currNavDate ? `最新 NAV ${record.currNavDate}` : '尚无净值'}>
+              <div>
+                <span style={{ color: '#999' }}>—</span>
+                <div style={{ fontSize: 11, color: '#999' }}>净值更新中</div>
+              </div>
+            </Tooltip>
           );
         }
-        return <span style={{ color: pnlColor(v) }}>{formatMoney(v)}</span>;
+        // 已发布：tooltip 明示 NAV 归属日（QDII 落后 A 股 2 个交易日时尤其重要）
+        return (
+          <Tooltip title={`NAV ${record.currNavDate} vs ${record.prevNavDate}`}>
+            <span style={{ color: pnlColor(record.dailyPnl) }}>{formatMoney(record.dailyPnl)}</span>
+          </Tooltip>
+        );
       },
     },
   ];
@@ -213,7 +220,7 @@ export default function Dashboard() {
                   ? '当日净值已全部发布'
                   : totals.totalDailyPnl === null
                   ? '今日尚无基金发布净值'
-                  : `${totals.dailyPnlUpdatedCount} 只基金已发布今日净值，${totals.dailyPnlPendingCount} 只净值待发布（QDII 通常 T+2 延迟）。运行中会自动刷新，无需手动操作`
+                  : `${totals.dailyPnlUpdatedCount} 只基金今日 NAV 已发布，${totals.dailyPnlPendingCount} 只净值待发布（QDII 通常 T+2 延迟）。运行中会自动刷新，无需手动操作`
               }
             >
               <Statistic
