@@ -19,10 +19,17 @@ type Granularity = 'day' | 'month' | 'year';
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
 
 /** PeriodDetail 共用：选中格子的 per-fund 明细表（三 Tab 复用） */
+interface PeriodDetailRow {
+  fundId: string;
+  fundName: string;
+  returnAmount: number;
+  isPending?: boolean;
+}
+
 interface PeriodDetailProps {
   dateLabel: string;
   total: number;
-  perFund: { fundId: string; fundName: string; returnAmount: number }[];
+  perFund: PeriodDetailRow[];
 }
 
 function PeriodDetail({ dateLabel, total, perFund }: PeriodDetailProps) {
@@ -38,7 +45,7 @@ function PeriodDetail({ dateLabel, total, perFund }: PeriodDetailProps) {
           合计 {formatMoney(total)}
         </Tag>
       </div>
-      <Table
+      <Table<PeriodDetailRow>
         size="small"
         dataSource={perFund}
         rowKey="fundId"
@@ -48,8 +55,15 @@ function PeriodDetail({ dateLabel, total, perFund }: PeriodDetailProps) {
             title: '基金',
             dataIndex: 'fundName',
             key: 'fundName',
-            render: (name: string, r: { fundId: string }) => (
-              <NavLink onClick={() => navigate(`/funds/${r.fundId}`)}>{name}</NavLink>
+            render: (_, r) => (
+              <NavLink onClick={() => navigate(`/funds/${r.fundId}`)}>
+                {r.fundName}
+                {r.isPending && (
+                  <Tag color="default" style={{ marginLeft: 6, fontSize: 11 }}>
+                    净值更新中
+                  </Tag>
+                )}
+              </NavLink>
             ),
           },
           {
@@ -57,7 +71,12 @@ function PeriodDetail({ dateLabel, total, perFund }: PeriodDetailProps) {
             dataIndex: 'returnAmount',
             key: 'returnAmount',
             align: 'right' as const,
-            render: (v: number) => <span style={{ color: pnlColor(v) }}>{formatMoney(v)}</span>,
+            render: (v, r) =>
+              r.isPending ? (
+                <span style={{ color: '#999' }}>—</span>
+              ) : (
+                <span style={{ color: pnlColor(v) }}>{formatMoney(v)}</span>
+              ),
           },
         ]}
       />
@@ -188,12 +207,15 @@ function DayView({
 function MonthView({
   monthlyReturns,
   year,
+  minYear,
   selectedKey,
   onSelect,
   onShiftYear,
 }: {
   monthlyReturns: MonthlyReturn[];
   year: number;
+  /** 数据最早年份（首笔交易年），用于禁用「往前再切」的按钮 */
+  minYear: number;
   selectedKey: string | null;
   onSelect: (key: string) => void;
   onShiftYear: (delta: number) => void;
@@ -215,7 +237,9 @@ function MonthView({
 
   const selected = selectedKey ? monthlyReturns.find((r) => r.month === selectedKey) ?? null : null;
   const currentYear = dayjs().year();
-  const hasPrev = year > Math.min(...monthlyReturns.map((r) => parseInt(r.month.slice(0, 4), 10)));
+  // 修正：原 Math.min(...monthlyReturns) 永远是 viewYear（monthlyReturns 只含当前年的 12 个月），
+  // 导致 hasPrev 永远是 false，用户无法回到历史年。改用父组件从 yearlyReturns 算出的 minYear。
+  const hasPrev = year > minYear;
   // 简化：hasNext 只允许切到当前年（不要给"未来年"按钮）
   const hasNext = year < currentYear;
 
@@ -327,12 +351,22 @@ export default function ReturnCalendar() {
     [funds, transactions, snapshots]
   );
   const monthlyReturns = useMemo(
-    () => generateMonthlyReturns(funds, transactions, viewYear),
-    [funds, transactions, viewYear]
+    () => generateMonthlyReturns(funds, transactions, dailyReturns, viewYear),
+    [funds, transactions, dailyReturns, viewYear]
   );
   const yearlyReturns = useMemo(
-    () => generateYearlyReturns(funds, transactions),
-    [funds, transactions]
+    () => generateYearlyReturns(funds, transactions, dailyReturns),
+    [funds, transactions, dailyReturns]
+  );
+
+  // 月 Tab 切年下界：从 yearlyReturns 推得（覆盖数据首笔交易年至今），
+  // 避免 monthlyReturns 里 Math.min 永远等于 viewYear 导致 hasPrev 失效。
+  const minYear = useMemo(
+    () =>
+      yearlyReturns.length > 0
+        ? Math.min(...yearlyReturns.map((r) => parseInt(r.year, 10)))
+        : dayjs().year(),
+    [yearlyReturns]
   );
 
   // Tab 切换时调整选中态：
@@ -392,6 +426,7 @@ export default function ReturnCalendar() {
               <MonthView
                 monthlyReturns={monthlyReturns}
                 year={viewYear}
+                minYear={minYear}
                 selectedKey={selected?.g === 'month' ? selected.key : null}
                 onSelect={handleSelect}
                 onShiftYear={(d) => setViewYear((y) => y + d)}

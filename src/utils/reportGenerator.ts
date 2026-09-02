@@ -1,9 +1,10 @@
 import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform, NavRecord } from '../types';
-import { calcShares, onlyConfirmed, isInPlanWindow } from './calculator';
+import { calcShares, calcDailyPnl, onlyConfirmed, isInPlanWindow } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
 import { countTradingDays, lookupNavForDate } from './navLookup';
 import { getNavHistory } from './storage';
 import { today } from './formatter';
+import { isNonTradingDay } from './chineseHolidays';
 import dayjs from 'dayjs';
 
 export interface FundPerformance {
@@ -87,7 +88,17 @@ export interface DailyReturn {
   /** 当天总收益（仅含价格变动 × 份额，不扣除当日净投入；当日投入见 Dashboard 顶部 StatCard） */
   totalReturn: number;
   /** 各基金贡献的收益 */
-  perFund: { fundId: string; fundName: string; returnAmount: number }[];
+  perFund: {
+    fundId: string;
+    fundName: string;
+    returnAmount: number;
+    /**
+     * 仅对"今日"行的某只基金可能为 true：该基金今日 NAV 未发布（QDII T+2 / 节假日 /
+     * 刷新失败），returnAmount 强制为 0。UI 渲染时区别于"持平=0"——显示"— 净值更新中"。
+     * 历史日的 perFund 不会出现 isPending=true（归属已确定）。
+     */
+    isPending?: boolean;
+  }[];
   /**
    * 仅对"今日"生效。今天**任何一个**基金都还没有"NAV-date=今日"的最新记录时
    * 为 true（即打开 app 时所有基金今日 NAV 都还没刷新成功）：totalReturn=0、
@@ -100,16 +111,16 @@ export interface DailyReturn {
 }
 
 /**
- * 加 N 个交易日（跳过周六、周日；不处理元旦/春节/国庆等法定节假日，因为基金公司的
- * "实际发布日"已含这部分信息，本地用日历日 + 周末跳过做近似即可）
+ * 加 N 个交易日（跳过周六、周日 + 中国法定节假日）。
+ * 节假日集合见 ./chineseHolidays.ts，按国务院办公厅年度公告维护。
+ * QDII 跨国庆/春节的归属日现在能精确落在实际发布日，而非假期中段。
  */
 function addTradingDays(date: string, days: number): string {
   let d = dayjs(date);
   let added = 0;
   while (added < days) {
     d = d.add(1, 'day');
-    const dow = d.day(); // 0=Sun, 6=Sat
-    if (dow !== 0 && dow !== 6) added++;
+    if (!isNonTradingDay(d.format('YYYY-MM-DD'))) added++;
   }
   return d.format('YYYY-MM-DD');
 }
@@ -135,13 +146,13 @@ interface Attribution {
 /**
  * 预计算每只基金的"相邻 NAV 变化"及其归属日：
  * 对每对相邻 NAV（prev → curr），把 (curr.nav - prev.nav) 的收益归属到 publishDate = curr.date
- * （QDII 则 +2 交易日）。返回 Map<归属日, Attribution[]>，供 generateDailyReturns 按日查找。
+ * （QDII 则 +2 交易日）。
  *
- * 份额按 publish 日（即归属日）计算——用户在 publish 日持有的份额数 × 该日新学到的 NAV 变化。
- * 不再扣除 fundFlow（参见 generateDailyReturns 的注释）。
+ * 返回嵌套 Map<归属日, Map<fundId, Attribution>>，按 fundId O(1) 查找，
+ * 替代之前的 Map<date, Attribution[]> + 内层 .find()（O(M) 每格）。
  */
-function buildAttributionMap(funds: Fund[]): Map<string, Attribution[]> {
-  const map = new Map<string, Attribution[]>();
+function buildAttributionMap(funds: Fund[]): Map<string, Map<string, Attribution>> {
+  const map = new Map<string, Map<string, Attribution>>();
   for (const fund of funds) {
     const hist = getNavHistory(fund.id);
     if (hist.length < 2) continue;
@@ -150,97 +161,162 @@ function buildAttributionMap(funds: Fund[]): Map<string, Attribution[]> {
       const curr = sorted[i]!;
       const prev = sorted[i - 1]!;
       const publishDate = getPublishDate(fund, curr.date);
-      if (!map.has(publishDate)) map.set(publishDate, []);
-      map.get(publishDate)!.push({ fund, curr, prev });
+      let inner = map.get(publishDate);
+      if (!inner) {
+        inner = new Map();
+        map.set(publishDate, inner);
+      }
+      inner.set(fund.id, { fund, curr, prev });
     }
   }
   return map;
 }
 
 /**
+ * 按基金预分桶 confirmed 交易，附加"截至各交易日"的累计份额时间线。
+ * 历史格计算 shares 时不再 filter+sort 全表——直接对时间线二分定位到 snap.date 的最新累计值，
+ * 单格 O(log K) 替代原来的 O(T) + O(K log K)。
+ *
+ * 返回 Map<fundId, { cumShares }[]>（按日期升序，cumShares = 处理完该日交易后的份额）
+ */
+function buildSharesTimeline(funds: Fund[], confirmed: Transaction[]): Map<string, Array<{ date: string; cumShares: number }>> {
+  const txsByFund = new Map<string, Transaction[]>();
+  for (const f of funds) txsByFund.set(f.id, []);
+  for (const tx of confirmed) {
+    const arr = txsByFund.get(tx.fundId);
+    if (arr) arr.push(tx);
+  }
+  const out = new Map<string, Array<{ date: string; cumShares: number }>>();
+  for (const f of funds) {
+    const txs = txsByFund.get(f.id) ?? [];
+    txs.sort((a, b) => a.date.localeCompare(b.date));
+    const timeline: Array<{ date: string; cumShares: number }> = [];
+    let cum = 0;
+    for (const tx of txs) {
+      if (tx.type === 'buy') cum += tx.shares;
+      else if (tx.type === 'sell') cum -= tx.shares;
+      else if (tx.type === 'dividend') cum += tx.shares;
+      timeline.push({ date: tx.date, cumShares: cum });
+    }
+    out.set(f.id, timeline);
+  }
+  return out;
+}
+
+/** 二分查找：截至 date（含）的最新累计份额。无交易返回 0 */
+function getSharesAsOf(
+  timeline: Array<{ date: string; cumShares: number }> | undefined,
+  date: string
+): number {
+  if (!timeline || timeline.length === 0) return 0;
+  let lo = 0;
+  let hi = timeline.length - 1;
+  let result = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    if (timeline[mid]!.date <= date) {
+      result = timeline[mid]!.cumShares;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return result;
+}
+
+/**
  * 生成每日收益明细（按日期升序）
- * - 不依赖 snapshot 的 totalValue：用 NAV 历史 + 交易算持仓市值
- * - **收益归属依据**：每只基金相邻 NAV 对 (prev → curr) 的 NAV 变化归属到 publishDate：
- *   - A股/债券/指数/混合：publishDate = NAV 日（T+0）
- *   - QDII：publishDate = NAV 日 + 2 交易日（跳过周末）——T+2 规则
- *   同一 NAV 变化只归属一次，不会跨日重复计入。
- * - **今日的归属口径**：必须满足 `curr.date === today`（即该基金今天有一条
- *   NAV-date=今日的最新 NAV）。这与 Dashboard `calcDailyPnl` 的
- *   `latest.date === today` 完全等价——A 股/债券/指数 T+0 自然命中；QDII
- *   T+2 延迟基金今日不命中，自动按 Dashboard 同样方式显示"净值更新中"。
- *   这样把"上周刚发布的 NAV 变化"（QDII publish-date 落到今天但 NAV-date
- *   是几天前）挡在今日格外面，避免日历当盈亏与 Dashboard 不一致。
- *   `isPending` 仅在今日**任何**基金 curr.date=今日都还不存在时为 true。
- *   只要有 ≥1 只基金今天刷出新 NAV（partial），就显示 partial 之和——
- *   与 Dashboard "有多少个更新就汇总多少个"的口径完全一致。
- * - 历史日的归属完全是确定性的（NAV 都在历史里），按 publish-date T+2 归属，
- *   不受"今天是否刷新"影响。
+ *
+ * **今天格 vs 历史格的算法分叉**：
+ * - **历史格**：用 attribution map（每只基金的相邻 NAV 对 (prev → curr) 按 publishDate
+ *   归属；QDII T+2 等延迟基金的归属日 = NAV 日 + 2 交易日）。这让历史回看时"QDII 实际
+ *   进入用户视野的那天"显示对应盈亏，与 `7889ec9` 修复一致。
+ * - **今天格**：**完全旁路 attribution map，直接调 calcDailyPnl per fund**。这确保
+ *   Calendar 当日盈亏 ≡ Dashboard 当日盈亏（共用同一份 `latest.date === today` 判定），
+ *   解决之前几个修复 commit 反复踩的"两边口径漂移"问题：
+ *     1) 跨午夜数据回溯——同一份数据 23:59 看是 ¥0、00:01 看是 QDII 涨幅（同源不同果）。
+ *     2) HK QDII 当日 NAV 公布时 Dashboard 收、Calendar 不收。
+ *     3) 今天不在 snapshots 时 today 格退化为 ¥0 而非"净值更新中"。
+ *     4) 已清仓基金（shares=0）新鲜 NAV 不再错误地让 isPending=false。
+ *
+ * **isPending 判定**：只看有持仓（shares>0）的基金——全部的"今日 NAV 都未发布"才视为待刷新。
+ * 排除空持仓基金（已清仓的基金 NAV 更新不应阻塞显示）。
+ *
+ * 注意：Day/Month/Year 三 Tab 现在**统一用 attribution 算法**——Month/Year Tab 直接聚合
+ * 本函数的 dailyReturns 结果，保证「月格 = 当月日格之和」「年格 = 当年日格之和」，
+ * 彻底消除之前"日 vs 月/年"算法分叉导致的查表对账差异（QDII 跨月归属尤其明显）。
  */
 export function generateDailyReturns(
   funds: Fund[],
   transactions: Transaction[],
   snapshots: DailySnapshot[]
 ): DailyReturn[] {
-  // 只用 snapshot 的日期序列来驱动"哪天有数据"——不读 totalValue
-  const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
-  if (sorted.length === 0) return [];
-
-  // 一次性过滤 confirmed，避免每个循环迭代重复 filter
   const confirmed = onlyConfirmed(transactions);
   const todayStr = today();
+  const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
 
-  // 预计算归属 map：每个相邻 NAV 变化按 publishDate 分组
-  // navHistory 会随用户刷新持续更新（晚间 NAV 发布后），所以"当天看"和"隔几天看"会因
-  // 新 NAV 入库而触发不同归属日的归属——这正是 C 方案的预期行为
+  // 一次性构建：归属 map + 份额时间线（避免内层每次循环 filter+sort 全表）
   const attributionMap = buildAttributionMap(funds);
-
+  const sharesTimeline = buildSharesTimeline(funds, confirmed);
   const result: DailyReturn[] = [];
-  for (let i = 0; i < sorted.length; i++) {
-    const currDate = sorted[i]!.date;
-    const isToday = currDate === todayStr;
 
-    // 找归属于 currDate 的所有 (fund, curr NAV, prev NAV)
-    const allAttributions = attributionMap.get(currDate) ?? [];
-
-    // 今日："必须是今天才学到的 NAV 变化"才算今日盈亏
-    //   - A 股 T+0：publish-date = curr.date = today → 命中 ✓
-    //   - QDII T+2：publish-date 落到今天但 curr.date 是几天前 → 不命中 ✗
-    //   与 Dashboard `latest.date === today` 严格对齐。
-    // 历史日：保持原 publish-date T+2 归属（QDII 也命中对应日期），让历史归因
-    //   在 NAV 实际到达用户视野的那天显示，与 `7889ec9` 修复的语义一致。
-    const todaysAttributions = isToday
-      ? allAttributions.filter((a) => a.curr.date === todayStr)
-      : allAttributions;
-
-    // 每只基金独立判断：有 attribution 就按归属算收益，没有就 0。
+  // 历史格：用 attribution + 份额时间线（O(M·log K) / 格，替代 O(M·(T + K log K))）
+  for (const snap of sorted) {
+    if (snap.date === todayStr) continue; // 今天格单独算，不走 attribution
+    const dayAttrs = attributionMap.get(snap.date);
     const perFund = funds.map((fund) => {
-      const attr = todaysAttributions.find((a) => a.fund.id === fund.id);
+      const attr = dayAttrs?.get(fund.id);
       if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
-
-      // 日盈亏 = publish 日持仓份额 × 该日新学到的 NAV 变化（业内通用口径）
-      // 不扣 fundFlow：当日的净投入由 Dashboard 顶部"当日投入"卡片独立显示，
-      // 在此重复扣减会让建仓日看起来"亏了一大笔"，与 Dashboard 当日盈亏口径也不一致。
-      const txs = confirmed.filter((t) => t.fundId === fund.id && t.date <= currDate);
-      const shares = calcShares(txs);
+      // 历史日 shares 按 snap.date 截断（不能用未来的持仓算当日盈亏）
+      const shares = getSharesAsOf(sharesTimeline.get(fund.id), snap.date);
       if (shares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
-
       return {
         fundId: fund.id,
         fundName: fund.name,
         returnAmount: shares * (attr.curr.nav - attr.prev.nav),
       };
     });
+    const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
+    result.push({ date: snap.date, totalReturn, perFund, isPending: false });
+  }
 
-    // 总收益 = 各基金当日价格变动之和（不扣 fundFlow，参见上方注释）
+  // 今天格：旁路 attribution map，直接用 calcDailyPnl per fund（同 Dashboard 口径）
+  // 即便 today 不在 snapshots 列表也照常生成——避免"关闭自动刷新 → today 显示 ¥0"的退化
+  if (funds.length > 0) {
+    const perFund = funds.map((fund) => {
+      // 与 calcFundSummary 一致：不限 date（包含未来日期 confirmed 的"预期持仓"），
+      // 让两边口径完全相同；这是 Dashboard 已有的 quirk，Calendar 同步跟随
+      const timeline = sharesTimeline.get(fund.id);
+      const shares = timeline && timeline.length > 0 ? timeline[timeline.length - 1]!.cumShares : 0;
+      const daily = calcDailyPnl(shares, getNavHistory(fund.id), todayStr);
+      return {
+        fundId: fund.id,
+        fundName: fund.name,
+        returnAmount: daily.pnl ?? 0,
+        // pnl=null → 该基金今日 NAV 未发布，UI 渲染时与"持平=0"区分
+        isPending: daily.pnl === null,
+      };
+    });
     const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
 
-    // 今日「全员待刷新」才标 pending：没有 fund 的 attribution 满足 curr.date=今天，
-    // 即今天还没任何一只刷出"NAV-date=今日"的新 NAV；只要有 ≥1 只贡献了，就走 partial
-    // 求和路径，UI 显示真实数字 + perFund 明细（含未更新的 0 项）。
-    const isPending = isToday && todaysAttributions.length === 0;
+    // 只看"有持仓"的基金：所有持有基金的最新 NAV 都还没到 today 才标 pending
+    // 排除空持仓（已清仓）基金——它们的 NAV 更新不应阻塞持仓基金的当日显示
+    const heldFunds = funds.filter((f) => {
+      const timeline = sharesTimeline.get(f.id);
+      return timeline && timeline.length > 0 && timeline[timeline.length - 1]!.cumShares > 0;
+    });
+    const isPending =
+      heldFunds.length > 0 &&
+      heldFunds.every((f) => {
+        const hist = getNavHistory(f.id);
+        if (hist.length === 0) return true;
+        return hist[hist.length - 1]!.date !== todayStr;
+      });
 
-    result.push({ date: currDate, totalReturn, perFund, isPending });
+    result.push({ date: todayStr, totalReturn, perFund, isPending });
+    result.sort((a, b) => a.date.localeCompare(b.date));
   }
+
   return result;
 }
 
@@ -509,90 +585,126 @@ export function generateMonthlyReport(
 
 /**
  * 生成指定年份 12 个月的月度收益列表（升序）
- * - 不依赖 snapshot 全覆盖：用 calcPortfolioValueAtDate(monthStart) vs calcPortfolioValueAtDate(monthEnd)
- * - perFund 拆分复用 calcFundPerformanceInRange
- * - 空月：totalReturn=0, perFund=[]（保证 12 格完整）
- * - 只算 confirmed 交易
+ *
+ * 算法：直接对 generateDailyReturns 的结果按月分组聚合 totalReturn + perFund.returnAmount，
+ * 保证「月格 = 当月所有日格之和」「年格 = 当年所有月格之和」三者口径完全一致，
+ * 解决之前"日 vs 月/年算法分叉"导致的查表对账差异（QDII 跨月归属尤其明显）。
+ *
+ * - returnRate 仍用月初持仓市值做分母（保留原有百分比语义，便于和 Dashboard 收益率口径对照）
+ * - perFund 始终包含所有基金（无贡献则为 0），与原行为对齐
+ * - 12 个月即使没数据也输出 0 格，保证日历视图完整
  */
 export function generateMonthlyReturns(
   funds: Fund[],
   transactions: Transaction[],
-  year: number,
-  _platforms?: Platform[]  // 暂未使用，与 generateMonthlyReport 签名保持一致；后续可加平台/类型分布
+  dailyReturns: DailyReturn[],
+  year: number
 ): MonthlyReturn[] {
+  // 初始化 12 个月（无论有没有数据都填 0 格，保证视图完整）
   const result: MonthlyReturn[] = [];
   for (let month = 1; month <= 12; month++) {
-    const [monthStart, monthEnd] = getMonthRange(year, month);
-    const monthStr = `${year}-${String(month).padStart(2, '0')}`;
-
-    const startValue = calcPortfolioValueAtDate(monthStart, funds, transactions);
-    const endValue = calcPortfolioValueAtDate(monthEnd, funds, transactions);
-
-    const confirmed = onlyConfirmed(transactions);
-    const monthTxs = confirmed.filter((t) => t.date >= monthStart && t.date <= monthEnd);
-    const buyTotal = monthTxs
-      .filter((t) => t.type === 'buy')
-      .reduce((sum, t) => sum + t.amount, 0);
-    const sellTotal = monthTxs
-      .filter((t) => t.type === 'sell')
-      .reduce((sum, t) => sum + (t.amount - t.fee), 0);
-
-    const totalReturn = endValue - startValue - buyTotal + sellTotal;
-    const returnRate = startValue > 0 ? (totalReturn / startValue) * 100 : 0;
-
-    const perFund: MonthlyReturn['perFund'] = funds.map((f) => {
-      const perf = calcFundPerformanceInRange(f, transactions, monthStart, monthEnd);
-      return { fundId: perf.fundId, fundName: perf.fundName, returnAmount: perf.returnAmount };
+    result.push({
+      month: `${year}-${String(month).padStart(2, '0')}`,
+      totalReturn: 0,
+      returnRate: 0,
+      perFund: [],
     });
-
-    result.push({ month: monthStr, totalReturn, returnRate, perFund });
   }
+
+  // 一次性：把 dailyReturns 按月聚合。预建 perFund Map<fundId, sumAmount> 减少嵌套循环
+  const perFundSums = new Map<string, Map<string, number>>();
+  for (const daily of dailyReturns) {
+    const monthStr = daily.date.slice(0, 7);
+    if (monthStr.slice(0, 4) !== String(year)) continue;
+    const monthResult = result.find((r) => r.month === monthStr);
+    if (!monthResult) continue;
+    monthResult.totalReturn += daily.totalReturn;
+    let fundMap = perFundSums.get(monthStr);
+    if (!fundMap) {
+      fundMap = new Map();
+      perFundSums.set(monthStr, fundMap);
+    }
+    for (const pf of daily.perFund) {
+      fundMap.set(pf.fundId, (fundMap.get(pf.fundId) ?? 0) + pf.returnAmount);
+    }
+  }
+
+  // 每只基金都出现（无贡献则 0），returnRate 用月初持仓市值做分母
+  const confirmed = onlyConfirmed(transactions);
+  for (const monthResult of result) {
+    const fundMap = perFundSums.get(monthResult.month);
+    for (const fund of funds) {
+      monthResult.perFund.push({
+        fundId: fund.id,
+        fundName: fund.name,
+        returnAmount: fundMap?.get(fund.id) ?? 0,
+      });
+    }
+    const monthStart = `${monthResult.month}-01`;
+    const startValue = calcPortfolioValueAtDate(monthStart, funds, confirmed);
+    monthResult.returnRate = startValue > 0 ? (monthResult.totalReturn / startValue) * 100 : 0;
+  }
+
   return result;
 }
 
 /**
  * 生成从首笔交易年到今年的年度收益列表（升序）
- * - 范围推断：Math.min(...transactions.map(t => t.date.slice(0,4))) 到今年
- * - 算法与 generateMonthlyReturns 一致（用 calcPortfolioValueAtDate）
- * - 无交易时返回仅含今年一格
+ *
+ * 算法同 generateMonthlyReturns：直接对 dailyReturns 按年分组聚合，
+ * 保证年格 = 当年所有月格之和 = 当年所有日格之和。
+ * 无交易时返回仅含今年一格（与原行为一致）。
  */
 export function generateYearlyReturns(
   funds: Fund[],
   transactions: Transaction[],
-  _platforms?: Platform[]
+  dailyReturns: DailyReturn[]
 ): YearlyReturn[] {
   const currentYear = new Date().getFullYear();
-  const confirmedTxs = onlyConfirmed(transactions);
-  const startYear = confirmedTxs.length > 0
-    ? Math.min(...confirmedTxs.map((t) => parseInt(t.date.slice(0, 4), 10)))
+  const confirmed = onlyConfirmed(transactions);
+  const startYear = confirmed.length > 0
+    ? Math.min(...confirmed.map((t) => parseInt(t.date.slice(0, 4), 10)))
     : currentYear;
 
   const result: YearlyReturn[] = [];
   for (let year = startYear; year <= currentYear; year++) {
-    const yearStart = `${year}-01-01`;
-    const yearEnd = `${year}-12-31`;
-    const yearStr = String(year);
-
-    const startValue = calcPortfolioValueAtDate(yearStart, funds, transactions);
-    const endValue = calcPortfolioValueAtDate(yearEnd, funds, transactions);
-
-    const yearTxs = confirmedTxs.filter((t) => t.date >= yearStart && t.date <= yearEnd);
-    const buyTotal = yearTxs
-      .filter((t) => t.type === 'buy')
-      .reduce((sum, t) => sum + t.amount, 0);
-    const sellTotal = yearTxs
-      .filter((t) => t.type === 'sell')
-      .reduce((sum, t) => sum + (t.amount - t.fee), 0);
-
-    const totalReturn = endValue - startValue - buyTotal + sellTotal;
-    const returnRate = startValue > 0 ? (totalReturn / startValue) * 100 : 0;
-
-    const perFund: YearlyReturn['perFund'] = funds.map((f) => {
-      const perf = calcFundPerformanceInRange(f, transactions, yearStart, yearEnd);
-      return { fundId: perf.fundId, fundName: perf.fundName, returnAmount: perf.returnAmount };
+    result.push({
+      year: String(year),
+      totalReturn: 0,
+      returnRate: 0,
+      perFund: [],
     });
-
-    result.push({ year: yearStr, totalReturn, returnRate, perFund });
   }
+
+  const perFundSums = new Map<string, Map<string, number>>();
+  for (const daily of dailyReturns) {
+    const yearStr = daily.date.slice(0, 4);
+    const yearResult = result.find((r) => r.year === yearStr);
+    if (!yearResult) continue;
+    yearResult.totalReturn += daily.totalReturn;
+    let fundMap = perFundSums.get(yearStr);
+    if (!fundMap) {
+      fundMap = new Map();
+      perFundSums.set(yearStr, fundMap);
+    }
+    for (const pf of daily.perFund) {
+      fundMap.set(pf.fundId, (fundMap.get(pf.fundId) ?? 0) + pf.returnAmount);
+    }
+  }
+
+  for (const yearResult of result) {
+    const fundMap = perFundSums.get(yearResult.year);
+    for (const fund of funds) {
+      yearResult.perFund.push({
+        fundId: fund.id,
+        fundName: fund.name,
+        returnAmount: fundMap?.get(fund.id) ?? 0,
+      });
+    }
+    const yearStart = `${yearResult.year}-01-01`;
+    const startValue = calcPortfolioValueAtDate(yearStart, funds, confirmed);
+    yearResult.returnRate = startValue > 0 ? (yearResult.totalReturn / startValue) * 100 : 0;
+  }
+
   return result;
 }
