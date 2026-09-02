@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import type { Fund } from '../types';
+import type { Fund, NavRecord } from '../types';
 import { isNonTradingDay } from './chineseHolidays';
 
 /**
@@ -30,4 +30,29 @@ export function addTradingDays(date: string, days: number): string {
  */
 export function getPublishDate(fund: Fund, navDate: string): string {
   return fund.type === 'qdii' ? addTradingDays(navDate, 2) : navDate;
+}
+
+/**
+ * 在 NAV 历史（降序）中找"满足 publishDate 谓词"的最新的相邻 NAV 对。
+ *
+ * 用法差异：
+ * - 当日盈亏（calcDailyPnl）：predicate = `pd === todayStr`，找"今天刚发布"的那对
+ * - QDII 历史格（reportGenerator）：predicate = `pd <= todayStr`，找"截至今天已发布"的最新对
+ *   （理由：QDII T+2 发布，回看历史日时仍显示该 QDII 截至当下最新已发布的盈亏）
+ *
+ * 找不到时返回 null。
+ */
+export function findPublishedNavPair(
+  fund: Fund,
+  navHistory: NavRecord[],
+  predicate: (publishDate: string) => boolean
+): { curr: NavRecord; prev: NavRecord } | null {
+  if (navHistory.length < 2) return null;
+  const sorted = [...navHistory].sort((a, b) => b.date.localeCompare(a.date));
+  for (let i = 0; i < sorted.length - 1; i++) {
+    if (predicate(getPublishDate(fund, sorted[i]!.date))) {
+      return { curr: sorted[i]!, prev: sorted[i + 1]! };
+    }
+  }
+  return null;
 }

@@ -13,6 +13,7 @@ import { useStore } from '../stores';
 import { calcFundSummary, calcSharesFromAmount, calcShares, onlyConfirmed } from '../utils/calculator';
 import { pnlColor, formatDate, formatMoney, today } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
+import { isNonTradingDay } from '../utils/chineseHolidays';
 import InitialPositionModal from '../components/InitialPositionModal';
 import { FUND_TYPE_LABELS, TRANSACTION_TYPE_LABELS, FREQUENCY_LABELS } from '../types';
 import type { Transaction, DcaPlan, Fund } from '../types';
@@ -383,7 +384,9 @@ export default function FundDetail() {
           <Card>
             <Tooltip
               title={
-                summary.dailyPnl === null
+                isNonTradingDay(today())
+                  ? '今日为非交易日（A 股 / QDII 休市）'
+                  : summary.dailyPnl === null
                   ? summary.currNavDate
                     ? `今日净值未发布（最新 ${summary.currNavDate}，QDII 通常 T+2 延迟）`
                     : '尚无净值数据'
@@ -396,7 +399,10 @@ export default function FundDetail() {
                 precision={2}
                 valueStyle={{ color: summary.dailyPnl !== null ? pnlColor(summary.dailyPnl) : undefined }}
               />
-              {summary.dailyPnl === null && summary.currNavDate && (
+              {summary.dailyPnl === null && isNonTradingDay(today()) && (
+                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>今日休市</div>
+              )}
+              {summary.dailyPnl === null && !isNonTradingDay(today()) && summary.currNavDate && (
                 <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>净值更新中（最新 {summary.currNavDate}）</div>
               )}
             </Tooltip>

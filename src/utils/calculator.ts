@@ -1,5 +1,5 @@
 import type { Transaction, Fund, NavRecord, DcaPlan } from '../types';
-import { getPublishDate } from './tradingDays';
+import { findPublishedNavPair } from './tradingDays';
 import dayjs from 'dayjs';
 
 /** 过滤掉 pending(待确认)交易;只保留 confirmed 或未设状态的(向后兼容) */
@@ -98,17 +98,13 @@ export function calcDailyPnl(
   todayStr: string
 ): { pnl: number | null; currDate: string; prevDate: string; isReady: boolean } {
   if (navHistory.length < 2) return { pnl: null, currDate: '', prevDate: '', isReady: false };
-  const sorted = [...navHistory].sort((a, b) => b.date.localeCompare(a.date));
-  // 找 publishDate === todayStr 的最新 NAV（A 股 publishDate = navDate；QDII = navDate + 2 交易日）
-  const idx = sorted.findIndex((r) => getPublishDate(fund, r.date) === todayStr);
-  if (idx === -1) return { pnl: null, currDate: '', prevDate: '', isReady: false };
-  const curr = sorted[idx]!;
-  const prev = idx + 1 < sorted.length ? sorted[idx + 1] : null;
-  if (!prev) return { pnl: null, currDate: curr.date, prevDate: '', isReady: false };
+  // 找 publishDate === todayStr 的最新 NAV 对（A 股 publishDate = navDate；QDII = navDate + 2 交易日）
+  const pair = findPublishedNavPair(fund, navHistory, (pd) => pd === todayStr);
+  if (!pair) return { pnl: null, currDate: '', prevDate: '', isReady: false };
   return {
-    pnl: shares * (curr.nav - prev.nav),
-    currDate: curr.date,
-    prevDate: prev.date,
+    pnl: shares * (pair.curr.nav - pair.prev.nav),
+    currDate: pair.curr.date,
+    prevDate: pair.prev.date,
     isReady: true,
   };
 }

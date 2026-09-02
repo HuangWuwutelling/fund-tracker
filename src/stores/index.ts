@@ -123,9 +123,8 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
     // Regenerate today's snapshot to reflect the removal (skip on non-trading days)
     const newSnapshot = generateSnapshot(funds, transactions);
-    const snapshots = newSnapshot
-      ? [...get().snapshots.filter((s) => s.date !== newSnapshot.date), newSnapshot]
-      : get().snapshots.filter((s) => s.date !== today());
+    const snapshots = get().snapshots.filter((s) => s.date !== today());
+    if (newSnapshot) snapshots.push(newSnapshot);
     storage.saveSnapshots(snapshots);
 
     set({ funds, transactions, dcaPlans, snapshots });

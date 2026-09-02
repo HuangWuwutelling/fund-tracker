@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useStore } from '../stores';
 import { calcFundSummary, calcXIRR, calcDividendTotal, calcTodayInvested } from '../utils/calculator';
 import { today } from '../utils/formatter';
+import { isNonTradingDay } from '../utils/chineseHolidays';
 import ReturnCalendar from '../components/ReturnCalendar';
 import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
 
@@ -13,13 +14,15 @@ export default function Dashboard() {
   const { funds, transactions, platforms, dcaPlans, getNavHistory } = useStore();
   const navigate = useNavigate();
 
+  // todayStr 提到组件层，让 useMemo deps 能感知"跨日"——深夜跨过午夜时下一次渲染
+  // 会自动重算 today 格（避免 today 高亮 / 当日盈亏判定卡在前一天）。
+  const todayStr = today();
   const summaries = useMemo(() => {
-    const todayStr = today();
     return funds.map((fund) => ({
       fund,
       ...calcFundSummary(fund, transactions, getNavHistory(fund.id), todayStr),
     }));
-  }, [funds, transactions, getNavHistory]);
+  }, [funds, transactions, getNavHistory, todayStr]);
 
   // 衍生统计：memoize 避免每次渲染重算 + 重复 getNavHistory 调用
   const totals = useMemo(() => {
@@ -148,6 +151,18 @@ export default function Dashboard() {
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
       render: (_v: number | null, record: typeof summaries[0]) => {
         if (record.dailyPnl === null) {
+          // 非交易日（周末 / 节假日）：A 股 / QDII 都不开市，没数据是正常的，
+          // 不要显示误导性的"净值更新中"——文案改成"今日休市"
+          if (isNonTradingDay(todayStr)) {
+            return (
+              <Tooltip title="今日为非交易日，A 股 / QDII 休市">
+                <div>
+                  <span style={{ color: '#999' }}>—</span>
+                  <div style={{ fontSize: 11, color: '#999' }}>今日休市</div>
+                </div>
+              </Tooltip>
+            );
+          }
           // pnl 为 null：今日 NAV 未发布（QDII T+2 / 节假日 / 刷新失败）
           return (
             <Tooltip title={record.currNavDate ? `最新 NAV ${record.currNavDate}` : '尚无净值'}>
@@ -216,7 +231,9 @@ export default function Dashboard() {
           <Card>
             <Tooltip
               title={
-                totals.isDailyPnlComplete
+                isNonTradingDay(todayStr)
+                  ? '今日为非交易日（A 股 / QDII 休市），无当日盈亏'
+                  : totals.isDailyPnlComplete
                   ? '当日净值已全部发布'
                   : totals.totalDailyPnl === null
                   ? '今日尚无基金发布净值'
@@ -225,7 +242,9 @@ export default function Dashboard() {
             >
               <Statistic
                 title={
-                  totals.isDailyPnlComplete
+                  isNonTradingDay(todayStr)
+                    ? `当日盈亏（${today()}，休市）`
+                    : totals.isDailyPnlComplete
                     ? `当日盈亏（${today()}）`
                     : totals.totalDailyPnl === null
                     ? `当日盈亏（${today()}）`
@@ -237,7 +256,7 @@ export default function Dashboard() {
                   color: totals.totalDailyPnl !== null ? pnlColor(totals.totalDailyPnl) : undefined,
                 }}
               />
-              {!totals.isDailyPnlComplete && totals.totalDailyPnl !== null && (
+              {!isNonTradingDay(todayStr) && !totals.isDailyPnlComplete && totals.totalDailyPnl !== null && (
                 <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
                   已更新 {totals.dailyPnlUpdatedCount} / {summaries.length} 只
                 </div>

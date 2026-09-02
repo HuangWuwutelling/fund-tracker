@@ -9,7 +9,7 @@ import {
   generateMonthlyReturns,
   generateYearlyReturns,
 } from '../utils/reportGenerator';
-import { formatMoney, pnlColor } from '../utils/formatter';
+import { formatMoney, pnlColor, today } from '../utils/formatter';
 import { isNonTradingDay } from '../utils/chineseHolidays';
 import HeatmapGrid, { type HeatmapCell } from './HeatmapGrid';
 import NavLink from './NavLink';
@@ -118,6 +118,9 @@ function DayView({
     [dailyReturns]
   );
 
+  // todayStr 提到组件层，让 cells useMemo deps 能感知跨日（避免深夜跨午夜时 today 高亮卡在前一天）
+  const todayStr = today();
+
   const cells = useMemo(() => {
     const map = new Map<string, DailyReturn>();
     for (const d of dailyReturns) map.set(d.date, d);
@@ -132,7 +135,6 @@ function DayView({
     const totalCells = gridEnd.diff(gridStart, 'day') + 1;
 
     const out: HeatmapCell[] = [];
-    const todayStr = dayjs().format('YYYY-MM-DD');
     for (let i = 0; i < totalCells; i++) {
       const d = gridStart.add(i, 'day');
       const date = d.format('YYYY-MM-DD');
@@ -162,12 +164,12 @@ function DayView({
       });
     }
     return out;
-  }, [dailyReturns, viewMonth]);
+  }, [dailyReturns, viewMonth, todayStr]);
 
   const hasPrev = dailyReturns.some((d) => d.date.slice(0, 7) < viewMonth);
   const hasNext =
     dailyReturns.some((d) => d.date.slice(0, 7) > viewMonth) ||
-    dayjs().format('YYYY-MM') > viewMonth;
+    todayStr.slice(0, 7) > viewMonth;
 
   const selected = selectedKey ? dailyReturns.find((d) => d.date === selectedKey) ?? null : null;
 
@@ -222,7 +224,9 @@ function DayView({
         // 就走明细面板（每个基金单独标 isPending，让 A 股能看到自己的涨跌）
         selected.perFund.every((p) => p.isPending) ? (
           <div style={{ marginTop: 16, padding: 12, background: '#fafafa', borderRadius: 6, color: '#999', fontSize: 13 }}>
-            {selected.date}：净值更新中（QDII 通常 T+2 延迟，或当日 NAV 尚未发布）
+            {isNonTradingDay(selected.date)
+              ? `${selected.date}：今日休市（A 股 / QDII 休市）`
+              : `${selected.date}：净值更新中（QDII 通常 T+2 延迟，或当日 NAV 尚未发布）`}
           </div>
         ) : (
           <PeriodDetail

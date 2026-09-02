@@ -4,7 +4,7 @@ import { FUND_TYPE_LABELS } from '../types';
 import { countTradingDays, lookupNavForDate } from './navLookup';
 import { getNavHistory } from './storage';
 import { today } from './formatter';
-import { getPublishDate } from './tradingDays';
+import { getPublishDate, findPublishedNavPair } from './tradingDays';
 import { isNonTradingDay } from './chineseHolidays';
 import dayjs from 'dayjs';
 
@@ -263,23 +263,14 @@ export function generateDailyReturns(
         const qdiiShares = getSharesAsOf(sharesTimeline.get(fund.id), snap.date);
         if (qdiiShares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
         // 找 publishDate <= todayStr 的最新一对 NAV
-        const hist = getNavHistory(fund.id);
-        const sortedHist = [...hist].sort((a, b) => b.date.localeCompare(a.date));
-        let curr = null, prev = null;
-        for (let i = 0; i < sortedHist.length - 1; i++) {
-          if (getPublishDate(fund, sortedHist[i]!.date) <= todayStr) {
-            curr = sortedHist[i]!;
-            prev = sortedHist[i + 1]!;
-            break;
-          }
-        }
-        if (!curr || !prev) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+        const pair = findPublishedNavPair(fund, getNavHistory(fund.id), (pd) => pd <= todayStr);
+        if (!pair) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
         return {
           fundId: fund.id,
           fundName: fund.name,
-          returnAmount: qdiiShares * (curr.nav - prev.nav),
+          returnAmount: qdiiShares * (pair.curr.nav - pair.prev.nav),
           // 标记 QDII 用最新已发布对，让明细面板 / UI 明示语义
-          latestPublishedDate: curr.date,
+          latestPublishedDate: pair.curr.date,
         };
       }
       // A 股 / 其他：按 navDate 归属（attribution + 份额时间线）
