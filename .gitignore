@@ -4,3 +4,7 @@ dist
 *.tsbuildinfo
 # Claude Code 项目说明文件，包含架构细节/已知坑/内部约定——不上传
 CLAUDE.md
+# 本地 MCP 配置，含明文 API key，禁止提交
+.mcp.json
+# Claude Code 工作目录（本地会话/agent/状态文件）
+.claude/
