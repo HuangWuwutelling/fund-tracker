@@ -78,31 +78,72 @@ export function calcReturnRate(totalReturn: number, cost: number): number {
 }
 
 /**
+ * 按持仓时长拆分计算某日盈亏（修复买入/卖出日过度计入）
+ *
+ * 假设日内交易集中在中点（约 12:00），把 [prev_close, today_close] 分两段：
+ *   - [prev_close, mid]：shares_before 持有
+ *   - [mid, today_close]：shares_after 持有
+ * 等价公式：
+ *   pnl = shares_before × Δnav + (shares_after − shares_before) × Δnav × 0.5
+ *
+ * 边界：
+ *   - shares_after = 0：清仓日，返回 0（不再持有，涨跌不归入当日）
+ *   - shares_before = shares_after：与原 shares × Δnav 一致
+ *   - shares_before = 0 且 shares_after > 0：今日建仓，按半天持仓计算
+ *
+ * 修复前：daily PnL 用 shares（当天末累计）× Δnav，把买入日 NAV 涨跌全部归到新份额。
+ * 例：T 日 12:00 买入 1000 元（nav=1.0，shares=1000），T-1→T NAV 涨 5%；
+ *   - 旧：pnl = 1000 × 0.05 = ¥50（按全天持仓算）
+ *   - 新：pnl = 0 × 0.05 + (1000 − 0) × 0.05 × 0.5 = ¥25（半天持仓）
+ */
+export function calcDailyPnlBySegments(
+  prevNav: number,
+  currNav: number,
+  sharesBefore: number,
+  sharesAfter: number
+): number {
+  if (sharesAfter <= 0) return 0;
+  const deltaNav = currNav - prevNav;
+  if (sharesBefore === sharesAfter) return sharesAfter * deltaNav;
+  return sharesBefore * deltaNav + (sharesAfter - sharesBefore) * deltaNav * 0.5;
+}
+
+/**
  * 计算单只基金的当日盈亏（按"发布日"对齐）
  * 返回 { pnl, currDate, prevDate, isReady }：
  *   - pnl = null：完全无 NAV 历史或不足 2 条
  *   - isReady = false：今日还没有"已发布的最新 NAV 对"（A 股白天 / QDII T+2 延迟 / 节假日 / 刷新失败）
  *     → UI 显示"— 净值更新中"
- *   - isReady = true：今日发布日已对齐，pnl = shares × (curr.nav − prev.nav)
+ *   - isReady = true：今日发布日已对齐，pnl = 按持仓时长拆分计算的当日盈亏
  *     - A 股：curr/prev 是今天 vs 昨天 NAV
  *     - QDII：curr/prev 是 QDII "今日发布"对应的那对 NAV（归属日落后 A 股 2 个交易日）
  *       例：今天 = 9/3，QDII 9/1 NAV 在 9/3 晚上发布 → pnl = 9/1 NAV − 8/29 NAV
  *
  * 口径：A 股与 QDII 行为完全对称，都是"等到发布 → 才有数字"，区别只在 QDII 的 NAV 归属日落后 2 个交易日。
  * 历史格归属（reportGenerator）按 navDate（即"准确日期"），与本函数解耦。
+ *
+ * sharesBefore（可选）：当日之前的累计份额。传入则按子时段拆分计算（避免买入日过度计入），
+ * 不传则退化为 shares × Δnav（向后兼容 Dashboard 单基金显示场景）。
  */
 export function calcDailyPnl(
   shares: number,
   navHistory: NavRecord[],
   fund: Fund,
-  todayStr: string
+  todayStr: string,
+  sharesBefore?: number
 ): { pnl: number | null; currDate: string; prevDate: string; isReady: boolean } {
   if (navHistory.length < 2) return { pnl: null, currDate: '', prevDate: '', isReady: false };
   // 找 publishDate === todayStr 的最新 NAV 对（A 股 publishDate = navDate；QDII = navDate + 2 交易日）
   const pair = findPublishedNavPair(fund, navHistory, (pd) => pd === todayStr);
   if (!pair) return { pnl: null, currDate: '', prevDate: '', isReady: false };
+  const pnl = calcDailyPnlBySegments(
+    pair.prev.nav,
+    pair.curr.nav,
+    sharesBefore ?? shares,
+    shares
+  );
   return {
-    pnl: shares * (pair.curr.nav - pair.prev.nav),
+    pnl,
     currDate: pair.curr.date,
     prevDate: pair.prev.date,
     isReady: true,
@@ -397,7 +438,10 @@ export function calcFundSummary(
   const marketValue = calcMarketValue(shares, fund.currentNav);
   const totalReturn = calcReturn(marketValue, cost);
   const returnRate = calcReturnRate(totalReturn, cost);
-  const dailyPnlResult = calcDailyPnl(shares, navHistory, fund, todayStr);
+  // sharesBefore = 今日之前的累计份额（含昨日及之前确认的交易），
+  // 用于 calcDailyPnl 的子时段拆分——避免今日买入的 NAV 涨跌全归到新份额
+  const sharesBefore = calcShares(fundTransactions.filter((t) => t.date < todayStr));
+  const dailyPnlResult = calcDailyPnl(shares, navHistory, fund, todayStr, sharesBefore);
   const xirr = calcXIRR(fundTransactions, marketValue);
   const dividend = calcDividendTotal(fundTransactions);
 

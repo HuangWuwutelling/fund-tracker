@@ -1,10 +1,10 @@
 import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform, NavRecord } from '../types';
-import { calcShares, calcDailyPnl, onlyConfirmed, isInPlanWindow } from './calculator';
+import { calcShares, calcDailyPnl, calcDailyPnlBySegments, onlyConfirmed, isInPlanWindow } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
 import { countTradingDays, lookupNavForDate } from './navLookup';
 import { getNavHistory } from './storage';
 import { today } from './formatter';
-import { getPublishDate, findPublishedNavPair } from './tradingDays';
+import { getPublishDate } from './tradingDays';
 import { isNonTradingDay } from './chineseHolidays';
 import dayjs from 'dayjs';
 
@@ -248,45 +248,44 @@ export function generateDailyReturns(
   const sharesTimeline = buildSharesTimeline(funds, confirmed);
   const result: DailyReturn[] = [];
 
-  // 历史格：QDII 与 A 股用不同口径
-  // - A 股：按 navDate 归属（attribution + 份额时间线），每天显示当天涨跌
-  // - QDII：所有日期都显示"该 QDII 最新一笔已发布 NAV 对"的盈亏
-  //   原因：QDII T+2 发布，按 navDate 归属常常没数据（returnAmount=0 不合理，
-  //   "净值更新中" 又跟"历史"语义冲突）；直接用最新已发布对避免 0/pending 混乱。
-  //   代价：QDII 在历史格不区分日期，整格 totalReturn 需要把 QDII 单独列出。
+  // 历史格：QDII 与 A 股统一用 attributionMap（按 navDate 归属，与 A 股同口径）
+  // - QDII 9/1 NAV 涨跌归到 9/1，T+2 发布前的归属日（publishDate > snap.date）标 isPending=true
+  // - QDII 发布后正常计入收益，与 A 股完全对称
+  // - 按持仓时长拆分 PnL（calcDailyPnlBySegments）：避免买入/卖出日过度计入新份额
+  // 修复前：QDII 用「最新已发布对」覆盖所有历史日，导致 5/1-5/5 同一数字；
+  //        且买入日 NAV 涨跌全归新份额（pnl 高估）
+  // 修复后：每个历史日按各自的 navDate 归属，且按当日持仓变化做子时段拆分
   for (const snap of sorted) {
     if (snap.date === todayStr) continue; // 今天格单独算，不走 attribution
     const dayAttrs = attributionMap.get(snap.date);
     const perFund = funds.map((fund) => {
-      // QDII：所有历史日期都返回"最新已发布对"的盈亏（不分日期）
-      if (fund.type === 'qdii') {
-        const qdiiShares = getSharesAsOf(sharesTimeline.get(fund.id), snap.date);
-        if (qdiiShares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
-        // 找 publishDate <= todayStr 的最新一对 NAV
-        const pair = findPublishedNavPair(fund, getNavHistory(fund.id), (pd) => pd <= todayStr);
-        if (!pair) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
-        return {
-          fundId: fund.id,
-          fundName: fund.name,
-          returnAmount: qdiiShares * (pair.curr.nav - pair.prev.nav),
-          // 标记 QDII 用最新已发布对，让明细面板 / UI 明示语义
-          latestPublishedDate: pair.curr.date,
-        };
-      }
-      // A 股 / 其他：按 navDate 归属（attribution + 份额时间线）
       const attr = dayAttrs?.get(fund.id);
       if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
-      const shares = getSharesAsOf(sharesTimeline.get(fund.id), snap.date);
-      if (shares <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+      const timeline = sharesTimeline.get(fund.id);
+      const sharesAfter = getSharesAsOf(timeline, snap.date);
+      if (sharesAfter <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+      // QDII T+2 发布：归属日 = navDate，发布日 = navDate + 2 交易日
+      // 历史回看 snap.date 时，若 publishDate > snap.date 则尚未发布（数据未到），标 pending
+      const isQdii = fund.type === 'qdii';
+      const published = isQdii ? getPublishDate(fund, attr.curr.date) <= snap.date : true;
+      // 按子时段拆分：shares_before = snap.date 之前的累计份额（不含当日交易）
+      const sharesBefore = getSharesAsOf(timeline, attr.prev.date);
+      const returnAmount = published
+        ? calcDailyPnlBySegments(attr.prev.nav, attr.curr.nav, sharesBefore, sharesAfter)
+        : 0;
       return {
         fundId: fund.id,
         fundName: fund.name,
-        returnAmount: shares * (attr.curr.nav - attr.prev.nav),
+        returnAmount,
+        isPending: !published,
+        latestPublishedDate: published && isQdii ? attr.curr.date : undefined,
       };
     });
     const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
-    // 历史格不 pending（QDII 永远有"最新已发布对"的数字）
-    result.push({ date: snap.date, totalReturn, perFund });
+    // 历史格的 isPending：任一持仓基金在该归属日尚未发布（QDII T+2 延迟场景），
+    // totalReturn 仅汇总已发布的基金（与"已更新 X/Y 只"口径一致）
+    const hasPendingFund = perFund.some((p) => p.isPending === true);
+    result.push({ date: snap.date, totalReturn, perFund, isPending: hasPendingFund });
   }
 
   // 今天格：旁路 attribution map，直接用 calcDailyPnl per fund（同 Dashboard 口径）
@@ -298,7 +297,10 @@ export function generateDailyReturns(
       // 让两边口径完全相同；这是 Dashboard 已有的 quirk，Calendar 同步跟随
       const timeline = sharesTimeline.get(fund.id);
       const shares = timeline && timeline.length > 0 ? timeline[timeline.length - 1]!.cumShares : 0;
-      const daily = calcDailyPnl(shares, getNavHistory(fund.id), fund, todayStr);
+      // sharesBefore = 昨日累计份额（含确认买入），用于子时段拆分避免今日买入过度计入
+      const yesterday = dayjs(todayStr).subtract(1, 'day').format('YYYY-MM-DD');
+      const sharesBefore = getSharesAsOf(timeline, yesterday);
+      const daily = calcDailyPnl(shares, getNavHistory(fund.id), fund, todayStr, sharesBefore);
       return {
         fundId: fund.id,
         fundName: fund.name,
@@ -351,6 +353,50 @@ function calcPortfolioValueAtDate(
     if (nav) total += shares * nav.nav;
   }
   return total;
+}
+
+/**
+ * 计算区间内的资金加权持仓市值（用于月/年收益率分母）
+ *
+ * 算法：遍历 [start, end] 内每天（自然日，含周末/节假日），
+ * 每只基金 = shares × lookupNavForDate（无当日 NAV 时回退到最近已发布 NAV），
+ * 累加每日总市值，最后除以天数 = 时间加权平均持仓市值。
+ *
+ * 修复前：月/年 returnRate 用月初持仓市值做分母，但 totalReturn 是日格之和，
+ * 包含月中新买入份额的涨跌 → 分母偏小，returnRate 偏高。
+ * 例：6/15 买入 10000 元（NAV=1.0），当月 NAV 涨 2%：
+ *   - 旧：totalReturn=¥200, startValue=月初市值(假设 50000) → returnRate=0.40%
+ *   - 新：日均持仓市值≈55000（含新购 10000 元×15/30 权重）→ returnRate=0.36%
+ *
+ * sharesTimeline 复用 generateDailyReturns 预建的时间线，避免内层 filter+sort 全表。
+ */
+function calcWeightedPortfolioValueInRange(
+  startDate: string,
+  endDate: string,
+  funds: Fund[],
+  sharesTimeline: Map<string, Array<{ date: string; cumShares: number }>>
+): number {
+  const days = dayjs(endDate).diff(dayjs(startDate), 'day') + 1;
+  if (days <= 0) return 0;
+
+  let sumDailyValue = 0;
+  let countedDays = 0;
+  let cursor = dayjs(startDate);
+  for (let i = 0; i < days; i++) {
+    const dateStr = cursor.format('YYYY-MM-DD');
+    let dailyValue = 0;
+    for (const fund of funds) {
+      const timeline = sharesTimeline.get(fund.id);
+      const shares = getSharesAsOf(timeline, dateStr);
+      if (shares <= 0) continue;
+      const nav = lookupNavForDate(fund.id, dateStr);
+      if (nav) dailyValue += shares * nav.nav;
+    }
+    sumDailyValue += dailyValue;
+    countedDays++;
+    cursor = cursor.add(1, 'day');
+  }
+  return countedDays > 0 ? sumDailyValue / countedDays : 0;
 }
 
 function calcFundPerformanceInRange(
@@ -474,12 +520,13 @@ export function generateWeeklyReport(
       // Count actual trading days in this week from the fund's NAV history
       expected = countTradingDays(plan.fundId, weekStart, weekEnd);
     }
-    // 实际笔数：金额匹配 + 日期落在计划执行窗口内的 buy 交易（含 pending——定投自动生成的
-    // 待确认记录应立刻计入"定投执行"，否则周报/月报要等 T+1（QDII 还要 T+2）净值确认
-    // 后才显示数字，与累计投入口径不一致）。
-    // 手动买入也会被命中（同样满足"金额±¥1 + 窗口内"），但这是预期行为：
+    // 实际笔数：金额匹配 + 日期落在计划执行窗口内的 buy 交易（**仅 confirmed**）
+    // 口径与周报 totalReturn / fundRankings 一致——都基于 onlyConfirmed 交易。
+    // 修复前：planBuyTxs 含 pending，导致 dcaActual 与 totalReturn 在 buy 总金额上不一致
+    // （例如 9/3 自动生成 pending 买入：dcaActual=1 但 totalReturn 还看不到这笔投入）。
+    // 手动买入也会被命中（同样满足"金额±¥1 + 窗口内"），这是预期行为：
     // 手动操作本身就是在执行计划，无需区分自动/手动来源。
-    const planBuyTxs = transactions.filter(
+    const planBuyTxs = onlyConfirmed(transactions).filter(
       (t) =>
         t.fundId === plan.fundId &&
         t.type === 'buy' &&
@@ -602,7 +649,8 @@ export function generateMonthlyReport(
  * 保证「月格 = 当月所有日格之和」「年格 = 当年所有月格之和」三者口径完全一致，
  * 解决之前"日 vs 月/年算法分叉"导致的查表对账差异（QDII 跨月归属尤其明显）。
  *
- * - returnRate 仍用月初持仓市值做分母（保留原有百分比语义，便于和 Dashboard 收益率口径对照）
+ * - returnRate 用"资金加权持仓市值"做分母（calcWeightedPortfolioValueInRange），
+ *   解决"月中买入的份额已贡献收益，但分母未包含买入资金"导致的 returnRate 偏高
  * - perFund 始终包含所有基金（无贡献则为 0），与原行为对齐
  * - 12 个月即使没数据也输出 0 格，保证日历视图完整
  */
@@ -641,8 +689,9 @@ export function generateMonthlyReturns(
     }
   }
 
-  // 每只基金都出现（无贡献则 0），returnRate 用月初持仓市值做分母
+  // 每只基金都出现（无贡献则 0），returnRate 用资金加权持仓市值做分母
   const confirmed = onlyConfirmed(transactions);
+  const sharesTimeline = buildSharesTimeline(funds, confirmed);
   for (const monthResult of result) {
     const fundMap = perFundSums.get(monthResult.month);
     for (const fund of funds) {
@@ -652,9 +701,9 @@ export function generateMonthlyReturns(
         returnAmount: fundMap?.get(fund.id) ?? 0,
       });
     }
-    const monthStart = `${monthResult.month}-01`;
-    const startValue = calcPortfolioValueAtDate(monthStart, funds, confirmed);
-    monthResult.returnRate = startValue > 0 ? (monthResult.totalReturn / startValue) * 100 : 0;
+    const [monthStart, monthEnd] = getMonthRange(year, parseInt(monthResult.month.slice(5, 7), 10));
+    const weightedValue = calcWeightedPortfolioValueInRange(monthStart, monthEnd, funds, sharesTimeline);
+    monthResult.returnRate = weightedValue > 0 ? (monthResult.totalReturn / weightedValue) * 100 : 0;
   }
 
   return result;
@@ -666,6 +715,9 @@ export function generateMonthlyReturns(
  * 算法同 generateMonthlyReturns：直接对 dailyReturns 按年分组聚合，
  * 保证年格 = 当年所有月格之和 = 当年所有日格之和。
  * 无交易时返回仅含今年一格（与原行为一致）。
+ *
+ * returnRate 用"资金加权持仓市值"做分母（同 generateMonthlyReturns），
+ * 解决年中新买入的份额贡献收益但年初市值未包含买入资金导致的 returnRate 偏高。
  */
 export function generateYearlyReturns(
   funds: Fund[],
@@ -704,6 +756,8 @@ export function generateYearlyReturns(
     }
   }
 
+  // 预建一次 sharesTimeline，所有年份共用，避免每年重复 filter+sort
+  const sharesTimeline = buildSharesTimeline(funds, confirmed);
   for (const yearResult of result) {
     const fundMap = perFundSums.get(yearResult.year);
     for (const fund of funds) {
@@ -714,8 +768,9 @@ export function generateYearlyReturns(
       });
     }
     const yearStart = `${yearResult.year}-01-01`;
-    const startValue = calcPortfolioValueAtDate(yearStart, funds, confirmed);
-    yearResult.returnRate = startValue > 0 ? (yearResult.totalReturn / startValue) * 100 : 0;
+    const yearEnd = `${yearResult.year}-12-31`;
+    const weightedValue = calcWeightedPortfolioValueInRange(yearStart, yearEnd, funds, sharesTimeline);
+    yearResult.returnRate = weightedValue > 0 ? (yearResult.totalReturn / weightedValue) * 100 : 0;
   }
 
   return result;
