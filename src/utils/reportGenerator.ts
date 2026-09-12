@@ -6,6 +6,7 @@ import { getNavHistory } from './storage';
 import { today } from './formatter';
 import { getPublishDate } from './tradingDays';
 import { isNonTradingDay } from './chineseHolidays';
+import { isUsHoliday } from './usHolidays';
 import dayjs from 'dayjs';
 
 export interface FundPerformance {
@@ -142,9 +143,16 @@ function buildAttributionMap(funds: Fund[]): Map<string, Map<string, Attribution
     const hist = getNavHistory(fund.id);
     if (hist.length < 2) continue;
     const sorted = [...hist].sort((a, b) => a.date.localeCompare(b.date));
-    for (let i = 1; i < sorted.length; i++) {
-      const curr = sorted[i]!;
-      const prev = sorted[i - 1]!;
+    // QDII：剔除 US 假日的「复制 NAV」条目（基金公司从上一交易日复制 NAV 填充，
+    // 如 9/7 美股劳工节）。剔除后，9/8 attribution 自动跳到 prev=9/4 的真实涨跌；
+    // 9/7 不在 attribution map 中 → perFund 里 QDII 不计入（A 股 / 债仍正常显示）。
+    // A 股 / 港股通（type='index'）不动 —— US 假日与它们无关。
+    // 不在 fundApi.ts ingestion 时剔除：navHistory 保持原始记录，让 FundDetail 的
+    // NAV 曲线仍能展示 US 节假日空档；仅在 attribution 配对时跳过。
+    const usable = fund.type === 'qdii' ? sorted.filter((r) => !isUsHoliday(r.date)) : sorted;
+    for (let i = 1; i < usable.length; i++) {
+      const curr = usable[i]!;
+      const prev = usable[i - 1]!;
       const attributionDate = curr.date;
       let inner = map.get(attributionDate);
       if (!inner) {
@@ -282,9 +290,18 @@ export function generateDailyReturns(
       };
     });
     const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
-    // 历史格的 isPending：任一持仓基金在该归属日尚未发布（QDII T+2 延迟场景），
-    // totalReturn 仅汇总已发布的基金（与"已更新 X/Y 只"口径一致）
-    const hasPendingFund = perFund.some((p) => p.isPending === true);
+    // 历史格的 isPending：只看「非 QDII」持仓基金在该归属日尚未发布。
+    // QDII 在历史格未发布只影响 QDII 自己的明细（标"净值更新中"），不应阻塞整个格子——
+    // 否则会让 A 股在该日正常产生的盈亏也被"——"掩盖。
+    // 复现场景：QDII curr.date=9/10（publishDate=9/14）但今天=9/12，
+    //   旧逻辑 → 9/10 历史格 hasPendingFund=true → cell 显示"—"，A 股的收益看不到；
+    //   新逻辑 → QDII 的 pending 不计入 → cell 显示 totalReturn（含 A 股正常盈亏）。
+    // totalReturn 仍只汇总已发布的基金（returnAmount=0 表示 QDII 未发布，不计入总和），
+    // 与 Dashboard 顶部"已更新 X/Y 只"的口径一致。
+    // 注：perFund 与 funds 下标一一对应（funds.map 生成），可直接 zip 避免重复 find。
+    const hasPendingFund = funds.some(
+      (fund, i) => perFund[i]!.isPending === true && fund.type !== 'qdii'
+    );
     result.push({ date: snap.date, totalReturn, perFund, isPending: hasPendingFund });
   }
 
