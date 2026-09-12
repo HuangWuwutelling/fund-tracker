@@ -8,3 +8,5 @@ CLAUDE.md
 .mcp.json
 # Claude Code 工作目录（本地会话/agent/状态文件）
 .claude/
+# 导出/备份文件（含个人持仓数据）
+fund-tracker-backup-*.json
