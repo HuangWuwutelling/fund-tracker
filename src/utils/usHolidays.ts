@@ -70,3 +70,40 @@ export function isUsHoliday(date: string): boolean {
   const holidaySet = WEEKDAY_HOLIDAYS_BY_YEAR.get(year);
   return holidaySet?.has(date) ?? false; // 未知年：不在节假日 → 交易日
 }
+
+/**
+ * 跟踪美股指数的 QDII 基金判定（用于 attribution 跳过美股节假日）。
+ *
+ * 背景：QDII 类型不止跟踪美股，还可能跟踪港股、日本、欧洲等市场，
+ * 这些市场不遵循美股节假日。若统一按 `fund.type === 'qdii'` 过滤美股节假日，
+ * 港股 QDII（如华夏恒生 ETF(QDII)）在美股劳工节会被错误跳过，
+ * 下一个 attribution 跨度过大导致 PnL 失真。
+ *
+ * 启发式：检查基金名是否含明确的「美股指数」关键词。
+ * 局限：依赖名称约定，新出现的美股 QDII 名称需要扩充关键词列表。
+ *
+ * 关键词列表（中英文混合，覆盖国内常见的美股 QDII 命名约定）：
+ * - 纳斯达克 / 纳指 / NASDAQ → 纳斯达克 100 指数等
+ * - 标普 / S&P / SP500 / S&P500 → 标普 500 指数等
+ * - 道琼斯 / 道指 / DJIA → 道琼斯指数
+ * - 罗素 / Russell → 罗素 2000 等
+ * - 标普 500 ETF 联接 等组合写法
+ *
+ * 不含「美股」「美国」等过于宽泛的词，避免误判含这些词但跟踪其他市场的基金。
+ */
+const US_TRACKING_KEYWORDS: readonly string[] = [
+  // 纳斯达克
+  '纳斯达克', '纳指',
+  'NASDAQ', 'Nasdaq',
+  // 标普
+  '标普', 'S&P', 'SP500', 'S&P500', 'SP 500',
+  // 道琼斯
+  '道琼斯', '道指',
+  'Dow Jones', 'DJIA',
+  // 罗素
+  '罗素', 'Russell',
+];
+
+export function isUsTrackedQdii(fundName: string): boolean {
+  return US_TRACKING_KEYWORDS.some((kw) => fundName.includes(kw));
+}

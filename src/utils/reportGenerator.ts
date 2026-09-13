@@ -6,7 +6,7 @@ import { getNavHistory } from './storage';
 import { today } from './formatter';
 import { getPublishDate } from './tradingDays';
 import { isNonTradingDay } from './chineseHolidays';
-import { isUsHoliday } from './usHolidays';
+import { isUsHoliday, isUsTrackedQdii } from './usHolidays';
 import dayjs from 'dayjs';
 
 export interface FundPerformance {
@@ -146,10 +146,15 @@ function buildAttributionMap(funds: Fund[]): Map<string, Map<string, Attribution
     // QDII：剔除 US 假日的「复制 NAV」条目（基金公司从上一交易日复制 NAV 填充，
     // 如 9/7 美股劳工节）。剔除后，9/8 attribution 自动跳到 prev=9/4 的真实涨跌；
     // 9/7 不在 attribution map 中 → perFund 里 QDII 不计入（A 股 / 债仍正常显示）。
+    // 仅跟踪美股指数的 QDII 才应用此过滤（港股 / 日股 QDII 不属于美股节假日体系）。
+    // 用基金名关键词（纳斯达克/标普/道指/罗素 等）推断是否为美股跟踪 QDII，
+    // 避免误伤港股 QDII 等其他市场。
     // A 股 / 港股通（type='index'）不动 —— US 假日与它们无关。
     // 不在 fundApi.ts ingestion 时剔除：navHistory 保持原始记录，让 FundDetail 的
     // NAV 曲线仍能展示 US 节假日空档；仅在 attribution 配对时跳过。
-    const usable = fund.type === 'qdii' ? sorted.filter((r) => !isUsHoliday(r.date)) : sorted;
+    const usable = isUsTrackedQdii(fund.name)
+      ? sorted.filter((r) => !isUsHoliday(r.date))
+      : sorted;
     for (let i = 1; i < usable.length; i++) {
       const curr = usable[i]!;
       const prev = usable[i - 1]!;
@@ -268,10 +273,10 @@ export function generateDailyReturns(
     const dayAttrs = attributionMap.get(snap.date);
     const perFund = funds.map((fund) => {
       const attr = dayAttrs?.get(fund.id);
-      if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+      if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0, hasMeaningfulData: false };
       const timeline = sharesTimeline.get(fund.id);
       const sharesAfter = getSharesAsOf(timeline, snap.date);
-      if (sharesAfter <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
+      if (sharesAfter <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0, hasMeaningfulData: false };
       // QDII T+2 发布：归属日 = navDate，发布日 = navDate + 2 交易日
       // 历史回看 snap.date 时，若 publishDate > snap.date 则尚未发布（数据未到），标 pending
       const isQdii = fund.type === 'qdii';
@@ -284,23 +289,37 @@ export function generateDailyReturns(
       return {
         fundId: fund.id,
         fundName: fund.name,
+        hasMeaningfulData: true,
         returnAmount,
         isPending: !published,
         latestPublishedDate: published && isQdii ? attr.curr.date : undefined,
       };
     });
     const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
-    // 历史格的 isPending：只看「非 QDII」持仓基金在该归属日尚未发布。
-    // QDII 在历史格未发布只影响 QDII 自己的明细（标"净值更新中"），不应阻塞整个格子——
-    // 否则会让 A 股在该日正常产生的盈亏也被"——"掩盖。
-    // 复现场景：QDII curr.date=9/10（publishDate=9/14）但今天=9/12，
-    //   旧逻辑 → 9/10 历史格 hasPendingFund=true → cell 显示"—"，A 股的收益看不到；
-    //   新逻辑 → QDII 的 pending 不计入 → cell 显示 totalReturn（含 A 股正常盈亏）。
-    // totalReturn 仍只汇总已发布的基金（returnAmount=0 表示 QDII 未发布，不计入总和），
-    // 与 Dashboard 顶部"已更新 X/Y 只"的口径一致。
-    // 注：perFund 与 funds 下标一一对应（funds.map 生成），可直接 zip 避免重复 find。
+    // 历史格的 isPending（双向判定）：
+    //
+    // 1) 持仓结构判断：是否有「非 QDII」持仓基金（hasMeaningfulData=true 且 type≠qdii）。
+    //    - 有非 QDII 持仓（混合持仓）：QDII 未发布只影响 QDII 自己的明细，不应阻塞整个格子
+    //      —— 否则 A 股当日正常盈亏也会被"——"掩盖。
+    //    - 纯 QDII 持仓：没有 A 股 / 债 / 指数基金作为"正常显示"的兜底，
+    //      此时 QDII 未发布必须让格子显示"—"，避免出现"灰底 0 + tooltip 仅日期"
+    //      这种「看起来持平 = 0 涨跌」但实际是「等待发布」的视觉误导。
+    //
+    // 2) hasPendingFund 计算：
+    //    - 混合持仓：只看非 QDII 基金的 pending（保持现有行为）
+    //    - 纯 QDII 持仓：所有 QDII pending 都算入
+    //
+    // 复现场景：
+    //   - 混合：QDII curr.date=9/10（publishDate=9/14）+ today=9/12 + A 股 9/10 有真实涨跌
+    //     → 9/10 历史格 hasPendingFund=false → cell 显示 A 股收益 ✓
+    //   - 纯 QDII：同上但用户只有 QDII → hasPendingFund=true → cell 显示"—" ✓
+    //
+    // totalReturn 仍只汇总已发布的基金，与 Dashboard "已更新 X/Y 只"口径一致。
+    const hasNonQdiiHolding = funds.some(
+      (fund, i) => fund.type !== 'qdii' && perFund[i]!.hasMeaningfulData === true
+    );
     const hasPendingFund = funds.some(
-      (fund, i) => perFund[i]!.isPending === true && fund.type !== 'qdii'
+      (fund, i) => perFund[i]!.isPending === true && (!hasNonQdiiHolding || fund.type !== 'qdii')
     );
     result.push({ date: snap.date, totalReturn, perFund, isPending: hasPendingFund });
   }
