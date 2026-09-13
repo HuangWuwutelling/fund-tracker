@@ -24,6 +24,12 @@ export interface HeatmapCell {
    * 优先级与 pending 相同，视觉上用虚线边与 pending 区分。
    */
   nonTrading?: boolean;
+  /**
+   * 建仓前样式：用户在该日尚未持有任何基金（date < 最早一笔 confirmed 交易）。
+   * 视觉与普通 0 涨跌一致（无热力配色），但 value=0 时主数字留空，
+   * 仅显示日期数字。用于月历里"首笔交易之前的当月日期"。
+   */
+  beforeHolding?: boolean;
 }
 
 export interface HeatmapGridProps {
@@ -185,6 +191,8 @@ export default function HeatmapGrid({
                     ? '—'
                     : cell.dim && cell.value === 0
                     ? '' // 暗淡 + 0 涨跌：用户未建仓 / 非本月日期，不显数字
+                    : cell.beforeHolding && cell.value === 0
+                    ? '' // 建仓前 + 0 涨跌：月内日期但用户在当日尚未持仓，不显数字
                     : `${cell.value > 0 ? '+' : ''}${cell.value.toFixed(0)}`}
                 </div>
               </div>

@@ -89,10 +89,13 @@ function PeriodDetail({ dateLabel, total, perFund }: PeriodDetailProps) {
 /** 日 Tab：月内日格子（1 个月，~30 格） */
 function DayView({
   dailyReturns,
+  firstTxDate,
   selectedKey,
   onSelect,
 }: {
   dailyReturns: DailyReturn[];
+  /** 用户最早一笔 confirmed 交易的日期；用于把"建仓前"的格子标 beforeHolding 隐藏 0 */
+  firstTxDate: string | null;
   selectedKey: string | null;
   onSelect: (key: string) => void;
 }) {
@@ -149,12 +152,14 @@ function DayView({
         // pending 时强制传 0，避免红绿热力上色（HeatmapGrid 内部用 pending 短路）
         value: data?.isPending ? 0 : (data?.totalReturn ?? 0),
         dim: !inMonth,
+        // 月内 + 建仓前 + 无收益：用户当时还没持仓，只显示日期数字
+        beforeHolding: inMonth && !!firstTxDate && date < firstTxDate,
         accent: date === todayStr ? 'today' : undefined,
         pending: data?.isPending,
       });
     }
     return out;
-  }, [dailyReturns, viewMonth, todayStr]);
+  }, [dailyReturns, viewMonth, todayStr, firstTxDate]);
 
   const hasPrev = dailyReturns.some((d) => d.date.slice(0, 7) < viewMonth);
   const hasNext =
@@ -377,6 +382,13 @@ export default function ReturnCalendar() {
     () => generateDailyReturns(funds, transactions),
     [funds, transactions, snapshots]
   );
+
+  // 用户最早一笔 confirmed 交易的日期；用于 DayView 把"建仓前"格子标 beforeHolding 隐藏 0
+  const firstTxDate = useMemo(() => {
+    const confirmed = transactions.filter((t) => !t.status || t.status === 'confirmed');
+    if (confirmed.length === 0) return null;
+    return confirmed.map((t) => t.date).sort()[0]!;
+  }, [transactions]);
   const monthlyReturns = useMemo(
     () => generateMonthlyReturns(funds, transactions, dailyReturns, viewYear),
     [funds, transactions, dailyReturns, viewYear]
@@ -441,6 +453,7 @@ export default function ReturnCalendar() {
             children: (
               <DayView
                 dailyReturns={dailyReturns}
+                firstTxDate={firstTxDate}
                 selectedKey={selected?.g === 'day' ? selected.key : null}
                 onSelect={handleSelect}
               />
