@@ -9,37 +9,23 @@
  * - 国务院办公厅关于 2026 年部分节假日安排的通知（2025-11-04 公布）
  *
  * 判定规则：
- *   非交易日 = 周末 ∪ 法定节假日（工作日部分）\ 调休补班周末
+ *   非交易日 = 周末 ∪ 法定节假日（工作日部分）
  * - 周末（含被假期块自然衔接进去的周六/周日）默认是非交易日
- * - 调休补班的周末（A 股 / QDII 照常开市）需要从周末集合中剔除
+ * - 调休补班的周末（A 股照常开市）也视为非交易日——
+ *   A 股虽然交易，但 QDII 基金公司当天不发布 NAV（参考 2025-10-11、2026-09-20 实测），
+ *   统一按非交易日处理可以让日历格子、T+2 发布日推算与 QDII 实际节奏一致
  * - 工作日的法定节假日单独列入 HOLIDAYS 集合
  *
  * 超过 2026 年的数据暂未公布——isNonTradingDay 对未知年份退化为「仅按周末判定」，
  * 届时需补全年数据后 QDII 跨节假日的归属才能精确到实际发布日。
  */
 
-/** 调休补班周末：A 股 / QDII 在这些日期照常开市（原周末变成工作日） */
-const TRANSFER_WORKDAYS_2025: Set<string> = new Set([
-  '2025-01-26', // Sun（春节前调休）
-  '2025-02-08',  // Sat（春节后调休）
-  '2025-04-27',  // Sun（劳动节前调休）
-  '2025-09-28',  // Sun（国庆前调休）
-  '2025-10-11',  // Sat（国庆后调休）
-]);
-
-const TRANSFER_WORKDAYS_2026: Set<string> = new Set([
-  '2026-01-04',  // Sun（元旦后调休）
-  '2026-02-14',  // Sat（春节前调休）
-  '2026-02-28',  // Sat（春节后调休）
-  '2026-05-09',  // Sat（劳动节后调休）
-  '2026-09-20',  // Sun（国庆前调休）
-  '2026-10-10',  // Sat（国庆后调休）
-]);
-
-const TRANSFER_WORKDAYS_BY_YEAR = new Map<number, Set<string>>([
-  [2025, TRANSFER_WORKDAYS_2025],
-  [2026, TRANSFER_WORKDAYS_2026],
-]);
+/**
+ * 调休补班周末历史数据（自 2026-09 起视为「非交易日」，QDII 不发 NAV）：
+ * - 2025: 1/26, 2/8, 4/27, 9/28, 10/11
+ * - 2026: 1/4, 2/14, 2/28, 5/9, 9/20, 10/10
+ * 详见 isNonTradingDay 注释。
+ */
 
 /**
  * 工作日法定节假日（仅列周一至周五；周末部分由 isWeekend 推断）。
@@ -87,8 +73,12 @@ const WEEKDAY_HOLIDAYS_BY_YEAR = new Map<number, Set<string>>([
 /**
  * 判断指定日期（YYYY-MM-DD）是否为 A 股 / QDII 非交易日。
  *
- * - 已收录年份（2025、2026）：精确判定（周末 ∪ 工作日法定节假日 \ 调休补班周末）
+ * - 已收录年份（2025、2026）：精确判定（周末 ∪ 工作日法定节假日）
  * - 未收录年份：退化为「仅按周末判定」——与未引入本工具前一致
+ *
+ * 注意：调休补班日（TRANSFER_WORKDAYS）也视为非交易日。
+ * A 股虽然照常开市，但 QDII 基金公司当天不发布 NAV（参考 2025-10-11、2026-09-20 实测），
+ * 统一按「非交易日」处理可让 `addTradingDays` 的 T+2 推算和日历格子与 QDII 实际节奏对齐。
  */
 export function isNonTradingDay(date: string): boolean {
   const year = parseInt(date.slice(0, 4), 10);
@@ -96,12 +86,9 @@ export function isNonTradingDay(date: string): boolean {
   const dow = d.getDay();
   const isWeekend = dow === 0 || dow === 6;
 
-  // 调休补班周末 → 交易日（覆盖"已知/未知年份"两种情况）
-  if (isWeekend) {
-    const transferSet = TRANSFER_WORKDAYS_BY_YEAR.get(year);
-    if (transferSet?.has(date)) return false; // 调休补班 = 交易日
-    return true; // 其他周末 = 非交易日
-  }
+  // 周末（含调休补班周末）→ 非交易日
+  // 调休补班日 A 股开市但 QDII 不发 NAV；统一视为非交易日可让日历格子、T+2 推算对齐 QDII 实际节奏
+  if (isWeekend) return true;
 
   // 工作日：查法定节假日集合
   const holidaySet = WEEKDAY_HOLIDAYS_BY_YEAR.get(year);
