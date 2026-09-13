@@ -6,6 +6,7 @@ import { calcFundSummary, calcXIRR, calcDividendTotal, calcTodayInvested } from 
 import { today } from '../utils/formatter';
 import { isNonTradingDay } from '../utils/chineseHolidays';
 import ReturnCalendar from '../components/ReturnCalendar';
+import HoldingsSummary from '../components/HoldingsSummary';
 import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
 
 
@@ -321,6 +322,8 @@ export default function Dashboard() {
       <div style={{ marginTop: 16 }}>
         <ReturnCalendar />
       </div>
+
+      <HoldingsSummary summaries={summaries} platforms={platforms} />
 
       <Card title="持仓列表" style={{ marginTop: 16 }}>
         <Table
