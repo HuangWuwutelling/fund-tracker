@@ -28,8 +28,17 @@ export interface HeatmapCell {
    * 建仓前样式：用户在该日尚未持有任何基金（date < 最早一笔 confirmed 交易）。
    * 视觉与普通 0 涨跌一致（无热力配色），但 value=0 时主数字留空，
    * 仅显示日期数字。用于月历里"首笔交易之前的当月日期"。
+   *
+   * 与 dim 互斥：beforeHolding 仅用于 inMonth 日期（用户当月但还没建仓）；
+   * dim 仅用于 !inMonth 日期（其他月的衬托格子）。
    */
   beforeHolding?: boolean;
+  /**
+   * 未来日期样式：date > today，月内日期但尚未到来，无任何数据。
+   * 视觉与 beforeHolding 一致（value=0 时主数字留空，仅显示日期数字）。
+   * 与 dim 互斥（同 beforeHolding）。
+   */
+  future?: boolean;
 }
 
 export interface HeatmapGridProps {
@@ -190,9 +199,11 @@ export default function HeatmapGrid({
                     : cell.pending
                     ? '—'
                     : cell.dim && cell.value === 0
-                    ? '' // 暗淡 + 0 涨跌：用户未建仓 / 非本月日期，不显数字
+                    ? '' // 暗淡 + 0 涨跌：非本月日期，不显数字
                     : cell.beforeHolding && cell.value === 0
-                    ? '' // 建仓前 + 0 涨跌：月内日期但用户在当日尚未持仓，不显数字
+                    ? '' // 建仓前 + 0 涨跌：月内但用户尚未持仓，不显数字
+                    : cell.future && cell.value === 0
+                    ? '' // 未来 + 0 涨跌：月内但尚未到来，无数据
                     : `${cell.value > 0 ? '+' : ''}${cell.value.toFixed(0)}`}
                 </div>
               </div>

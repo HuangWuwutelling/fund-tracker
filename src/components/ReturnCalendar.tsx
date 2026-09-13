@@ -134,6 +134,7 @@ function DayView({
       const data = map.get(date);
       const inMonth = d.format('YYYY-MM') === viewMonth;
       const nonTrading = isNonTradingDay(date);
+      const isFuture = date > todayStr;
       // 非交易日优先：不论 dailyReturns 里有没有这条记录，都画"休市"格子
       // （防止旧数据残留的非交易日快照被当作 0 涨跌显示）
       if (nonTrading) {
@@ -143,6 +144,8 @@ function DayView({
           value: 0,
           dim: !inMonth,
           nonTrading: true,
+          // 今天是 nonTrading 也加 today 边框（虚线 + 蓝边组合），让用户知道哪一天是 today
+          accent: date === todayStr ? 'today' : undefined,
         });
         continue;
       }
@@ -152,8 +155,10 @@ function DayView({
         // pending 时强制传 0，避免红绿热力上色（HeatmapGrid 内部用 pending 短路）
         value: data?.isPending ? 0 : (data?.totalReturn ?? 0),
         dim: !inMonth,
-        // 月内 + 建仓前 + 无收益：用户当时还没持仓，只显示日期数字
+        // 月内 + (建仓前 | 未来日期) + 无收益：用户当时还没持仓 / 当天还没到，只显示日期数字
+        // 与 dim 互斥（inMonth 才可能为 true）
         beforeHolding: inMonth && !!firstTxDate && date < firstTxDate,
+        future: inMonth && isFuture,
         accent: date === todayStr ? 'today' : undefined,
         pending: data?.isPending,
       });
@@ -208,6 +213,10 @@ function DayView({
             ? `${c.key}：非交易日（A 股 / QDII 休市）`
             : c.pending
             ? `${c.key}：净值更新中`
+            : c.beforeHolding
+            ? `${c.key}：建仓前（${firstTxDate} 起持有）`
+            : c.future
+            ? `${c.key}：未来日期，暂无数据`
             : c.value === 0
             ? c.key
             : `${c.key}: ${formatMoney(c.value)}`
@@ -370,7 +379,7 @@ function YearView({
 
 /** 主组件：Tabs 容器，自包含从 useStore() 取数据 */
 export default function ReturnCalendar() {
-  const { funds, transactions, snapshots } = useStore();
+  const { funds, transactions } = useStore();
   const [granularity, setGranularity] = useState<Granularity>('day');
   const [selected, setSelected] = useState<{ g: Granularity; key: string } | null>(null);
 
@@ -380,7 +389,7 @@ export default function ReturnCalendar() {
   // 各粒度数据（日粒度由现有 generateDailyReturns 算；月/年用 Task 1 新增）
   const dailyReturns = useMemo(
     () => generateDailyReturns(funds, transactions),
-    [funds, transactions, snapshots]
+    [funds, transactions]
   );
 
   // 用户最早一笔 confirmed 交易的日期；用于 DayView 把"建仓前"格子标 beforeHolding 隐藏 0

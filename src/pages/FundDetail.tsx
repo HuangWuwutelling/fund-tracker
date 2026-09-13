@@ -385,7 +385,9 @@ export default function FundDetail() {
             <Tooltip
               title={
                 isNonTradingDay(today())
-                  ? '今日为非交易日（A 股 / QDII 休市）'
+                  ? fund.type === 'qdii'
+                  ? '今日为非交易日：QDII 基金公司不发布 NAV'
+                  : '今日为非交易日：A 股休市，无当日盈亏'
                   : summary.dailyPnl === null
                   ? summary.currNavDate
                     ? `今日净值未发布（最新 ${summary.currNavDate}，QDII 通常 T+2 延迟）`

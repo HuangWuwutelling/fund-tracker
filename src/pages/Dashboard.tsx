@@ -17,6 +17,10 @@ export default function Dashboard() {
   // todayStr 提到组件层，让 useMemo deps 能感知"跨日"——深夜跨过午夜时下一次渲染
   // 会自动重算 today 格（避免 today 高亮 / 当日盈亏判定卡在前一天）。
   const todayStr = today();
+  // 用户持仓基金中是否含 QDII——用于"今日休市"文案区分
+  // （调休补班日 QDII 不发 NAV，但 A 股照常；用 isNonTradingDay 统一判定调休为非交易日后，文案需细分）
+  const hasQdii = funds.some((f) => f.type === 'qdii');
+  const hasNonQdii = funds.some((f) => f.type !== 'qdii');
   const summaries = useMemo(() => {
     return funds.map((fund) => ({
       fund,
@@ -151,11 +155,20 @@ export default function Dashboard() {
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
       render: (_v: number | null, record: typeof summaries[0]) => {
         if (record.dailyPnl === null) {
-          // 非交易日（周末 / 节假日）：A 股 / QDII 都不开市，没数据是正常的，
+          // 非交易日（周末 / 节假日 / 调休补班日）：该基金无当日 NAV 是正常的，
           // 不要显示误导性的"净值更新中"——文案改成"今日休市"
+          // 调休补班日 A 股照常但 QDII 不发 NAV；按基金类型细分文案
           if (isNonTradingDay(todayStr)) {
+            const tooltipText =
+              record.fund.type === 'qdii'
+                ? hasNonQdii
+                  ? '今日为非交易日：QDII 不发 NAV（A 股休市）'
+                  : '今日为非交易日：QDII 基金公司不发布 NAV'
+                : hasQdii
+                ? '今日为非交易日：A 股基金休市（QDII 同步不发 NAV）'
+                : '今日为非交易日：A 股基金休市';
             return (
-              <Tooltip title="今日为非交易日，A 股 / QDII 休市">
+              <Tooltip title={tooltipText}>
                 <div>
                   <span style={{ color: '#999' }}>—</span>
                   <div style={{ fontSize: 11, color: '#999' }}>今日休市</div>
@@ -232,7 +245,11 @@ export default function Dashboard() {
             <Tooltip
               title={
                 isNonTradingDay(todayStr)
-                  ? '今日为非交易日（A 股 / QDII 休市），无当日盈亏'
+                  ? hasQdii && hasNonQdii
+                    ? '今日为非交易日：A 股 / QDII 均休市，无当日盈亏'
+                    : hasQdii
+                    ? '今日为非交易日：QDII 基金公司不发布 NAV，无当日盈亏'
+                    : '今日为非交易日：A 股休市，无当日盈亏'
                   : totals.isDailyPnlComplete
                   ? '当日净值已全部发布'
                   : totals.totalDailyPnl === null
