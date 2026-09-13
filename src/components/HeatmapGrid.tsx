@@ -179,7 +179,13 @@ export default function HeatmapGrid({
                     marginTop: 4,
                   }}
                 >
-                  {cell.nonTrading ? '·' : cell.pending ? '—' : `${cell.value > 0 ? '+' : ''}${cell.value.toFixed(0)}`}
+                  {cell.nonTrading
+                    ? '·'
+                    : cell.pending
+                    ? '—'
+                    : cell.dim && cell.value === 0
+                    ? '' // 暗淡 + 0 涨跌：用户未建仓 / 非本月日期，不显数字
+                    : `${cell.value > 0 ? '+' : ''}${cell.value.toFixed(0)}`}
                 </div>
               </div>
             </Tooltip>
