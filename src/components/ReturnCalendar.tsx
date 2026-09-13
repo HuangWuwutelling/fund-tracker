@@ -249,6 +249,7 @@ function MonthView({
   monthlyReturns,
   year,
   minYear,
+  firstTxDate,
   selectedKey,
   onSelect,
   onShiftYear,
@@ -257,6 +258,8 @@ function MonthView({
   year: number;
   /** 数据最早年份（首笔交易年），用于禁用「往前再切」的按钮 */
   minYear: number;
+  /** 用户最早一笔 confirmed 交易日期；用于把"建仓前"的月份标 beforeHolding 隐藏 0 */
+  firstTxDate: string | null;
   selectedKey: string | null;
   onSelect: (key: string) => void;
   onShiftYear: (delta: number) => void;
@@ -266,15 +269,25 @@ function MonthView({
     [monthlyReturns]
   );
 
-  const cells: HeatmapCell[] = useMemo(
-    () =>
-      monthlyReturns.map((r) => ({
+  const cells: HeatmapCell[] = useMemo(() => {
+    const currentYear = dayjs().year();
+    return monthlyReturns.map((r) => {
+      const monthNum = parseInt(r.month.slice(5, 7), 10);
+      // 月份级别：建仓前（该月最后一天 < firstTxDate）或未到（该月第一天 > today）
+      const monthEnd = dayjs(r.month + '-01').endOf('month').format('YYYY-MM-DD');
+      const monthStart = r.month + '-01';
+      const beforeHolding = !!firstTxDate && monthEnd < firstTxDate;
+      const isFuture = monthStart > today() && year === currentYear;
+      return {
         key: r.month,
-        label: `${parseInt(r.month.slice(5, 7), 10)}月`,
+        label: `${monthNum}月`,
         value: r.totalReturn,
-      })),
-    [monthlyReturns]
-  );
+        // 与 dim 互斥（都不是"非本月"，且本视图没有 dim 概念）
+        beforeHolding,
+        future: isFuture,
+      };
+    });
+  }, [monthlyReturns, year, firstTxDate]);
 
   const selected = selectedKey ? monthlyReturns.find((r) => r.month === selectedKey) ?? null : null;
   const currentYear = dayjs().year();
@@ -311,7 +324,13 @@ function MonthView({
         selectedKey={selectedKey}
         onCellClick={onSelect}
         formatTooltip={(c) =>
-          c.value === 0 ? c.key : `${c.key}: ${formatMoney(c.value)}`
+          c.beforeHolding
+            ? `${c.key}：建仓前（${firstTxDate} 起持有）`
+            : c.future
+            ? `${c.key}：未来月份，暂无数据`
+            : c.value === 0
+            ? c.key
+            : `${c.key}: ${formatMoney(c.value)}`
         }
       />
 
@@ -476,6 +495,7 @@ export default function ReturnCalendar() {
                 monthlyReturns={monthlyReturns}
                 year={viewYear}
                 minYear={minYear}
+                firstTxDate={firstTxDate}
                 selectedKey={selected?.g === 'month' ? selected.key : null}
                 onSelect={handleSelect}
                 onShiftYear={(d) => setViewYear((y) => y + d)}
