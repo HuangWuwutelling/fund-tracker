@@ -374,7 +374,7 @@ export default function ReturnCalendar() {
 
   // 各粒度数据（日粒度由现有 generateDailyReturns 算；月/年用 Task 1 新增）
   const dailyReturns = useMemo(
-    () => generateDailyReturns(funds, transactions, snapshots),
+    () => generateDailyReturns(funds, transactions),
     [funds, transactions, snapshots]
   );
   const monthlyReturns = useMemo(

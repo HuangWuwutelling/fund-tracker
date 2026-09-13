@@ -241,14 +241,32 @@ function getSharesAsOf(
  */
 export function generateDailyReturns(
   funds: Fund[],
-  transactions: Transaction[],
-  snapshots: DailySnapshot[]
+  transactions: Transaction[]
 ): DailyReturn[] {
   const confirmed = onlyConfirmed(transactions);
   const todayStr = today();
-  const sorted = [...snapshots]
-    .filter((s) => !isNonTradingDay(s.date) || s.date === todayStr) // 跳过非交易日（但保留 today，便于今天格判定）
-    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // 历史格日期序列：自驱动生成 [firstTxDate, today] 的所有应展示日
+  // - 起点：用户最早一笔 confirmed 交易日期（仅含持有期，与 yearlyReturns.minYear 口径一致）
+  // - 终点：今天（含 today 格——独立判定 isPending，不走 attribution map）
+  // - 跳过：周末 / A 股法定节假日（isNonTradingDay 已含调休补班周末判定）
+  //
+  // 修复前：snapshots 缺失的日子（如 9/8 没打开 App）不会生成格子 → UI fallback 0
+  // 修复后：日期序列完整 → 9/8 显示真实涨跌 ≈ +73.5 元（QDII -12.34 + 非 QDII +85.84）
+  const firstTxDate = confirmed.length > 0
+    ? confirmed.map((t) => t.date).sort()[0]!
+    : todayStr;
+  const sorted: Array<{ date: string }> = [];
+  for (
+    let cursor = dayjs(firstTxDate);
+    cursor.format('YYYY-MM-DD') <= todayStr;
+    cursor = cursor.add(1, 'day')
+  ) {
+    const date = cursor.format('YYYY-MM-DD');
+    if (!isNonTradingDay(date) || date === todayStr) {
+      sorted.push({ date });
+    }
+  }
 
   // 一次性构建：归属 map + 份额时间线（避免内层每次循环 filter+sort 全表）
   const attributionMap = buildAttributionMap(funds);
