@@ -95,22 +95,16 @@ export interface DailyReturn {
     fundName: string;
     returnAmount: number;
     /**
-     * 仅对"今日"行的某只基金可能为 true：该基金今日 NAV 未发布（QDII T+2 / 节假日 /
+     * 仅"今日"行的某只基金可能为 true：该基金今日 NAV 未发布（QDII T+2 / 节假日 /
      * 刷新失败），returnAmount 强制为 0。UI 渲染时区别于"持平=0"——显示"— 净值更新中"。
-     * 历史日的 perFund 不会出现 isPending=true（归属已确定）。
+     * 历史日的 perFund 不会出现 isPending=true（归属已确定，无"未发布"概念）。
      */
     isPending?: boolean;
-    /**
-     * 仅对 QDII 历史格生效：显示该 QDII 的"最新已发布 NAV 对"的 NAV 归属日。
-     * 明细面板里加 tooltip 明示 QDII 该日显示的不是 9/1 涨跌，而是"最新已发布对"。
-     */
-    latestPublishedDate?: string;
   }[];
   /**
-   * 任一基金的当日 NAV 未发布时为 true（A 股白天 / QDII T+2 延迟 / 节假日 / 刷新失败）。
-   * 历史格也可能为 true（QDII 在发布前回看当天归属日）。
-   * UI 用灰格 + "净值更新中" 提示；totalReturn 仅汇总已发布的基金，与 Dashboard
-   * 顶部 "已更新 X/Y 只" 的口径一致。
+   * 仅"今日"行可能为 true：所有持有基金的当日 NAV 都未发布（A 股白天 / QDII T+2 /
+   * 节假日 / 刷新失败）。UI 用灰格 + "净值更新中"提示。
+   * 历史格永远是 false。
    */
   isPending?: boolean;
 }
@@ -267,61 +261,33 @@ export function generateDailyReturns(
   // - 按持仓时长拆分 PnL（calcDailyPnlBySegments）：避免买入/卖出日过度计入新份额
   // 修复前：QDII 用「最新已发布对」覆盖所有历史日，导致 5/1-5/5 同一数字；
   //        且买入日 NAV 涨跌全归新份额（pnl 高估）
-  // 修复后：每个历史日按各自的 navDate 归属，且按当日持仓变化做子时段拆分
+  // 历史格：只看 attr 是否存在，存在就用 curr/prev + 持仓算 PnL。
+  // 不判定 publishDate（QDII T+2 延迟由今天格处理，参见下方"今天格"分支）。
+  // 历史回看时数据已发布就一定能在 attributionMap 里查到；attr 不存在说明当天没有
+  // NAV 变化（如节假日 / 当日无交易 / QDII NAV 复制填充被 usHolidays 过滤），returnAmount=0，
+  // UI 显示为 0 涨跌——历史格无"未发布"概念，无需"净值更新中"提示。
+  // 与 aa740c6 语义一致：历史格永远不 pending。
   for (const snap of sorted) {
     if (snap.date === todayStr) continue; // 今天格单独算，不走 attribution
     const dayAttrs = attributionMap.get(snap.date);
     const perFund = funds.map((fund) => {
       const attr = dayAttrs?.get(fund.id);
-      if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0, hasMeaningfulData: false };
+      if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
       const timeline = sharesTimeline.get(fund.id);
       const sharesAfter = getSharesAsOf(timeline, snap.date);
-      if (sharesAfter <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0, hasMeaningfulData: false };
-      // QDII T+2 发布：归属日 = navDate，发布日 = navDate + 2 交易日
-      // 历史回看 snap.date 时，若 publishDate > snap.date 则尚未发布（数据未到），标 pending
-      const isQdii = fund.type === 'qdii';
-      const published = isQdii ? getPublishDate(fund, attr.curr.date) <= snap.date : true;
+      if (sharesAfter <= 0) return { fundId: fund.id, fundName: fund.name, returnAmount: 0 };
       // 按子时段拆分：shares_before = snap.date 之前的累计份额（不含当日交易）
+      // 避免买入/卖出日过度计入新份额（参见 calcDailyPnlBySegments 注释）
       const sharesBefore = getSharesAsOf(timeline, attr.prev.date);
-      const returnAmount = published
-        ? calcDailyPnlBySegments(attr.prev.nav, attr.curr.nav, sharesBefore, sharesAfter)
-        : 0;
       return {
         fundId: fund.id,
         fundName: fund.name,
-        hasMeaningfulData: true,
-        returnAmount,
-        isPending: !published,
-        latestPublishedDate: published && isQdii ? attr.curr.date : undefined,
+        returnAmount: calcDailyPnlBySegments(attr.prev.nav, attr.curr.nav, sharesBefore, sharesAfter),
       };
     });
     const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
-    // 历史格的 isPending（双向判定）：
-    //
-    // 1) 持仓结构判断：是否有「非 QDII」持仓基金（hasMeaningfulData=true 且 type≠qdii）。
-    //    - 有非 QDII 持仓（混合持仓）：QDII 未发布只影响 QDII 自己的明细，不应阻塞整个格子
-    //      —— 否则 A 股当日正常盈亏也会被"——"掩盖。
-    //    - 纯 QDII 持仓：没有 A 股 / 债 / 指数基金作为"正常显示"的兜底，
-    //      此时 QDII 未发布必须让格子显示"—"，避免出现"灰底 0 + tooltip 仅日期"
-    //      这种「看起来持平 = 0 涨跌」但实际是「等待发布」的视觉误导。
-    //
-    // 2) hasPendingFund 计算：
-    //    - 混合持仓：只看非 QDII 基金的 pending（保持现有行为）
-    //    - 纯 QDII 持仓：所有 QDII pending 都算入
-    //
-    // 复现场景：
-    //   - 混合：QDII curr.date=9/10（publishDate=9/14）+ today=9/12 + A 股 9/10 有真实涨跌
-    //     → 9/10 历史格 hasPendingFund=false → cell 显示 A 股收益 ✓
-    //   - 纯 QDII：同上但用户只有 QDII → hasPendingFund=true → cell 显示"—" ✓
-    //
-    // totalReturn 仍只汇总已发布的基金，与 Dashboard "已更新 X/Y 只"口径一致。
-    const hasNonQdiiHolding = funds.some(
-      (fund, i) => fund.type !== 'qdii' && perFund[i]!.hasMeaningfulData === true
-    );
-    const hasPendingFund = funds.some(
-      (fund, i) => perFund[i]!.isPending === true && (!hasNonQdiiHolding || fund.type !== 'qdii')
-    );
-    result.push({ date: snap.date, totalReturn, perFund, isPending: hasPendingFund });
+    // 历史格不 pending——"净值更新中"语义只用于今天格
+    result.push({ date: snap.date, totalReturn, perFund });
   }
 
   // 今天格：旁路 attribution map，直接用 calcDailyPnl per fund（同 Dashboard 口径）
