@@ -7,7 +7,7 @@ import { fetchFundWithHistory, loadFundSearchList, searchFunds, getFundTypeFromS
 import { formatDate } from '../utils/formatter';
 import InitialPositionModal from '../components/InitialPositionModal';
 import NavLink from '../components/NavLink';
-import { FUND_TYPE_LABELS } from '../types';
+import { FUND_TYPE_LABELS, FUND_TYPE_COLORS } from '../types';
 import type { Fund } from '../types';
 import type { FundSearchItem } from '../api/fundApi';
 
@@ -151,12 +151,13 @@ export default function FundList() {
   };
 
   const columns = [
-    { title: '基金代码', dataIndex: 'id', key: 'id', width: 100, sorter: (a: Fund, b: Fund) => a.id.localeCompare(b.id) },
+    { title: '基金代码', dataIndex: 'id', key: 'id', width: 100, fixed: 'left' as const, sorter: (a: Fund, b: Fund) => a.id.localeCompare(b.id) },
     {
       title: '基金名称',
       dataIndex: 'name',
       key: 'name',
       width: 220,
+      fixed: 'left' as const,
       sorter: (a: Fund, b: Fund) => a.name.localeCompare(b.name, 'zh-CN'),
       render: (name: string, record: Fund) => (
         <NavLink onClick={() => navigate(`/funds/${record.id}`)}>{name}</NavLink>
@@ -178,9 +179,9 @@ export default function FundList() {
       title: '类型',
       dataIndex: 'type',
       key: 'type',
-      width: 100,
+      width: 90,
       sorter: (a: Fund, b: Fund) => FUND_TYPE_LABELS[a.type].localeCompare(FUND_TYPE_LABELS[b.type], 'zh-CN'),
-      render: (type: Fund['type']) => <Tag>{FUND_TYPE_LABELS[type]}</Tag>,
+      render: (type: Fund['type']) => <Tag color={FUND_TYPE_COLORS[type]}>{FUND_TYPE_LABELS[type]}</Tag>,
     },
     {
       title: '最新净值',
@@ -201,7 +202,8 @@ export default function FundList() {
     {
       title: '操作',
       key: 'actions',
-      width: 160,
+      width: 180,
+      fixed: 'right' as const,
       render: (_: unknown, record: Fund) => {
         const hasHistory = getNavHistory(record.id).length > 0;
         return (

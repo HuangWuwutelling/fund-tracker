@@ -1,11 +1,11 @@
 import { useState, useMemo } from 'react';
-import { Card, Table, Button, Modal, Form, Select, DatePicker, InputNumber, Switch, Space, Statistic, Row, Col, message, Popconfirm, Tooltip } from 'antd';
+import { Card, Table, Button, Modal, Form, Select, DatePicker, InputNumber, Switch, Space, Statistic, Row, Col, Tag, message, Popconfirm, Tooltip } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
-import { formatMoney } from '../utils/formatter';
+import { formatMoney, formatDate } from '../utils/formatter';
 import { isInPlanWindow } from '../utils/calculator';
 import { FREQUENCY_LABELS } from '../types';
 import NavLink from '../components/NavLink';
@@ -138,7 +138,9 @@ export default function DcaPlans() {
       title: '基金',
       dataIndex: 'fundId',
       key: 'fund',
+      width: 220,
       align: 'left' as const,
+      fixed: 'left' as const,
       sorter: (a: DcaPlan, b: DcaPlan) => {
         const an = funds.find((f) => f.id === a.fundId)?.name ?? a.fundId;
         const bn = funds.find((f) => f.id === b.fundId)?.name ?? b.fundId;
@@ -150,33 +152,47 @@ export default function DcaPlans() {
       title: '每期金额',
       dataIndex: 'amount',
       key: 'amount',
+      width: 130,
       align: 'right' as const,
       sorter: (a: DcaPlan, b: DcaPlan) => a.amount - b.amount,
-      render: (v: number) => formatMoney(v),
+      render: (v: number) => <span style={{ fontWeight: 500 }}>{formatMoney(v)}</span>,
     },
     {
       title: '频率',
       dataIndex: 'frequency',
       key: 'frequency',
+      width: 100,
       align: 'left' as const,
       sorter: (a: DcaPlan, b: DcaPlan) =>
         FREQUENCY_LABELS[a.frequency].localeCompare(FREQUENCY_LABELS[b.frequency], 'zh-CN'),
-      render: (v: DcaPlan['frequency']) => FREQUENCY_LABELS[v],
+      render: (v: DcaPlan['frequency']) => <Tag color="blue">{FREQUENCY_LABELS[v]}</Tag>,
     },
     {
       title: '下次定投',
       key: 'nextDate',
+      width: 130,
       align: 'left' as const,
       sorter: (a: DcaPlan, b: DcaPlan) => {
         const an = a.active ? getNextDate(a) : '~';
         const bn = b.active ? getNextDate(b) : '~';
         return an.localeCompare(bn);
       },
-      render: (_: unknown, record: DcaPlan) => record.active ? getNextDate(record) : '已停用',
+      render: (_: unknown, record: DcaPlan) => record.active ? (
+        <span style={{ color: '#1677ff', fontWeight: 500 }}>{getNextDate(record)}</span>
+      ) : <span style={{ color: '#999' }}>已停用</span>,
+    },
+    {
+      title: '开始日期',
+      dataIndex: 'startDate',
+      key: 'startDate',
+      width: 110,
+      sorter: (a: DcaPlan, b: DcaPlan) => a.startDate.localeCompare(b.startDate),
+      render: (v: string) => formatDate(v),
     },
     {
       title: '状态',
       key: 'active',
+      width: 90,
       align: 'center' as const,
       sorter: (a: DcaPlan, b: DcaPlan) => Number(a.active) - Number(b.active),
       render: (_: unknown, record: DcaPlan) => (
@@ -191,8 +207,9 @@ export default function DcaPlans() {
     {
       title: '操作',
       key: 'actions',
-      width: 120,
+      width: 140,
       align: 'center' as const,
+      fixed: 'right' as const,
       render: (_: unknown, record: DcaPlan) => (
         <Space>
           <Button type="link" size="small" onClick={() => handleEdit(record)}>编辑</Button>
@@ -206,23 +223,52 @@ export default function DcaPlans() {
 
   return (
     <div>
-      <Row gutter={16} style={{ marginBottom: 16 }}>
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={8}>
           <Card>
             <Tooltip
               title={
                 stats.matchedTxs.length > 0 ? (
-                  <div>
+                  <div style={{ maxHeight: 200, overflow: 'auto' }}>
                     <div>以下买入交易被计入（含待确认）：</div>
-                    {stats.matchedTxs.map((m, i) => (
+                    {stats.matchedTxs.slice(0, 10).map((m, i) => (
                       <div key={i}>{m.fundName} · {m.date} · {formatMoney(m.amount)}</div>
                     ))}
+                    {stats.matchedTxs.length > 10 && <div>... 共 {stats.matchedTxs.length} 笔</div>}
                   </div>
                 ) : '尚无匹配的买入交易'
               }
             >
-              <Statistic title="累计投入" value={stats.totalInvested} precision={2} />
+              <Statistic
+                title="累计投入"
+                value={stats.totalInvested}
+                precision={2}
+                prefix="💰"
+                valueStyle={{ color: '#1677ff', fontWeight: 600 }}
+              />
             </Tooltip>
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card>
+            <Statistic
+              title="执行笔数"
+              value={stats.matchedTxs.length}
+              suffix="笔"
+              prefix="📊"
+              valueStyle={{ color: '#722ed1', fontWeight: 600 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card>
+            <Statistic
+              title="覆盖基金"
+              value={stats.perFund.length}
+              suffix="只"
+              prefix="🎯"
+              valueStyle={{ color: '#fa8c16', fontWeight: 600 }}
+            />
           </Card>
         </Col>
       </Row>

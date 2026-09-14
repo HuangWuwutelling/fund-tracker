@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { Card, Row, Col, Statistic, Table, Tag, Alert, Button, Tooltip } from 'antd';
+import { Card, Row, Col, Statistic, Table, Tag, Alert, Button, Tooltip, Space } from 'antd';
+import { ArrowUpOutlined, ArrowDownOutlined, FundOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../stores';
 import { calcFundSummary, calcXIRR, calcDividendTotal, calcTodayInvested } from '../utils/calculator';
@@ -7,13 +8,22 @@ import { today } from '../utils/formatter';
 import { isNonTradingDay } from '../utils/chineseHolidays';
 import ReturnCalendar from '../components/ReturnCalendar';
 import HoldingsSummary from '../components/HoldingsSummary';
-import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
+import PortfolioTrendChart from '../components/PortfolioTrendChart';
+import {
+  formatMoney,
+  formatPercent,
+  pnlColor,
+  pnlBg,
+  formatMoneyShortWithSign,
+} from '../utils/formatter';
+import { FUND_TYPE_LABELS, FUND_TYPE_COLORS, FUND_TYPE_STRIPE_COLORS } from '../types';
 
 
 
 export default function Dashboard() {
-  const { funds, transactions, platforms, dcaPlans, getNavHistory } = useStore();
+  const { funds, transactions, platforms, dcaPlans, getNavHistory, settings } = useStore();
   const navigate = useNavigate();
+  const isDark = settings.theme === 'dark';
 
   // todayStr 提到组件层，让 useMemo deps 能感知"跨日"——深夜跨过午夜时下一次渲染
   // 会自动重算 today 格（避免 today 高亮 / 当日盈亏判定卡在前一天）。
@@ -79,22 +89,41 @@ export default function Dashboard() {
     .filter((t) => t.type === 'buy')
     .reduce((sum, t) => sum + t.amount, 0);
 
-  // Pie charts removed per user request.
-
   const columns = [
     {
       title: '基金名称',
-      dataIndex: ['fund', 'name'],
       key: 'name',
-      width: 220,
+      width: 240,
       align: 'left' as const,
+      fixed: 'left' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) =>
         a.fund.name.localeCompare(b.fund.name, 'zh-CN'),
-      render: (text: string, record: typeof summaries[0]) => (
-        <span>
-          {text}
-          <Tag style={{ marginLeft: 8 }}>{record.fund.id}</Tag>
-        </span>
+      render: (_: unknown, record: typeof summaries[0]) => (
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <span
+            style={{
+              display: 'inline-block',
+              width: 4,
+              height: 28,
+              background: FUND_TYPE_STRIPE_COLORS[record.fund.type],
+              borderRadius: 2,
+              marginRight: 10,
+              flexShrink: 0,
+            }}
+            title={FUND_TYPE_LABELS[record.fund.type]}
+          />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {record.fund.name}
+            </div>
+            <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+              <Tag color={FUND_TYPE_COLORS[record.fund.type]} style={{ marginRight: 4, fontSize: 10, padding: '0 6px', lineHeight: '16px' }}>
+                {FUND_TYPE_LABELS[record.fund.type]}
+              </Tag>
+              {record.fund.id}
+            </div>
+          </div>
+        </div>
       ),
     },
     {
@@ -127,7 +156,7 @@ export default function Dashboard() {
       align: 'right' as const,
       defaultSortOrder: 'descend' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.marketValue - b.marketValue,
-      render: (v: number) => formatMoney(v),
+      render: (v: number) => <span style={{ fontWeight: 500 }}>{formatMoney(v)}</span>,
     },
     {
       title: '持仓收益',
@@ -136,7 +165,7 @@ export default function Dashboard() {
       width: 130,
       align: 'right' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.totalReturn - b.totalReturn,
-      render: (v: number) => <span style={{ color: pnlColor(v) }}>{formatMoney(v)}</span>,
+      render: (v: number) => <span style={{ color: pnlColor(v), fontWeight: 500 }}>{formatMoney(v)}</span>,
     },
     {
       title: '收益率',
@@ -151,7 +180,7 @@ export default function Dashboard() {
       title: '当日盈亏',
       dataIndex: 'dailyPnl',
       key: 'dailyPnl',
-      width: 130,
+      width: 140,
       align: 'right' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
       render: (_v: number | null, record: typeof summaries[0]) => {
@@ -190,7 +219,7 @@ export default function Dashboard() {
         // 已发布：tooltip 明示 NAV 归属日（QDII 落后 A 股 2 个交易日时尤其重要）
         return (
           <Tooltip title={`NAV ${record.currNavDate} vs ${record.prevNavDate}`}>
-            <span style={{ color: pnlColor(record.dailyPnl) }}>{formatMoney(record.dailyPnl)}</span>
+            <span style={{ color: pnlColor(record.dailyPnl), fontWeight: 500 }}>{formatMoney(record.dailyPnl)}</span>
           </Tooltip>
         );
       },
@@ -214,35 +243,97 @@ export default function Dashboard() {
           closable
         />
       )}
+
+      {/* ===== 4 大核心指标（突出样式：渐变背景 + 大字 + 涨跌色） ===== */}
       <Row gutter={[16, 16]}>
-        <Col xs={12} sm={6}>
-          <Card>
-            <Statistic title="总资产" value={totals.totalValue} precision={2} />
+        <Col xs={24} sm={12} md={6}>
+          <Card
+            hoverable
+            onClick={() => navigate('/funds')}
+            style={{
+              background: isDark
+                ? 'linear-gradient(135deg, #1f3a5f 0%, #2a4a7a 100%)'
+                : 'linear-gradient(135deg, #1677ff 0%, #4096ff 100%)',
+              border: 'none',
+            }}
+            styles={{ body: { padding: 20 } }}
+          >
+            <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: 13, marginBottom: 8 }}>💰 总资产</div>
+            <div style={{ color: '#fff', fontSize: 30, fontWeight: 700, lineHeight: 1.2, fontFamily: 'DIN, "Helvetica Neue", Arial, sans-serif' }}>
+              ¥{formatMoney(totals.totalValue)}
+            </div>
+            <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 8 }}>
+              持仓 {funds.length} 只 ｜ 成本 ¥{formatMoney(totals.totalCost)}
+            </div>
           </Card>
         </Col>
-        <Col xs={12} sm={6}>
-          <Card>
-            <Statistic
-              title="总收益"
-              value={totals.totalReturn}
-              precision={2}
-              valueStyle={{ color: pnlColor(totals.totalReturn) }}
-            />
+        <Col xs={24} sm={12} md={6}>
+          <Card
+            hoverable
+            onClick={() => navigate('/funds')}
+            style={{
+              background: pnlBg(totals.totalReturn, isDark) ?? (isDark ? '#1f1f1f' : '#fafafa'),
+              border: pnlBg(totals.totalReturn, isDark) ? `1px solid ${pnlColor(totals.totalReturn)}20` : undefined,
+            }}
+            styles={{ body: { padding: 20 } }}
+          >
+            <div style={{ color: '#666', fontSize: 13, marginBottom: 8 }}>📈 累计收益</div>
+            <div
+              style={{
+                color: pnlColor(totals.totalReturn),
+                fontSize: 30,
+                fontWeight: 700,
+                lineHeight: 1.2,
+                fontFamily: 'DIN, "Helvetica Neue", Arial, sans-serif',
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 4,
+              }}
+            >
+              {totals.totalReturn > 0 && <ArrowUpOutlined style={{ fontSize: 18 }} />}
+              {totals.totalReturn < 0 && <ArrowDownOutlined style={{ fontSize: 18 }} />}
+              <span>{totals.totalReturn >= 0 ? '+' : ''}¥{formatMoney(totals.totalReturn)}</span>
+            </div>
+            <div style={{ color: '#666', fontSize: 12, marginTop: 8 }}>
+              累计投入 ¥{formatMoney(totals.totalCost)}
+            </div>
           </Card>
         </Col>
-        <Col xs={12} sm={6}>
-          <Card>
-            <Statistic
-              title="总收益率"
-              value={totals.totalReturnRate}
-              suffix="%"
-              precision={2}
-              valueStyle={{ color: pnlColor(totals.totalReturnRate) }}
-            />
+        <Col xs={24} sm={12} md={6}>
+          <Card
+            hoverable
+            style={{
+              background: pnlBg(totals.totalReturnRate, isDark) ?? (isDark ? '#1f1f1f' : '#fafafa'),
+              border: pnlBg(totals.totalReturnRate, isDark) ? `1px solid ${pnlColor(totals.totalReturnRate)}20` : undefined,
+            }}
+            styles={{ body: { padding: 20 } }}
+          >
+            <div style={{ color: '#666', fontSize: 13, marginBottom: 8 }}>🎯 累计收益率</div>
+            <div
+              style={{
+                color: pnlColor(totals.totalReturnRate),
+                fontSize: 30,
+                fontWeight: 700,
+                lineHeight: 1.2,
+                fontFamily: 'DIN, "Helvetica Neue", Arial, sans-serif',
+              }}
+            >
+              {totals.totalReturnRate >= 0 ? '+' : ''}{totals.totalReturnRate.toFixed(2)}%
+            </div>
+            <div style={{ color: '#666', fontSize: 12, marginTop: 8 }}>
+              年化 (XIRR) {totalXIRR >= 0 ? '+' : ''}{totalXIRR.toFixed(2)}%
+            </div>
           </Card>
         </Col>
-        <Col xs={12} sm={6}>
-          <Card>
+        <Col xs={24} sm={12} md={6}>
+          <Card
+            hoverable
+            style={{
+              background: pnlBg(totals.totalDailyPnl ?? 0, isDark) ?? (isDark ? '#1f1f1f' : '#fafafa'),
+              border: totals.totalDailyPnl !== null ? `1px solid ${pnlColor(totals.totalDailyPnl)}20` : undefined,
+            }}
+            styles={{ body: { padding: 20 } }}
+          >
             <Tooltip
               title={
                 isNonTradingDay(todayStr)
@@ -255,80 +346,115 @@ export default function Dashboard() {
                   ? '当日净值已全部发布'
                   : totals.totalDailyPnl === null
                   ? '今日尚无基金发布净值'
-                  : `${totals.dailyPnlUpdatedCount} 只基金今日 NAV 已发布，${totals.dailyPnlPendingCount} 只净值待发布（QDII 通常 T+2 延迟）。运行中会自动刷新，无需手动操作`
+                  : `${totals.dailyPnlUpdatedCount} 只基金今日 NAV 已发布，${totals.dailyPnlPendingCount} 只净值待发布（QDII 通常 T+2 延迟）`
               }
             >
-              <Statistic
-                title={
-                  isNonTradingDay(todayStr)
-                    ? `当日盈亏（${today()}，休市）`
-                    : totals.isDailyPnlComplete
-                    ? `当日盈亏（${today()}）`
-                    : totals.totalDailyPnl === null
-                    ? `当日盈亏（${today()}）`
-                    : `当日盈亏（${today()}，部分更新）`
-                }
-                value={totals.totalDailyPnl ?? 0}
-                precision={2}
-                formatter={(v) =>
-                  totals.totalDailyPnl === null ? '—' : Number(v).toFixed(2)
-                }
-                valueStyle={{
-                  color: totals.totalDailyPnl !== null ? pnlColor(totals.totalDailyPnl) : undefined,
+              <div style={{ color: '#666', fontSize: 13, marginBottom: 8 }}>
+                ⚡ 当日盈亏{isNonTradingDay(todayStr) ? '（休市）' : ''}
+              </div>
+              <div
+                style={{
+                  color: totals.totalDailyPnl !== null ? pnlColor(totals.totalDailyPnl) : '#999',
+                  fontSize: 30,
+                  fontWeight: 700,
+                  lineHeight: 1.2,
+                  fontFamily: 'DIN, "Helvetica Neue", Arial, sans-serif',
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: 4,
                 }}
-              />
+              >
+                {totals.totalDailyPnl !== null && totals.totalDailyPnl > 0 && <ArrowUpOutlined style={{ fontSize: 18 }} />}
+                {totals.totalDailyPnl !== null && totals.totalDailyPnl < 0 && <ArrowDownOutlined style={{ fontSize: 18 }} />}
+                <span>
+                  {totals.totalDailyPnl === null
+                    ? '—'
+                    : `${totals.totalDailyPnl >= 0 ? '+' : ''}¥${formatMoney(totals.totalDailyPnl)}`}
+                </span>
+              </div>
               {!isNonTradingDay(todayStr) && !totals.isDailyPnlComplete && totals.totalDailyPnl !== null && (
-                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
-                  已更新 {totals.dailyPnlUpdatedCount} / {summaries.length} 只
+                <div style={{ fontSize: 12, color: '#999', marginTop: 8 }}>
+                  <Tag color="processing" style={{ marginRight: 4 }}>更新中</Tag>
+                  {totals.dailyPnlUpdatedCount} / {summaries.length} 只
                 </div>
               )}
-            </Tooltip>
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8}>
-          <Card>
-            <Statistic
-              title="年化收益率（XIRR）"
-              value={totalXIRR}
-              suffix="%"
-              precision={2}
-              valueStyle={{ color: pnlColor(totalXIRR) }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8}>
-          <Card>
-            <Statistic
-              title="累计分红"
-              value={totalDividend}
-              precision={2}
-              valueStyle={{ color: totalDividend > 0 ? pnlColor(totalDividend) : undefined }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8}>
-          <Card>
-            <Tooltip
-              title={`交易：${formatMoney(todayInvested.txAmount)}  +  定投预期：${formatMoney(todayInvested.planAmount)}`}
-            >
-              <Statistic
-                title={`当日投入（${today()})`}
-                value={todayInvested.total}
-                precision={2}
-                valueStyle={{ color: todayInvested.total > 0 ? '#1677ff' : undefined }}
-              />
+              {isNonTradingDay(todayStr) && (
+                <div style={{ fontSize: 12, color: '#999', marginTop: 8 }}>下次开盘自动刷新</div>
+              )}
             </Tooltip>
           </Card>
         </Col>
       </Row>
 
+      {/* ===== 次要指标（3 个，简化为一行小卡） ===== */}
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col xs={24} sm={8}>
+          <Card size="small">
+            <Statistic
+              title="累计分红"
+              value={totalDividend}
+              precision={2}
+              valueStyle={{ color: totalDividend > 0 ? pnlColor(totalDividend) : undefined, fontWeight: 600 }}
+              prefix="💰"
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Tooltip title={`交易：${formatMoney(todayInvested.txAmount)}  +  定投预期：${formatMoney(todayInvested.planAmount)}`}>
+            <Card size="small">
+              <Statistic
+                title={`今日投入（${today()}）`}
+                value={todayInvested.total}
+                precision={2}
+                valueStyle={{ color: todayInvested.total > 0 ? '#1677ff' : undefined, fontWeight: 600 }}
+                prefix={<FundOutlined />}
+              />
+            </Card>
+          </Tooltip>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card
+            size="small"
+            hoverable
+            onClick={() => navigate('/funds')}
+          >
+            <Statistic
+              title="持仓基金"
+              value={funds.length}
+              suffix="只"
+              valueStyle={{ color: '#1677ff', fontWeight: 600 }}
+              prefix={<FundOutlined />}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      {/* ===== 组合走势图 ===== */}
+      <PortfolioTrendChart />
+
+      {/* ===== 收益日历 ===== */}
       <div style={{ marginTop: 16 }}>
         <ReturnCalendar />
       </div>
 
+      {/* ===== 持仓汇总（按平台 / 类型） ===== */}
       <HoldingsSummary summaries={summaries} platforms={platforms} />
 
-      <Card title="持仓列表" style={{ marginTop: 16 }}>
+      {/* ===== 持仓列表（含类型色条 + 表尾合计行） ===== */}
+      <Card
+        title="持仓列表"
+        style={{ marginTop: 16 }}
+        extra={
+          <Space>
+            <span style={{ color: '#999', fontSize: 12 }}>
+              共 {funds.length} 只 ｜ 合计市值 {formatMoneyShortWithSign(totals.totalValue)}
+            </span>
+            <Button type="link" onClick={() => navigate('/funds')}>
+              管理基金 →
+            </Button>
+          </Space>
+        }
+      >
         <Table
           dataSource={summaries}
           columns={columns}
@@ -340,6 +466,35 @@ export default function Dashboard() {
             style: { cursor: 'pointer' },
           })}
           locale={{ emptyText: '暂无持仓，请先添加基金' }}
+          summary={() => (
+            <Table.Summary fixed>
+              <Table.Summary.Row style={{ background: isDark ? '#1d1d1d' : '#fafafa', fontWeight: 600 }}>
+                <Table.Summary.Cell index={0}>合计</Table.Summary.Cell>
+                <Table.Summary.Cell index={1}>—</Table.Summary.Cell>
+                <Table.Summary.Cell index={2} align="right">
+                  {formatMoney(totals.totalCost)}
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={3} align="right">
+                  {formatMoney(totals.totalValue)}
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={4} align="right">
+                  <span style={{ color: pnlColor(totals.totalReturn) }}>
+                    {totals.totalReturn >= 0 ? '+' : ''}{formatMoney(totals.totalReturn)}
+                  </span>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={5} align="right">
+                  <span style={{ color: pnlColor(totals.totalReturnRate) }}>
+                    {totals.totalReturnRate >= 0 ? '+' : ''}{totals.totalReturnRate.toFixed(2)}%
+                  </span>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={6} align="right">
+                  <span style={{ color: totals.totalDailyPnl !== null ? pnlColor(totals.totalDailyPnl) : '#999' }}>
+                    {totals.totalDailyPnl === null ? '—' : `${totals.totalDailyPnl >= 0 ? '+' : ''}${formatMoney(totals.totalDailyPnl)}`}
+                  </span>
+                </Table.Summary.Cell>
+              </Table.Summary.Row>
+            </Table.Summary>
+          )}
         />
       </Card>
     </div>

@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Card, Table, Tag, Empty, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { Platform, Fund } from '../types';
-import { FUND_TYPE_LABELS } from '../types';
+import { FUND_TYPE_LABELS, FUND_TYPE_COLORS } from '../types';
 import { formatMoney, formatPercent, pnlColor, today as todayStr } from '../utils/formatter';
 import { isNonTradingDay } from '../utils/chineseHolidays';
 
@@ -136,7 +136,7 @@ export default function HoldingsSummary({ summaries, platforms }: HoldingsSummar
       align: 'left',
       sorter: (a, b) =>
         FUND_TYPE_LABELS[a.type].localeCompare(FUND_TYPE_LABELS[b.type], 'zh-CN'),
-      render: (_, r) => <Tag>{FUND_TYPE_LABELS[r.type]}</Tag>,
+      render: (_, r) => <Tag color={FUND_TYPE_COLORS[r.type]}>{FUND_TYPE_LABELS[r.type]}</Tag>,
     },
     {
       title: '基金只数',

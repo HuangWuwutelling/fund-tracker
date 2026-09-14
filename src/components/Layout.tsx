@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Layout, Menu, Button, Modal, Typography } from 'antd';
+import { Layout, Menu, Button, Modal, Typography, Switch, Tooltip, Space } from 'antd';
 import {
   DashboardOutlined,
   FundOutlined,
@@ -8,8 +8,11 @@ import {
   BarChartOutlined,
   SettingOutlined,
   InfoCircleOutlined,
+  BulbOutlined,
+  BulbFilled,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
+import { useStore } from '../stores';
 
 const { Header, Sider, Content, Footer } = Layout;
 const { Title, Paragraph, Text } = Typography;
@@ -23,30 +26,43 @@ const menuItems = [
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },
 ];
 
+// 面包屑路径映射（顶级菜单路径 → 父级 / 当前标题）
+const breadcrumbMap: Record<string, { parent?: string; title: string }> = {
+  '/': { title: '资产总览' },
+  '/funds': { title: '基金管理' },
+  '/transactions': { title: '交易记录' },
+  '/dca': { title: '定投计划' },
+  '/reports': { title: '周报/月报' },
+  '/settings': { title: '设置' },
+};
+
 export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [aboutOpen, setAboutOpen] = useState(false);
+  const { settings, updateSettings } = useStore();
+  const isDark = settings.theme === 'dark';
 
   // Determine selected key from path (match exactly or by top-level segment)
   const selectedKey = (() => {
     const path = location.pathname;
-    // Exact match first
     const exact = menuItems.find((item) => item.key === path);
     if (exact) return exact.key;
-    // For /funds/:id, highlight /funds
     if (path.startsWith('/funds/')) return '/funds';
-    // Match top-level segment
     const top = '/' + path.split('/').filter(Boolean)[0];
     return menuItems.find((item) => item.key === top)?.key ?? '/';
   })();
+
+  const breadcrumb = breadcrumbMap[selectedKey] ?? { title: '基金投资记录' };
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider
         breakpoint="lg"
         collapsedWidth="0"
-        style={{ background: '#fff' }}
+        style={{
+          background: isDark ? '#141414' : '#fff',
+        }}
       >
         <div
           style={{
@@ -57,7 +73,7 @@ export default function AppLayout() {
             fontWeight: 700,
             fontSize: 18,
             color: '#1677ff',
-            borderBottom: '1px solid #f0f0f0',
+            borderBottom: isDark ? '1px solid #303030' : '1px solid #f0f0f0',
           }}
         >
           💰 基金记账
@@ -67,27 +83,54 @@ export default function AppLayout() {
           selectedKeys={[selectedKey]}
           items={menuItems}
           onClick={({ key }) => navigate(key)}
-          style={{ borderRight: 0 }}
+          style={{ borderRight: 0, background: 'transparent' }}
         />
       </Sider>
-      <Layout>
+      <Layout style={{ background: isDark ? '#000' : '#f5f5f5' }}>
         <Header
           style={{
-            background: '#fff',
+            background: isDark ? '#1f1f1f' : '#fff',
             padding: '0 24px',
-            borderBottom: '1px solid #f0f0f0',
+            borderBottom: isDark ? '1px solid #303030' : '1px solid #f0f0f0',
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'space-between',
             fontSize: 16,
             fontWeight: 600,
           }}
         >
-          {menuItems.find((m) => m.key === selectedKey)?.label ?? '基金投资记录'}
+          <Space size="small" style={{ color: isDark ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.85)' }}>
+            {breadcrumb.parent && (
+              <>
+                <span style={{ fontWeight: 400, color: '#999' }}>{breadcrumb.parent}</span>
+                <span style={{ color: '#999' }}>/</span>
+              </>
+            )}
+            <span>{breadcrumb.title}</span>
+          </Space>
+
+          <Space size="middle">
+            <Tooltip title={isDark ? '切换到浅色主题' : '切换到深色主题'}>
+              <Switch
+                size="small"
+                checked={isDark}
+                onChange={(checked) => updateSettings({ theme: checked ? 'dark' : 'light' })}
+                checkedChildren={<BulbFilled />}
+                unCheckedChildren={<BulbOutlined />}
+              />
+            </Tooltip>
+            <Button
+              type="text"
+              icon={<SettingOutlined />}
+              onClick={() => navigate('/settings')}
+              title="设置"
+            />
+          </Space>
         </Header>
         <Content style={{ margin: 24 }}>
           <Outlet />
         </Content>
-        <Footer style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: '16px 24px' }}>
+        <Footer style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: '16px 24px', background: 'transparent' }}>
           仅为个人记录，不构成投资建议。数据为 T+1，仅供参考。投资有风险，入市需谨慎。
           <Button
             type="link"

@@ -1,5 +1,6 @@
 import type { Transaction, Fund, NavRecord, DcaPlan } from '../types';
 import { findPublishedNavPair } from './tradingDays';
+import { lookupNavForDate } from './navLookup';
 import dayjs from 'dayjs';
 
 /** 过滤掉 pending(待确认)交易;只保留 confirmed 或未设状态的(向后兼容) */
@@ -464,4 +465,100 @@ export function calcFundSummary(
     xirr,
     dividend,
   };
+}
+
+/**
+ * 生成组合总市值时间线（按天）。
+ *
+ * 复用 reportGenerator 的 calcPortfolioValueAtDate 算法：
+ *   每天 = Σ(每只基金的「截至当日累计份额 × 当日 NAV（无则回退最近已发布）」)。
+ *
+ * 用于 Dashboard 组合走势图。返回 [{date, value, cost}, ...]，
+ *  - value: 当日组合总市值
+ *  - cost:  当日累计投入（仅 buy amount 累加，sell/dividend 不扣减——用户视角的"总投了多少钱"）
+ *           用作"本金基线"画在图上，对比累计盈亏。
+ *
+ * 起点：从首笔 confirmed 交易所在月开始（避免前面所有日期 value=0/cost=0 把图压平）。
+ * 终点：今天。
+ * 跳过：非交易日。
+ */
+export function getPortfolioValueHistory(
+  funds: Fund[],
+  transactions: Transaction[]
+): Array<{ date: string; value: number; cost: number }> {
+  const confirmed = onlyConfirmed(transactions);
+  if (confirmed.length === 0 || funds.length === 0) return [];
+
+  const firstDate = confirmed.map((t) => t.date).sort()[0]!;
+  const todayStr = dayjs().format('YYYY-MM-DD');
+
+  // 预计算每只基金的累计投入时间线（buy amount 累加，sell/dividend 不影响）
+  // 与 getPortfolioValueHistory 的"用户视角本金"一致
+  const costByDate: Array<{ date: string; cum: number }> = [];
+  const sortedTxs = [...confirmed].sort((a, b) => a.date.localeCompare(b.date));
+  let cumCost = 0;
+  let lastDate = '';
+  for (const tx of sortedTxs) {
+    if (tx.type === 'buy') cumCost += tx.amount;
+    if (tx.date !== lastDate) {
+      costByDate.push({ date: tx.date, cum: cumCost });
+      lastDate = tx.date;
+    } else {
+      costByDate[costByDate.length - 1]!.cum = cumCost;
+    }
+  }
+
+  // 一次性预计算每只基金每日的累计份额（按交易日 + 周末/节假日延展）
+  // 避免内层对每只基金 filter+sort 全表 → 复杂度从 O(D·F·T) 降到 O(D·F)
+  const sharesByDate = new Map<string, Map<string, number>>();
+  for (const fund of funds) {
+    const txs = confirmed.filter((t) => t.fundId === fund.id).sort((a, b) => a.date.localeCompare(b.date));
+    const inner = new Map<string, number>();
+    let cum = 0;
+    let lastD = '';
+    for (const tx of txs) {
+      if (tx.type === 'buy') cum += tx.shares;
+      else if (tx.type === 'sell') cum -= tx.shares;
+      else if (tx.type === 'dividend') cum += tx.shares;
+      if (tx.date !== lastD) {
+        inner.set(tx.date, cum);
+        lastD = tx.date;
+      } else {
+        inner.set(tx.date, cum);
+      }
+    }
+    sharesByDate.set(fund.id, inner);
+  }
+
+  const out: Array<{ date: string; value: number; cost: number }> = [];
+  // 起点是首笔交易日；把 cumShares 沿用至每个查询日（lookupNavForDate 内部用 ≤ date 的最新已发布）
+  // 不剔除周末/节假日：lookupNavForDate 会回退到最近已发布 NAV，连成自然线段；
+  // 节假日持平时段视觉上"持平"而不是"空缺"，更符合用户对总市值的直观感受。
+  for (let d = dayjs(firstDate); d.format('YYYY-MM-DD') <= todayStr; d = d.add(1, 'day')) {
+    const dateStr = d.format('YYYY-MM-DD');
+
+    let totalValue = 0;
+    for (const fund of funds) {
+      const inner = sharesByDate.get(fund.id);
+      if (!inner || inner.size === 0) continue;
+      // 二分：截至 dateStr 的最新累计份额
+      const keys = Array.from(inner.keys()).sort();
+      let lo = 0, hi = keys.length - 1, shares = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >>> 1;
+        if (keys[mid]! <= dateStr) { shares = inner.get(keys[mid]!)!; lo = mid + 1; }
+        else { hi = mid - 1; }
+      }
+      if (shares <= 0) continue;
+      const nav = lookupNavForDate(fund.id, new Date(dateStr));
+      if (nav) totalValue += shares * nav.nav;
+    }
+    // 当日累计投入：≤ dateStr 最后一笔的 cum
+    let costVal = 0;
+    for (let i = costByDate.length - 1; i >= 0; i--) {
+      if (costByDate[i]!.date <= dateStr) { costVal = costByDate[i]!.cum; break; }
+    }
+    out.push({ date: dateStr, value: totalValue, cost: costVal });
+  }
+  return out;
 }

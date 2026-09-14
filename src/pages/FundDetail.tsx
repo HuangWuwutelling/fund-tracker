@@ -5,20 +5,29 @@ import { ArrowLeftOutlined, PlusOutlined, ImportOutlined } from '@ant-design/ico
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts/core';
 import { LineChart } from 'echarts/charts';
-import { TooltipComponent, GridComponent } from 'echarts/components';
+import { TooltipComponent, GridComponent, LegendComponent, DataZoomComponent, MarkLineComponent, MarkPointComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
-import { calcFundSummary, calcSharesFromAmount, calcShares, onlyConfirmed } from '../utils/calculator';
-import { pnlColor, formatDate, formatMoney, today } from '../utils/formatter';
+import { calcFundSummary, calcSharesFromAmount, calcShares, calcCost, onlyConfirmed } from '../utils/calculator';
+import { pnlColor, formatDate, formatMoney, formatPercent, today } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
 import { isNonTradingDay } from '../utils/chineseHolidays';
 import InitialPositionModal from '../components/InitialPositionModal';
-import { FUND_TYPE_LABELS, TRANSACTION_TYPE_LABELS, FREQUENCY_LABELS } from '../types';
+import { FUND_TYPE_LABELS, FUND_TYPE_COLORS, TRANSACTION_TYPE_LABELS, TX_TYPE_COLORS, FREQUENCY_LABELS } from '../types';
 import type { Transaction, DcaPlan, Fund } from '../types';
 
-echarts.use([LineChart, TooltipComponent, GridComponent, CanvasRenderer]);
+echarts.use([
+  LineChart,
+  TooltipComponent,
+  GridComponent,
+  LegendComponent,
+  DataZoomComponent,
+  MarkLineComponent,
+  MarkPointComponent,
+  CanvasRenderer,
+]);
 
 export default function FundDetail() {
   const { id } = useParams<{ id: string }>();
@@ -115,19 +124,112 @@ export default function FundDetail() {
       : navHistory;
   }, [navHistory, navRange]);
 
-  const navChartOption = useMemo(() => ({
-    tooltip: {
-      trigger: 'axis' as const,
-      formatter: (params: Array<{ name: string; value: number }>) => {
-        const p = params[0];
-        return p ? `${p.name}<br/>净值: ${p.value.toFixed(4)}` : '';
+  // 平均成本（持仓成本 / 当前份额）—— 用作图上的水平基线
+  // 卖出后份额减少，cost 也按比例扣减，所以 avgCost 反映"未卖出部分的平均买入价"
+  const avgCost = useMemo(() => {
+    if (!fund) return 0;
+    const fundTxs = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
+    const cost = calcCost(fundTxs);
+    const shares = calcShares(fundTxs);
+    return shares > 0 ? cost / shares : 0;
+  }, [fund, transactions]);
+
+  // 区间涨跌（首日 vs 末日 NAV）—— 右上角展示
+  const periodChange = useMemo(() => {
+    if (filteredNav.length < 2) return null;
+    const first = filteredNav[0]!.nav;
+    const last = filteredNav[filteredNav.length - 1]!.nav;
+    if (first <= 0) return null;
+    const change = last - first;
+    const changeRate = (change / first) * 100;
+    return { first, last, change, changeRate };
+  }, [filteredNav]);
+
+  // 交易点位（markPoint）：在日期轴上标注买入 / 卖出 / 分红
+  // 用 lookupNavForDate 把 tx.date 映射到"该日 NAV"，与折线对齐
+  const txMarkers = useMemo(() => {
+    if (!fund) return { buy: [] as Array<{ name: string; coord: [string, number]; value: number }>, sell: [] as Array<{ name: string; coord: [string, number]; value: number }>, dividend: [] as Array<{ name: string; coord: [string, number]; value: number }> };
+    const fundTxs = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
+    const buy: Array<{ name: string; coord: [string, number]; value: number }> = [];
+    const sell: Array<{ name: string; coord: [string, number]; value: number }> = [];
+    const dividend: Array<{ name: string; coord: [string, number]; value: number }> = [];
+    for (const tx of fundTxs) {
+      const nav = lookupNavForDate(fund.id, tx.date);
+      if (!nav) continue;
+      const marker = { coord: [nav.navDate, nav.nav] as [string, number], value: nav.nav };
+      if (tx.type === 'buy') buy.push({ name: '买', ...marker });
+      else if (tx.type === 'sell') sell.push({ name: '卖', ...marker });
+      else if (tx.type === 'dividend') dividend.push({ name: '分', ...marker });
+    }
+    return { buy, sell, dividend };
+  }, [fund, transactions]);
+
+  const navChartOption = useMemo(() => {
+    const dates = filteredNav.map((r) => r.date);
+    const navs = filteredNav.map((r) => r.nav);
+    // markLine 需要 series.data 里 yAxis 数值字段
+    const costLineData = avgCost > 0 ? [{ yAxis: avgCost, name: `成本均价 ${avgCost.toFixed(4)}` }] : [];
+
+    return {
+      tooltip: {
+        trigger: 'axis' as const,
+        formatter: (params: Array<{ axisValue: string; value: number; seriesName: string; color: string; marker: string }>) => {
+          if (!params || params.length === 0) return '';
+          const date = params[0]!.axisValue;
+          const lines = params
+            .filter((p) => p.seriesName !== '成本均价' || p.value === avgCost)
+            .map((p) => {
+              const v = typeof p.value === 'number' ? p.value.toFixed(4) : String(p.value);
+              return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.color};margin-right:6px;"></span>${p.seriesName}：<b>${v}</b>`;
+            });
+          return `<div style="font-weight:600;margin-bottom:4px;">${date}</div>${lines.join('<br/>')}`;
+        },
       },
-    },
-    grid: { left: 60, right: 20, top: 10, bottom: 30 },
-    xAxis: { type: 'category' as const, data: filteredNav.map((r) => r.date) },
-    yAxis: { type: 'value' as const, min: 'dataMin', axisLabel: { formatter: (v: number) => v.toFixed(2) } },
-    series: [{ type: 'line', data: filteredNav.map((r) => r.nav), smooth: true }],
-  }), [filteredNav]);
+      legend: {
+        bottom: 0,
+        data: ['单位净值', '成本均价'],
+        textStyle: { fontSize: 12 },
+      },
+      grid: { left: 60, right: 20, top: 20, bottom: 50 },
+      xAxis: { type: 'category' as const, data: dates, axisLabel: { fontSize: 11 } },
+      yAxis: {
+        type: 'value' as const,
+        min: 'dataMin',
+        axisLabel: { formatter: (v: number) => v.toFixed(2), fontSize: 11 },
+        splitLine: { lineStyle: { type: 'dashed' as const, color: '#e8e8e8' } },
+      },
+      dataZoom: [
+        { type: 'inside' as const },
+        { type: 'slider' as const, height: 18, bottom: 28 },
+      ],
+      series: [
+        {
+          name: '单位净值',
+          type: 'line' as const,
+          smooth: true,
+          symbol: 'none',
+          data: navs,
+          lineStyle: { width: 2, color: '#1677ff' },
+          areaStyle: { color: 'rgba(22,119,255,0.06)' },
+          markPoint: {
+            symbol: 'pin',
+            symbolSize: 36,
+            data: [
+              ...txMarkers.buy.map((m) => ({ name: '买', coord: m.coord, itemStyle: { color: '#cf1322' }, label: { fontSize: 10, color: '#fff' } })),
+              ...txMarkers.sell.map((m) => ({ name: '卖', coord: m.coord, itemStyle: { color: '#3f8600' }, label: { fontSize: 10, color: '#fff' } })),
+              ...txMarkers.dividend.map((m) => ({ name: '分', coord: m.coord, itemStyle: { color: '#d48806' }, label: { fontSize: 10, color: '#fff' } })),
+            ],
+          },
+          markLine: {
+            symbol: 'none',
+            data: costLineData,
+            lineStyle: { color: '#fa8c16', type: 'dashed' as const, width: 1.5 },
+            label: { fontSize: 11, color: '#fa8c16', formatter: '成本均价' },
+          },
+        },
+      ],
+    };
+  }, [filteredNav, avgCost, txMarkers]);
 
   const handleSaveTransaction = async () => {
     try {
@@ -305,7 +407,8 @@ export default function FundDetail() {
       title: '类型',
       dataIndex: 'type',
       key: 'type',
-      render: (v: Transaction['type']) => <Tag color={v === 'buy' ? 'red' : v === 'sell' ? 'green' : 'gold'}>{TRANSACTION_TYPE_LABELS[v]}</Tag>,
+      width: 80,
+      render: (v: Transaction['type']) => <Tag color={TX_TYPE_COLORS[v]}>{TRANSACTION_TYPE_LABELS[v]}</Tag>,
     },
     {
       title: '状态',
@@ -349,7 +452,7 @@ export default function FundDetail() {
           <Descriptions.Item label="基金代码">{fundRef.id}</Descriptions.Item>
           <Descriptions.Item label="基金名称">{fundRef.name}</Descriptions.Item>
           <Descriptions.Item label="平台">{platformName}</Descriptions.Item>
-          <Descriptions.Item label="类型"><Tag>{FUND_TYPE_LABELS[fundRef.type]}</Tag></Descriptions.Item>
+          <Descriptions.Item label="类型"><Tag color={FUND_TYPE_COLORS[fundRef.type]}>{FUND_TYPE_LABELS[fundRef.type]}</Tag></Descriptions.Item>
           <Descriptions.Item label="最新净值">{fundRef.currentNav.toFixed(4)}</Descriptions.Item>
           <Descriptions.Item label="净值日期">{formatDate(fundRef.navDate)}</Descriptions.Item>
         </Descriptions>
@@ -433,20 +536,45 @@ export default function FundDetail() {
         </Col>
       </Row>
 
-      <Card title="净值走势" style={{ marginTop: 16 }}>
-        <Space style={{ marginBottom: 12 }}>
-          <Radio.Group value={navRange} onChange={(e) => setNavRange(e.target.value)} size="small">
+      <Card
+        title="净值走势"
+        style={{ marginTop: 16 }}
+        extra={
+          periodChange ? (
+            <Space size="small">
+              <span style={{ color: '#666', fontSize: 12 }}>区间涨跌</span>
+              <span style={{ color: pnlColor(periodChange.change), fontWeight: 600, fontSize: 14 }}>
+                {periodChange.change >= 0 ? '+' : ''}{periodChange.change.toFixed(4)}
+              </span>
+              <Tag color={periodChange.change >= 0 ? 'red' : 'green'}>
+                {formatPercent(periodChange.changeRate)}
+              </Tag>
+            </Space>
+          ) : null
+        }
+      >
+        <Space style={{ marginBottom: 12 }} wrap>
+          <Radio.Group value={navRange} onChange={(e) => setNavRange(e.target.value)} size="small" optionType="button" buttonStyle="solid">
             <Radio.Button value="1m">近1月</Radio.Button>
             <Radio.Button value="3m">近3月</Radio.Button>
             <Radio.Button value="6m">近6月</Radio.Button>
             <Radio.Button value="1y">近1年</Radio.Button>
             <Radio.Button value="all">全部</Radio.Button>
           </Radio.Group>
+          {avgCost > 0 && (
+            <span style={{ fontSize: 12, color: '#fa8c16' }}>
+              <span style={{ display: 'inline-block', width: 16, height: 2, background: '#fa8c16', verticalAlign: 'middle', marginRight: 4 }} />
+              成本均价 {avgCost.toFixed(4)}
+            </span>
+          )}
+          <span style={{ fontSize: 12, color: '#999' }}>
+            🔴买 🟢卖 🟡分红
+          </span>
         </Space>
         {filteredNav.length > 0 ? (
-          <ReactEChartsCore echarts={echarts} option={navChartOption} style={{ height: 300 }} />
+          <ReactEChartsCore echarts={echarts} option={navChartOption} style={{ height: 360 }} notMerge />
         ) : (
-          <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
+          <div style={{ height: 360, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
             暂无净值历史数据
           </div>
         )}

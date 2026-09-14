@@ -65,6 +65,29 @@ export const FUND_TYPE_LABELS: Record<Fund['type'], string> = {
   mixed: '混合型',
 };
 
+/** 基金类型 → AntD Tag 颜色（持仓列表 / HoldingsSummary / 报表统一口径） */
+export const FUND_TYPE_COLORS: Record<Fund['type'], string> = {
+  index: 'cyan',
+  bond: 'blue',
+  qdii: 'purple',
+  mixed: 'orange',
+};
+
+/** 基金类型 → 列表行左侧 4px 色条（高风险一目了然） */
+export const FUND_TYPE_STRIPE_COLORS: Record<Fund['type'], string> = {
+  index: '#13c2c2',
+  bond: '#1677ff',
+  qdii: '#722ed1',
+  mixed: '#fa8c16',
+};
+
+/** 交易类型 → 颜色（红买/绿卖/金分红 = 中国市场惯例） */
+export const TX_TYPE_COLORS: Record<Transaction['type'], string> = {
+  buy: 'red',
+  sell: 'green',
+  dividend: 'gold',
+};
+
 export const TRANSACTION_TYPE_LABELS: Record<Transaction['type'], string> = {
   buy: '买入',
   sell: '卖出',

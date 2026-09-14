@@ -1,16 +1,16 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Tag, Space, message, Popconfirm, Alert, Checkbox, Radio } from 'antd';
+import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Tag, Space, message, Popconfirm, Alert, Checkbox, Radio, Statistic, Row, Col } from 'antd';
 import { PlusOutlined, ImportOutlined } from '@ant-design/icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { calcSharesFromAmount, calcShares, onlyConfirmed } from '../utils/calculator';
-import { formatMoney, formatDate } from '../utils/formatter';
+import { formatMoney, formatDate, pnlColor } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
 import InitialPositionModal from '../components/InitialPositionModal';
 import NavLink from '../components/NavLink';
-import { TRANSACTION_TYPE_LABELS } from '../types';
+import { TRANSACTION_TYPE_LABELS, TX_TYPE_COLORS } from '../types';
 import type { Transaction } from '../types';
 
 export default function Transactions() {
@@ -43,6 +43,18 @@ export default function Transactions() {
     if (pendingOnly) list = list.filter((t) => t.status === 'pending');
     return list.sort((a, b) => b.date.localeCompare(a.date));
   }, [transactions, filterFund, filterType, pendingOnly]);
+
+  // 汇总：用于表头上方的"本页统计"条（不区分 confirmed/pending，与过滤后列表口径一致）
+  const summary = useMemo(() => {
+    let buyCount = 0, sellCount = 0, dividendCount = 0;
+    let buyAmount = 0, sellAmount = 0, dividendAmount = 0;
+    for (const tx of filteredTxs) {
+      if (tx.type === 'buy') { buyCount++; buyAmount += tx.amount; }
+      else if (tx.type === 'sell') { sellCount++; sellAmount += tx.amount - tx.fee; }
+      else { dividendCount++; dividendAmount += tx.amount > 0 ? tx.amount : tx.shares * tx.nav; }
+    }
+    return { buyCount, sellCount, dividendCount, buyAmount, sellAmount, dividendAmount, net: buyAmount - sellAmount };
+  }, [filteredTxs]);
 
   const handleSave = async () => {
     try {
@@ -228,11 +240,13 @@ export default function Transactions() {
   }, [modalOpen]);
 
   const columns = [
-    { title: '日期', dataIndex: 'date', key: 'date', render: (v: string) => formatDate(v) },
+    { title: '日期', dataIndex: 'date', key: 'date', width: 110, fixed: 'left' as const, render: (v: string) => formatDate(v) },
     {
       title: '基金',
       dataIndex: 'fundId',
       key: 'fund',
+      width: 200,
+      fixed: 'left' as const,
       render: (id: string) => {
         const name = funds.find((f) => f.id === id)?.name ?? id;
         return <NavLink onClick={() => navigate(`/funds/${id}`)}>{name}</NavLink>;
@@ -242,11 +256,8 @@ export default function Transactions() {
       title: '类型',
       dataIndex: 'type',
       key: 'type',
-      render: (v: Transaction['type']) => (
-        <Tag color={v === 'buy' ? 'red' : v === 'sell' ? 'green' : 'gold'}>
-          {TRANSACTION_TYPE_LABELS[v]}
-        </Tag>
-      ),
+      width: 80,
+      render: (v: Transaction['type']) => <Tag color={TX_TYPE_COLORS[v]}>{TRANSACTION_TYPE_LABELS[v]}</Tag>,
     },
     {
       title: '状态',
@@ -256,10 +267,10 @@ export default function Transactions() {
       render: (v: string | undefined) =>
         v === 'pending' ? <Tag color="orange">待确认</Tag> : <Tag>已确认</Tag>,
     },
-    { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => formatMoney(v) },
-    { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => formatMoney(v) },
-    { title: '份额', dataIndex: 'shares', key: 'shares', align: 'right' as const, render: (v: number) => v.toFixed(4) },
-    { title: '净值', dataIndex: 'nav', key: 'nav', align: 'right' as const, render: (v: number) => v.toFixed(4) },
+    { title: '金额', dataIndex: 'amount', key: 'amount', width: 120, align: 'right' as const, render: (v: number) => formatMoney(v) },
+    { title: '手续费', dataIndex: 'fee', key: 'fee', width: 90, align: 'right' as const, render: (v: number) => formatMoney(v) },
+    { title: '份额', dataIndex: 'shares', key: 'shares', width: 110, align: 'right' as const, render: (v: number) => v.toFixed(4) },
+    { title: '净值', dataIndex: 'nav', key: 'nav', width: 100, align: 'right' as const, render: (v: number) => v.toFixed(4) },
     {
       title: '备注',
       dataIndex: 'note',
@@ -275,6 +286,7 @@ export default function Transactions() {
       title: '操作',
       key: 'actions',
       width: 180,
+      fixed: 'right' as const,
       render: (_: unknown, record: Transaction) => (
         <Space>
           {record.status === 'pending' && (
@@ -305,6 +317,59 @@ export default function Transactions() {
         </Space>
       }
     >
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col xs={12} sm={6} md={5}>
+          <Card size="small">
+            <Statistic
+              title="买入笔数 / 金额"
+              value={summary.buyCount}
+              suffix={`笔 / ¥${formatMoney(summary.buyAmount)}`}
+              valueStyle={{ fontSize: 16, color: '#cf1322' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={5}>
+          <Card size="small">
+            <Statistic
+              title="卖出笔数 / 净额"
+              value={summary.sellCount}
+              suffix={`笔 / ¥${formatMoney(summary.sellAmount)}`}
+              valueStyle={{ fontSize: 16, color: '#3f8600' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={5}>
+          <Card size="small">
+            <Statistic
+              title="分红笔数 / 累计"
+              value={summary.dividendCount}
+              suffix={`笔 / ¥${formatMoney(summary.dividendAmount)}`}
+              valueStyle={{ fontSize: 16, color: '#d48806' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={4}>
+          <Card size="small">
+            <Statistic
+              title="净投入（买 - 卖）"
+              value={summary.net}
+              prefix="¥"
+              valueStyle={{ fontSize: 16, color: pnlColor(summary.net) === '#666' ? undefined : pnlColor(summary.net) }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={24} md={5}>
+          <Card size="small">
+            <Statistic
+              title="筛选结果"
+              value={filteredTxs.length}
+              suffix="笔"
+              valueStyle={{ fontSize: 16, color: '#1677ff' }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
           allowClear
