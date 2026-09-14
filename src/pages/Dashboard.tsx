@@ -16,28 +16,24 @@ import {
   pnlBg,
   formatMoneyShortWithSign,
 } from '../utils/formatter';
-import { FUND_TYPE_LABELS, FUND_TYPE_COLORS, FUND_TYPE_STRIPE_COLORS } from '../types';
+import { FUND_TYPE_LABELS, FUND_TYPE_COLORS, FUND_TYPE_STRIPE_COLORS, LATEST_NAV_PNL_LABEL } from '../types';
 
 
 
 export default function Dashboard() {
-  const { funds, transactions, platforms, dcaPlans, getNavHistory, settings } = useStore();
+  const { funds, transactions, platforms, dcaPlans, getNavHistory, settings, freshNavFundIds, navRefreshedAt } = useStore();
   const navigate = useNavigate();
   const isDark = settings.theme === 'dark';
 
   // todayStr 提到组件层，让 useMemo deps 能感知"跨日"——深夜跨过午夜时下一次渲染
   // 会自动重算 today 格（避免 today 高亮 / 当日盈亏判定卡在前一天）。
   const todayStr = today();
-  // 用户持仓基金中是否含 QDII——用于"今日休市"文案区分
-  // （调休补班日 QDII 不发 NAV，但 A 股照常；用 isNonTradingDay 统一判定调休为非交易日后，文案需细分）
-  const hasQdii = funds.some((f) => f.type === 'qdii');
-  const hasNonQdii = funds.some((f) => f.type !== 'qdii');
   const summaries = useMemo(() => {
     return funds.map((fund) => ({
       fund,
-      ...calcFundSummary(fund, transactions, getNavHistory(fund.id), todayStr),
+      ...calcFundSummary(fund, transactions, getNavHistory(fund.id)),
     }));
-  }, [funds, transactions, getNavHistory, todayStr]);
+  }, [funds, transactions, getNavHistory]);
 
   // 衍生统计：memoize 避免每次渲染重算 + 重复 getNavHistory 调用
   const totals = useMemo(() => {
@@ -45,31 +41,46 @@ export default function Dashboard() {
     const totalCost = summaries.reduce((sum, s) => sum + s.cost, 0);
     const totalReturn = totalValue - totalCost;
     const totalReturnRate = totalCost > 0 ? (totalReturn / totalCost) * 100 : 0;
-    // 当日盈亏：仅汇总"今日 NAV 已发布"的基金。QDII 等延迟基金当日 NAV 未发布，
-    // 单独列入 pending，不打包多日累计——与收益日历和业内通用口径一致。
+
+    // 最新净值日盈亏：汇总所有"有可用 NAV 对"的基金。
+    // 不做任何发布节奏假设——数字就是各基金最新一对已发布 NAV 的涨跌；
+    // 因为不同基金的最新净值日可能不同（A 股今天、QDII 常落后 1 个交易日），
+    // 按 currNavDate 分桶展示，把口径直接写在卡片上而不是藏进 tooltip。
     let totalDailyPnl: number | null = null;
-    let updatedCount = 0;
-    let pendingCount = 0;
+    const bucketCount = new Map<string, number>();
+    let noNavCount = 0;
     for (const s of summaries) {
-      if (s.isDailyPnlToday && s.dailyPnl !== null) {
-        totalDailyPnl = (totalDailyPnl ?? 0) + s.dailyPnl;
-        updatedCount++;
-      } else {
-        pendingCount++;
+      if (s.dailyPnl === null) {
+        noNavCount++;
+        continue;
       }
+      totalDailyPnl = (totalDailyPnl ?? 0) + s.dailyPnl;
+      bucketCount.set(s.currNavDate, (bucketCount.get(s.currNavDate) ?? 0) + 1);
     }
-    const isComplete = summaries.length > 0 && pendingCount === 0;
+    const navDateBuckets = [...bucketCount.entries()]
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+
     return {
       totalValue,
       totalCost,
       totalReturn,
       totalReturnRate,
       totalDailyPnl,
-      dailyPnlUpdatedCount: updatedCount,
-      dailyPnlPendingCount: pendingCount,
-      isDailyPnlComplete: isComplete,
+      navDateBuckets,
+      noNavCount,
+      coveredCount: summaries.length - noNavCount,
     };
   }, [summaries]);
+
+  // 本轮刷新是否"一无所获"：跑过刷新、但没有一只基金拿到新净值。
+  // 非交易日不算（休市时本来就该没有新净值，提示反而误导）。
+  const freshNavCount = funds.filter((f) => freshNavFundIds.has(f.id)).length;
+  const showStaleTag =
+    navRefreshedAt !== null &&
+    freshNavCount === 0 &&
+    totals.coveredCount > 0 &&
+    !isNonTradingDay(todayStr);
 
   // XIRR / dividend / todayInvested 都是 O(transactions) 的重计算，用 useMemo 包裹避免每次渲染都跑
   const totalDividend = useMemo(() => calcDividendTotal(transactions), [transactions]);
@@ -177,49 +188,30 @@ export default function Dashboard() {
       render: (v: number) => <span style={{ color: pnlColor(v) }}>{formatPercent(v)}</span>,
     },
     {
-      title: '当日盈亏',
+      title: LATEST_NAV_PNL_LABEL,
       dataIndex: 'dailyPnl',
       key: 'dailyPnl',
-      width: 140,
+      width: 150,
       align: 'right' as const,
       sorter: (a: typeof summaries[0], b: typeof summaries[0]) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
       render: (_v: number | null, record: typeof summaries[0]) => {
         if (record.dailyPnl === null) {
-          // 非交易日（周末 / 节假日 / 调休补班日）：该基金无当日 NAV 是正常的，
-          // 不要显示误导性的"净值更新中"——文案改成"今日休市"
-          // 调休补班日 A 股照常但 QDII 不发 NAV；按基金类型细分文案
-          if (isNonTradingDay(todayStr)) {
-            const tooltipText =
-              record.fund.type === 'qdii'
-                ? hasNonQdii
-                  ? '今日为非交易日：QDII 不发 NAV（A 股休市）'
-                  : '今日为非交易日：QDII 基金公司不发布 NAV'
-                : hasQdii
-                ? '今日为非交易日：A 股基金休市（QDII 同步不发 NAV）'
-                : '今日为非交易日：A 股基金休市';
-            return (
-              <Tooltip title={tooltipText}>
-                <div>
-                  <span style={{ color: '#999' }}>—</span>
-                  <div style={{ fontSize: 11, color: '#999' }}>今日休市</div>
-                </div>
-              </Tooltip>
-            );
-          }
-          // pnl 为 null：今日 NAV 未发布（QDII T+2 / 节假日 / 刷新失败）
           return (
-            <Tooltip title={record.currNavDate ? `最新 NAV ${record.currNavDate}` : '尚无净值'}>
-              <div>
-                <span style={{ color: '#999' }}>—</span>
-                <div style={{ fontSize: 11, color: '#999' }}>净值更新中</div>
-              </div>
+            <Tooltip title="该基金可用净值不足 2 期，暂时算不出涨跌">
+              <span style={{ color: '#999' }}>—</span>
             </Tooltip>
           );
         }
-        // 已发布：tooltip 明示 NAV 归属日（QDII 落后 A 股 2 个交易日时尤其重要）
+        // 净值日永远显示出来——这是本改造的核心：用户能看到 A 股是 09-14、QDII 是 09-11，
+        // 不需要 App 去猜哪只基金延迟几天。
         return (
-          <Tooltip title={`NAV ${record.currNavDate} vs ${record.prevNavDate}`}>
-            <span style={{ color: pnlColor(record.dailyPnl), fontWeight: 500 }}>{formatMoney(record.dailyPnl)}</span>
+          <Tooltip title={`净值 ${record.currNavDate} vs ${record.prevNavDate}`}>
+            <div>
+              <span style={{ color: pnlColor(record.dailyPnl), fontWeight: 500 }}>
+                {formatMoney(record.dailyPnl)}
+              </span>
+              <div style={{ fontSize: 11, color: '#999' }}>净值 {record.currNavDate.slice(5)}</div>
+            </div>
           </Tooltip>
         );
       },
@@ -336,21 +328,13 @@ export default function Dashboard() {
           >
             <Tooltip
               title={
-                isNonTradingDay(todayStr)
-                  ? hasQdii && hasNonQdii
-                    ? '今日为非交易日：A 股 / QDII 均休市，无当日盈亏'
-                    : hasQdii
-                    ? '今日为非交易日：QDII 基金公司不发布 NAV，无当日盈亏'
-                    : '今日为非交易日：A 股休市，无当日盈亏'
-                  : totals.isDailyPnlComplete
-                  ? '当日净值已全部发布'
-                  : totals.totalDailyPnl === null
-                  ? '今日尚无基金发布净值'
-                  : `${totals.dailyPnlUpdatedCount} 只基金今日 NAV 已发布，${totals.dailyPnlPendingCount} 只净值待发布（QDII 通常 T+2 延迟）`
+                totals.totalDailyPnl === null
+                  ? '尚无基金有可用净值对'
+                  : '各基金「最新已发布净值日」的盈亏合计。不同基金的净值日可能不同（A 股通常为今天，QDII 常落后 1 个交易日），卡片下方标出分布。'
               }
             >
               <div style={{ color: '#666', fontSize: 13, marginBottom: 8 }}>
-                ⚡ 当日盈亏{isNonTradingDay(todayStr) ? '（休市）' : ''}
+                ⚡ {LATEST_NAV_PNL_LABEL}{isNonTradingDay(todayStr) ? '（休市）' : ''}
               </div>
               <div
                 style={{
@@ -372,14 +356,17 @@ export default function Dashboard() {
                     : `${totals.totalDailyPnl >= 0 ? '+' : ''}¥${formatMoney(totals.totalDailyPnl)}`}
                 </span>
               </div>
-              {!isNonTradingDay(todayStr) && !totals.isDailyPnlComplete && totals.totalDailyPnl !== null && (
+              {(totals.coveredCount > 0 || isNonTradingDay(todayStr)) && (
                 <div style={{ fontSize: 12, color: '#999', marginTop: 8 }}>
-                  <Tag color="processing" style={{ marginRight: 4 }}>更新中</Tag>
-                  {totals.dailyPnlUpdatedCount} / {summaries.length} 只
+                  {isNonTradingDay(todayStr) && <span style={{ marginRight: 6 }}>下次开盘自动刷新</span>}
+                  {showStaleTag && (
+                    <Tag style={{ marginRight: 6 }}>净值待更新</Tag>
+                  )}
+                  {totals.navDateBuckets.length > 0 &&
+                    totals.navDateBuckets
+                      .map((b) => `净值日 ${b.date.slice(5)} ×${b.count} 只`)
+                      .join(' · ')}
                 </div>
-              )}
-              {isNonTradingDay(todayStr) && (
-                <div style={{ fontSize: 12, color: '#999', marginTop: 8 }}>下次开盘自动刷新</div>
               )}
             </Tooltip>
           </Card>

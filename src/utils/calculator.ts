@@ -1,5 +1,5 @@
 import type { Transaction, Fund, NavRecord, DcaPlan } from '../types';
-import { findPublishedNavPair } from './tradingDays';
+import { latestNavPair } from './navPair';
 import { lookupNavForDate } from './navLookup';
 import dayjs from 'dayjs';
 
@@ -115,44 +115,41 @@ export function calcDailyPnlBySegments(
 }
 
 /**
- * 计算单只基金的当日盈亏（按"发布日"对齐）
- * 返回 { pnl, currDate, prevDate, isReady }：
- *   - pnl = null：完全无 NAV 历史或不足 2 条
- *   - isReady = false：今日还没有"已发布的最新 NAV 对"（A 股白天 / QDII T+2 延迟 / 节假日 / 刷新失败）
- *     → UI 显示"— 净值更新中"
- *   - isReady = true：今日发布日已对齐，pnl = 按持仓时长拆分计算的当日盈亏
- *     - A 股：curr/prev 是今天 vs 昨天 NAV
- *     - QDII：curr/prev 是 QDII "今日发布"对应的那对 NAV（归属日落后 A 股 2 个交易日）
- *       例：今天 = 9/3，QDII 9/1 NAV 在 9/3 晚上发布 → pnl = 9/1 NAV − 8/29 NAV
+ * 计算单只基金"最新净值日"的盈亏。
  *
- * 口径：A 股与 QDII 行为完全对称，都是"等到发布 → 才有数字"，区别只在 QDII 的 NAV 归属日落后 2 个交易日。
- * 历史格归属（reportGenerator）按 navDate（即"准确日期"），与本函数解耦。
+ * 取该基金最新一对可用 NAV（curr = 最新已发布，prev = 前一期），算出
+ * `curr.nav − prev.nav` 对应的份额损益。**不对发布节奏做任何假设**——不判断基金类型、
+ * 不推算发布日，数字永远精确对应它自己的 NAV 归属日（由 currDate 返回，UI 负责展示）。
  *
- * sharesBefore（可选）：当日之前的累计份额。传入则按子时段拆分计算（避免买入日过度计入），
- * 不传则退化为 shares × Δnav（向后兼容 Dashboard 单基金显示场景）。
+ * 为什么不再按"发布日 === 今天"筛选：QDII 的披露延迟按基金 / 按市场浮动（普遍 1 个
+ * 交易日，法规上限 2 个交易日），任何写死的常数都会在部分基金上错位一天。实测 2026-09-14
+ * （周一）晚：全部 6 只 QDII 的最新 NAV 都归属 9/11，而 `+2 交易日` 模型预测 9/10 —— 都不符，
+ * 结果把广发纳指100 的 +0.857% 显示成 −1.089%（符号都反了）。
+ * 取"最新已发布的一对"则与渠道 App（支付宝 / 天天基金 / 蛋卷）口径一致。
+ *
+ * 返回 pnl = null 只表示"可用 NAV 不足 2 条"（新基金 / 净值未拉到），UI 显示 "—"。
  */
-export function calcDailyPnl(
-  shares: number,
-  navHistory: NavRecord[],
+export function calcLatestNavPnl(
   fund: Fund,
-  todayStr: string,
-  sharesBefore?: number
-): { pnl: number | null; currDate: string; prevDate: string; isReady: boolean } {
-  if (navHistory.length < 2) return { pnl: null, currDate: '', prevDate: '', isReady: false };
-  // 找 publishDate === todayStr 的最新 NAV 对（A 股 publishDate = navDate；QDII = navDate + 2 交易日）
-  const pair = findPublishedNavPair(fund, navHistory, (pd) => pd === todayStr);
-  if (!pair) return { pnl: null, currDate: '', prevDate: '', isReady: false };
-  const pnl = calcDailyPnlBySegments(
-    pair.prev.nav,
-    pair.curr.nav,
-    sharesBefore ?? shares,
-    shares
-  );
+  navHistory: NavRecord[],
+  fundTransactions: Transaction[]
+): { pnl: number | null; currDate: string; prevDate: string } {
+  const pair = latestNavPair(fund, navHistory);
+  if (!pair) return { pnl: null, currDate: '', prevDate: '' };
+
+  const shares = calcShares(fundTransactions);
+  // sharesBefore 必须锚在这一对 NAV 的日期上，而不是"今天"：
+  // 这一对 NAV 可能归属 3 天前，用今天的份额做拆分基准会把今天买入的份额错误地
+  // 摊进"上一个净值日 → 最新净值日"的涨跌里（多算半段）。
+  // 用 `< pair.curr.date` 而非 `<= pair.prev.date`：与改造前 A 股的行为完全一致
+  // （原实现是 `t.date < todayStr`，而 todayStr 就是 A 股的 curr NAV 日），
+  // 保证只改 QDII 口径、不动 A 股语义。
+  const sharesBefore = calcShares(fundTransactions.filter((t) => t.date < pair.curr.date));
+
   return {
-    pnl,
+    pnl: calcDailyPnlBySegments(pair.prev.nav, pair.curr.nav, sharesBefore, shares),
     currDate: pair.curr.date,
     prevDate: pair.prev.date,
-    isReady: true,
   };
 }
 
@@ -432,12 +429,17 @@ export function calcTodayInvested(
   return { txAmount, planAmount, total: txAmount + planAmount };
 }
 
-/** 计算基金汇总信息 */
+/**
+ * 计算基金汇总信息。
+ *
+ * 不再接收 `todayStr`：盈亏取的是"最新一对已发布 NAV"，与今天是哪天无关，
+ * 传入今天反而会诱导调用方以为这里有"今天"的口径。UI 若需要知道"今天是否非交易日"，
+ * 自己调 `isNonTradingDay()`。
+ */
 export function calcFundSummary(
   fund: Fund,
   transactions: Transaction[],
-  navHistory: NavRecord[],
-  todayStr: string
+  navHistory: NavRecord[]
 ) {
   const fundTransactions = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
   const shares = calcShares(fundTransactions);
@@ -445,10 +447,7 @@ export function calcFundSummary(
   const marketValue = calcMarketValue(shares, fund.currentNav);
   const totalReturn = calcReturn(marketValue, cost);
   const returnRate = calcReturnRate(totalReturn, cost);
-  // sharesBefore = 今日之前的累计份额（含昨日及之前确认的交易），
-  // 用于 calcDailyPnl 的子时段拆分——避免今日买入的 NAV 涨跌全归到新份额
-  const sharesBefore = calcShares(fundTransactions.filter((t) => t.date < todayStr));
-  const dailyPnlResult = calcDailyPnl(shares, navHistory, fund, todayStr, sharesBefore);
+  const latest = calcLatestNavPnl(fund, navHistory, fundTransactions);
   const xirr = calcXIRR(fundTransactions, marketValue);
   const dividend = calcDividendTotal(fundTransactions);
 
@@ -458,10 +457,9 @@ export function calcFundSummary(
     marketValue,
     totalReturn,
     returnRate,
-    dailyPnl: dailyPnlResult.pnl,
-    currNavDate: dailyPnlResult.currDate,
-    prevNavDate: dailyPnlResult.prevDate,
-    isDailyPnlToday: dailyPnlResult.isReady,
+    dailyPnl: latest.pnl,
+    currNavDate: latest.currDate,
+    prevNavDate: latest.prevDate,
     xirr,
     dividend,
   };

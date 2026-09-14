@@ -24,8 +24,10 @@ interface PeriodDetailRow {
   fundId: string;
   fundName: string;
   returnAmount: number;
-  /** 仅"今日"行可能为 true：该基金今日 NAV 未发布，显示"— 净值更新中" */
-  isPending?: boolean;
+  /** 该行收益对应的 NAV 归属日；'' = 无归属日（当天没有 NAV 变化） */
+  navDate?: string;
+  /** 仅"今日"行可能为 true：该基金可用 NAV 不足 2 期 */
+  noNav?: boolean;
 }
 
 interface PeriodDetailProps {
@@ -60,9 +62,14 @@ function PeriodDetail({ dateLabel, total, perFund }: PeriodDetailProps) {
             render: (_, r) => (
               <NavLink onClick={() => navigate(`/funds/${r.fundId}`)}>
                 {r.fundName}
-                {r.isPending && (
+                {r.noNav && (
                   <Tag color="default" style={{ marginLeft: 6, fontSize: 11 }}>
-                    净值更新中
+                    无净值数据
+                  </Tag>
+                )}
+                {!r.noNav && r.navDate && r.navDate !== dateLabel && (
+                  <Tag color="blue" style={{ marginLeft: 6, fontSize: 11 }}>
+                    净值 {r.navDate.slice(5)}
                   </Tag>
                 )}
               </NavLink>
@@ -74,7 +81,7 @@ function PeriodDetail({ dateLabel, total, perFund }: PeriodDetailProps) {
             key: 'returnAmount',
             align: 'right' as const,
             render: (v, r) =>
-              r.isPending ? (
+              r.noNav ? (
                 <span style={{ color: '#999' }}>—</span>
               ) : (
                 <span style={{ color: pnlColor(v) }}>{formatMoney(v)}</span>
@@ -212,7 +219,7 @@ function DayView({
           c.nonTrading
             ? `${c.key}：非交易日（A 股 / QDII 休市）`
             : c.pending
-            ? `${c.key}：净值更新中`
+            ? `${c.key}：净值待更新`
             : c.beforeHolding
             ? `${c.key}：建仓前（${firstTxDate} 起持有）`
             : c.future
@@ -224,13 +231,13 @@ function DayView({
       />
 
       {selected && (
-        // 仅当所有基金都 pending 时才显示整格 pending；只要有任一基金有数据，
-        // 就走明细面板（每个基金单独标 isPending，让 A 股能看到自己的涨跌）
-        selected.perFund.every((p) => p.isPending) ? (
+        // 仅当所有基金都没有可用 NAV 对时才显示整格提示；只要有任一基金有数据，
+        // 就走明细面板（每个基金单独标 noNav / 净值日，让 A 股能看到自己的涨跌）
+        selected.perFund.every((p) => p.noNav) ? (
           <div style={{ marginTop: 16, padding: 12, background: '#fafafa', borderRadius: 6, color: '#999', fontSize: 13 }}>
             {isNonTradingDay(selected.date)
-              ? `${selected.date}：今日休市（A 股 / QDII 休市）`
-              : `${selected.date}：净值更新中（QDII 通常 T+2 延迟，或当日 NAV 尚未发布）`}
+              ? `${selected.date}：休市`
+              : `${selected.date}：暂无可用的净值对，请在基金列表刷新净值`}
           </div>
         ) : (
           <PeriodDetail

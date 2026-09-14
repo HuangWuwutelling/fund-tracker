@@ -2,9 +2,8 @@ import { useMemo } from 'react';
 import { Card, Table, Tag, Empty, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { Platform, Fund } from '../types';
-import { FUND_TYPE_LABELS, FUND_TYPE_COLORS } from '../types';
-import { formatMoney, formatPercent, pnlColor, today as todayStr } from '../utils/formatter';
-import { isNonTradingDay } from '../utils/chineseHolidays';
+import { FUND_TYPE_LABELS, FUND_TYPE_COLORS, LATEST_NAV_PNL_LABEL } from '../types';
+import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
 
 /** 与 Dashboard.summaries 形状对齐（fund + calcFundSummary 输出） */
 export interface HoldingSummary {
@@ -14,8 +13,6 @@ export interface HoldingSummary {
   totalReturn: number;
   returnRate: number;
   dailyPnl: number | null;
-  /** true = 今日 pnl 数值可信（NAV 已发布），null 时 dailyPnl 必然为 null */
-  isDailyPnlToday: boolean;
   currNavDate: string;
   prevNavDate: string;
 }
@@ -32,10 +29,12 @@ interface GroupRow {
   marketValue: number;
   totalReturn: number;
   returnRate: number;
-  /** null = 该组所有成员今日 NAV 均未发布 */
+  /** null = 该组没有任何成员有可用 NAV 对 */
   dailyPnl: number | null;
-  dailyPnlUpdatedCount: number;
-  dailyPnlPendingCount: number;
+  /** 净值归属日 → 该日期的成员数，如 { '2026-09-14': 2, '2026-09-11': 1 } */
+  navDateCounts: Record<string, number>;
+  /** 可用净值不足 2 期的成员数 */
+  noNavCount: number;
 }
 
 interface HoldingsSummaryProps {
@@ -56,9 +55,6 @@ interface HoldingsSummaryProps {
  * - 不可点击行：聚合行无明确 drill-down 目标（跳到哪只基金？），保持只读
  */
 export default function HoldingsSummary({ summaries, platforms }: HoldingsSummaryProps) {
-  const today = todayStr();
-  const isNonTrading = isNonTradingDay(today);
-
   const rows: GroupRow[] = useMemo(() => {
     const map = new Map<string, GroupRow>();
     for (const s of summaries) {
@@ -80,20 +76,20 @@ export default function HoldingsSummary({ summaries, platforms }: HoldingsSummar
           totalReturn: 0,
           returnRate: 0,
           dailyPnl: null,
-          dailyPnlUpdatedCount: 0,
-          dailyPnlPendingCount: 0,
+          navDateCounts: {},
+          noNavCount: 0,
         };
         map.set(key, row);
       }
       row.fundCount += 1;
       row.cost += s.cost;
       row.marketValue += s.marketValue;
-      // dailyPnl 聚合：null-aware ——任何一个成员 null，整组保留 null 标签
-      if (s.isDailyPnlToday && s.dailyPnl !== null) {
+      // dailyPnl 聚合：null-aware —— 只有有可用 NAV 对的成员才贡献数字
+      if (s.dailyPnl !== null) {
         row.dailyPnl = (row.dailyPnl ?? 0) + s.dailyPnl;
-        row.dailyPnlUpdatedCount += 1;
+        row.navDateCounts[s.currNavDate] = (row.navDateCounts[s.currNavDate] ?? 0) + 1;
       } else {
-        row.dailyPnlPendingCount += 1;
+        row.noNavCount += 1;
       }
     }
 
@@ -189,51 +185,29 @@ export default function HoldingsSummary({ summaries, platforms }: HoldingsSummar
       ),
     },
     {
-      title: '当日盈亏',
+      title: LATEST_NAV_PNL_LABEL,
       key: 'dailyPnl',
-      width: 150,
+      width: 160,
       align: 'right',
       sorter: (a, b) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
       render: (_, r) => {
-        // 全员 pending
-        if (r.dailyPnlPendingCount === r.fundCount) {
-          if (isNonTrading) {
-            return (
-              <Tooltip title="今日为非交易日，无当日 NAV">
-                <div>
-                  <span style={{ color: '#999' }}>—</span>
-                  <div style={{ fontSize: 11, color: '#999' }}>今日休市</div>
-                </div>
-              </Tooltip>
-            );
-          }
+        if (r.dailyPnl === null) {
           return (
-            <Tooltip title="该分组下所有基金今日 NAV 均未发布">
-              <div>
-                <span style={{ color: '#999' }}>—</span>
-                <div style={{ fontSize: 11, color: '#999' }}>净值更新中</div>
-              </div>
+            <Tooltip title="该分组下所有基金的可用净值都不足 2 期">
+              <span style={{ color: '#999' }}>—</span>
             </Tooltip>
           );
         }
-        // 部分或全部已更新
-        const value = r.dailyPnl ?? 0;
-        const isPartial = r.dailyPnlPendingCount > 0;
+        const dates = Object.keys(r.navDateCounts).sort((a, b) => b.localeCompare(a));
         return (
           <Tooltip
-            title={
-              isPartial
-                ? `${r.dailyPnlUpdatedCount} 只已更新，${r.dailyPnlPendingCount} 只净值待发布`
-                : '当日 NAV 已全部发布'
-            }
+            title={`净值日 ${dates.map((d) => `${d} ×${r.navDateCounts[d]} 只`).join(' · ')}`}
           >
             <div>
-              <span style={{ color: pnlColor(value) }}>{formatMoney(value)}</span>
-              {isPartial && (
-                <div style={{ fontSize: 11, color: '#999' }}>
-                  已更新 {r.dailyPnlUpdatedCount}/{r.fundCount} 只
-                </div>
-              )}
+              <span style={{ color: pnlColor(r.dailyPnl) }}>{formatMoney(r.dailyPnl)}</span>
+              <div style={{ fontSize: 11, color: '#999' }}>
+                {dates.length === 1 ? `净值 ${dates[0]!.slice(5)}` : `净值日 ${dates.length} 个`}
+              </div>
             </div>
           </Tooltip>
         );

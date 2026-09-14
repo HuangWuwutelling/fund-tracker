@@ -11,11 +11,10 @@ import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { calcFundSummary, calcSharesFromAmount, calcShares, calcCost, onlyConfirmed } from '../utils/calculator';
-import { pnlColor, formatDate, formatMoney, formatPercent, today } from '../utils/formatter';
+import { pnlColor, formatDate, formatMoney, formatPercent } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
-import { isNonTradingDay } from '../utils/chineseHolidays';
 import InitialPositionModal from '../components/InitialPositionModal';
-import { FUND_TYPE_LABELS, FUND_TYPE_COLORS, TRANSACTION_TYPE_LABELS, TX_TYPE_COLORS, FREQUENCY_LABELS } from '../types';
+import { FUND_TYPE_LABELS, FUND_TYPE_COLORS, TRANSACTION_TYPE_LABELS, TX_TYPE_COLORS, FREQUENCY_LABELS, LATEST_NAV_PNL_LABEL } from '../types';
 import type { Transaction, DcaPlan, Fund } from '../types';
 
 echarts.use([
@@ -95,8 +94,8 @@ export default function FundDetail() {
   const summary = useMemo(
     () =>
       fund
-        ? calcFundSummary(fund, transactions, navHistory, today())
-        : { shares: 0, cost: 0, marketValue: 0, totalReturn: 0, returnRate: 0, dailyPnl: null, currNavDate: '', prevNavDate: '', isDailyPnlToday: false, xirr: 0, dividend: 0 },
+        ? calcFundSummary(fund, transactions, navHistory)
+        : { shares: 0, cost: 0, marketValue: 0, totalReturn: 0, returnRate: 0, dailyPnl: null, currNavDate: '', prevNavDate: '', xirr: 0, dividend: 0 },
     [fund, transactions, navHistory]
   );
   const fundTxs = useMemo(
@@ -487,28 +486,21 @@ export default function FundDetail() {
           <Card>
             <Tooltip
               title={
-                isNonTradingDay(today())
-                  ? fund.type === 'qdii'
-                  ? '今日为非交易日：QDII 基金公司不发布 NAV'
-                  : '今日为非交易日：A 股休市，无当日盈亏'
-                  : summary.dailyPnl === null
-                  ? summary.currNavDate
-                    ? `今日净值未发布（最新 ${summary.currNavDate}，QDII 通常 T+2 延迟）`
-                    : '尚无净值数据'
-                  : `NAV 归属日 ${summary.currNavDate}（vs ${summary.prevNavDate}）`
+                summary.dailyPnl === null
+                  ? '该基金可用净值不足 2 期，暂时算不出涨跌'
+                  : `净值 ${summary.currNavDate} vs ${summary.prevNavDate}`
               }
             >
               <Statistic
-                title="当日盈亏"
+                title={LATEST_NAV_PNL_LABEL}
                 value={summary.dailyPnl ?? '—'}
                 precision={2}
                 valueStyle={{ color: summary.dailyPnl !== null ? pnlColor(summary.dailyPnl) : undefined }}
               />
-              {summary.dailyPnl === null && isNonTradingDay(today()) && (
-                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>今日休市</div>
-              )}
-              {summary.dailyPnl === null && !isNonTradingDay(today()) && summary.currNavDate && (
-                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>净值更新中（最新 {summary.currNavDate}）</div>
+              {summary.dailyPnl !== null ? (
+                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>净值 {summary.currNavDate}</div>
+              ) : (
+                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>暂无净值数据</div>
               )}
             </Tooltip>
           </Card>

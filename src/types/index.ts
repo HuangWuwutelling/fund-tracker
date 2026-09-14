@@ -58,6 +58,13 @@ export interface Settings {
   dcaAutoRecord: boolean;
 }
 
+/**
+ * 「当日盈亏」的新名字。取的是每只基金**最新已发布净值日**的涨跌，
+ * 不同基金的这个日期可能不同（A 股通常为今天，QDII 常落后 1 个交易日），
+ * 所以标题必须带"净值日"三个字，不能再叫"当日"。
+ */
+export const LATEST_NAV_PNL_LABEL = '最新净值日盈亏';
+
 export const FUND_TYPE_LABELS: Record<Fund['type'], string> = {
   index: '指数型',
   bond: '债券型',
