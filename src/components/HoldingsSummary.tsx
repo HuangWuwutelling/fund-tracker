@@ -115,6 +115,7 @@ export default function HoldingsSummary({ summaries, platforms }: HoldingsSummar
     {
       title: '平台',
       key: 'platform',
+      dataIndex: 'platformName',
       width: 130,
       align: 'left',
       sorter: (a, b) => a.platformName.localeCompare(b.platformName, 'zh-CN'),
@@ -130,6 +131,7 @@ export default function HoldingsSummary({ summaries, platforms }: HoldingsSummar
     {
       title: '类型',
       key: 'type',
+      dataIndex: 'type',
       width: 90,
       align: 'left',
       sorter: (a, b) =>
@@ -139,6 +141,7 @@ export default function HoldingsSummary({ summaries, platforms }: HoldingsSummar
     {
       title: '基金只数',
       key: 'fundCount',
+      dataIndex: 'fundCount',
       width: 80,
       align: 'right',
       sorter: (a, b) => a.fundCount - b.fundCount,
@@ -147,6 +150,7 @@ export default function HoldingsSummary({ summaries, platforms }: HoldingsSummar
     {
       title: '持仓成本',
       key: 'cost',
+      dataIndex: 'cost',
       width: 130,
       align: 'right',
       sorter: (a, b) => a.cost - b.cost,
@@ -155,6 +159,7 @@ export default function HoldingsSummary({ summaries, platforms }: HoldingsSummar
     {
       title: '当前市值',
       key: 'marketValue',
+      dataIndex: 'marketValue',
       width: 130,
       align: 'right',
       defaultSortOrder: 'descend',
@@ -164,6 +169,7 @@ export default function HoldingsSummary({ summaries, platforms }: HoldingsSummar
     {
       title: '累计收益',
       key: 'totalReturn',
+      dataIndex: 'totalReturn',
       width: 130,
       align: 'right',
       sorter: (a, b) => a.totalReturn - b.totalReturn,
@@ -174,6 +180,7 @@ export default function HoldingsSummary({ summaries, platforms }: HoldingsSummar
     {
       title: '收益率',
       key: 'returnRate',
+      dataIndex: 'returnRate',
       width: 100,
       align: 'right',
       sorter: (a, b) => a.returnRate - b.returnRate,

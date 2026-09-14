@@ -268,8 +268,11 @@ export default function Dashboard() {
                     ? `当日盈亏（${today()}）`
                     : `当日盈亏（${today()}，部分更新）`
                 }
-                value={totals.totalDailyPnl ?? '—'}
+                value={totals.totalDailyPnl ?? 0}
                 precision={2}
+                formatter={(v) =>
+                  totals.totalDailyPnl === null ? '—' : Number(v).toFixed(2)
+                }
                 valueStyle={{
                   color: totals.totalDailyPnl !== null ? pnlColor(totals.totalDailyPnl) : undefined,
                 }}
