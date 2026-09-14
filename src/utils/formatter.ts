@@ -10,6 +10,9 @@ export function formatMoney(value: number, decimals = 2): string {
 
 /** 格式化百分比 */
 export function formatPercent(value: number, decimals = 2): string {
+  // 防御：非 number（null/undefined/string/object）会触发 value.toFixed is not a function，
+  // 整页崩溃。命中时退化为 '—'，与 Statistic 等组件的 null 处理口径一致。
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
   return `${value >= 0 ? '+' : ''}${value.toFixed(decimals)}%`;
 }
 

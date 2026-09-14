@@ -63,6 +63,11 @@ export function calcCost(transactions: Transaction[]): number {
 
 /** 计算当前市值 */
 export function calcMarketValue(shares: number, currentNav: number): number {
+  // 防御：刚 addFund 还未拉到 NAV 时 currentNav === undefined，
+  // shares * undefined = NaN 会传染给整页 totalValue / calendar / snapshot。
+  // 命中时按 0 计（市值待刷新），与"暂无净值"UI 口径一致。
+  if (typeof currentNav !== 'number' || !Number.isFinite(currentNav)) return 0;
+  if (typeof shares !== 'number' || !Number.isFinite(shares)) return 0;
   return shares * currentNav;
 }
 
@@ -184,7 +189,8 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
     let amount = 0;
     if (tx.type === 'buy') amount = -tx.amount; // fee 内扣：用户总付出就是 amount
     else if (tx.type === 'sell') amount = tx.amount - tx.fee;
-    else if (tx.type === 'dividend') amount = Math.max(tx.amount, tx.shares); // 兼容现金分红(amount=0, shares=现金) 和红利再投资(amount=金额)
+    // 分红：与 calcDividendTotal 对齐——amount=0 时用 shares × nav 折算红利再投资
+    else if (tx.type === 'dividend') amount = Math.max(tx.amount, tx.shares * tx.nav);
     if (amount !== 0) {
       flows.push({ t: new Date(tx.date).getTime(), amount });
     }

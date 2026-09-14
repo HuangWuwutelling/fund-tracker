@@ -317,14 +317,15 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     navHistoryCache.clear();
     storage.importAllData(data);
     // 缺字段时 fallback 到默认值，避免整个 app 崩溃成空白页；
+    // 手编 JSON / 旧备份可能缺 platforms|funds|transactions|dcaPlans|navs 之一。
     // settings 用默认值打底再覆盖导入值，兼容缺新字段（如 dcaAutoRecord）的老备份
     // （运行时备份可能缺失部分字段，故以 Partial 展开，避免 TS2783）
     const settings: Settings = { ...storage.DEFAULT_SETTINGS, ...(data.settings as Partial<Settings>) };
     set({
-      platforms: data.platforms,
-      funds: data.funds,
-      transactions: data.transactions,
-      dcaPlans: data.dcaPlans,
+      platforms: data.platforms ?? [],
+      funds: data.funds ?? [],
+      transactions: data.transactions ?? [],
+      dcaPlans: data.dcaPlans ?? [],
       snapshots: data.snapshots ?? [],
       settings,
     });
