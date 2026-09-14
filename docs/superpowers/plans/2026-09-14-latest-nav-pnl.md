@@ -647,7 +647,7 @@ import { v4 as uuid } from 'uuid';
 - [ ] **Step 4: 确认既有测试仍通过 + 类型检查**
 
 Run: `npm run test && npm run build`
-Expected: `14 passed (14)`；构建成功（此时 UI 还没改，`calcFundSummary` 签名未变，所以构建应通过）。
+Expected: `16 passed (16)`；构建成功（此时 UI 还没改，`calcFundSummary` 签名未变，所以构建应通过）。
 
 - [ ] **Step 5: Commit**
 
@@ -993,7 +993,7 @@ export interface DailyReturn {
 - [ ] **Step 10: 跑测试确认没打坏纯函数**
 
 Run: `npm run test`
-Expected: PASS —— `14 passed (14)`（本任务不新增测试；两个新模块的测试已覆盖取数逻辑）。
+Expected: PASS —— `16 passed (16)`（本任务不新增测试；两个新模块的测试已覆盖取数逻辑）。
 
 - [ ] **Step 11: 确认 UI 调用点是唯一剩余报错**
 
@@ -1217,7 +1217,7 @@ Run: `npx tsc -b`
 
 （`tsconfig.app.json` 已设 `noEmit: true`，`tsc -b` 只做类型检查、不产出文件。）
 
-Expected: `Dashboard.tsx` **不报错**。第 7 行的 `today` 仍被 `todayStr = today()`（第 30 行）使用，第 8 行的 `isNonTradingDay` 仍被 Step 5 的卡片文案与 `showStaleTag` 使用 —— **两处 import 都保留，不要删**。只剩 `FundDetail.tsx` / `HoldingsSummary.tsx` / `ReturnCalendar.tsx` 的报错（由本任务后续步骤修）。
+Expected: `Dashboard.tsx` **不报错**。第 7 行的 `today` 仍被 `todayStr = today()`（第 30 行）使用，第 8 行的 `isNonTradingDay` 仍被 Step 16 的卡片文案与 `showStaleTag` 使用 —— **两处 import 都保留，不要删**。只剩 `FundDetail.tsx` / `HoldingsSummary.tsx` / `ReturnCalendar.tsx` 的报错（由本任务后续步骤修）。
 
 - [ ] **Step 18: FundDetail**
 
@@ -1462,7 +1462,7 @@ Expected: PASS。若报某个 import 未使用（`noUnusedLocals`），按报错
 - [ ] **Step 23: 跑全量测试**
 
 Run: `npm run test`
-Expected: PASS —— `14 passed (14)`。
+Expected: PASS —— `16 passed (16)`。
 
 - [ ] **Step 24: Commit（计算层 + UI 一个提交，构建必须是绿的）**
 
@@ -1553,7 +1553,7 @@ git rm src/utils/tradingDays.ts
 - [ ] **Step 5: 构建 + 测试**
 
 Run: `npm run test && npm run build`
-Expected: `14 passed (14)`；构建成功。
+Expected: `16 passed (16)`；构建成功。
 
 - [ ] **Step 6: 手工验收（dev server）**
 
