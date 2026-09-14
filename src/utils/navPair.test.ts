@@ -36,6 +36,15 @@ describe('usableNavSeries', () => {
     ]);
     expect(out.map((r) => r.date)).toEqual(['2026-09-04', '2026-09-07', '2026-09-08']);
   });
+
+  it('美股跟踪 QDII 剔除周末记录（调休补班周末同样不发 NAV）', () => {
+    const out = usableNavSeries(fund('广发纳斯达克100ETF联接(QDII)A'), [
+      nav('2026-09-11', 8.1177),
+      nav('2026-09-12', 8.1177),
+      nav('2026-09-13', 8.1177),
+    ]);
+    expect(out.map((r) => r.date)).toEqual(['2026-09-11']);
+  });
 });
 
 describe('latestNavPair', () => {
@@ -45,6 +54,17 @@ describe('latestNavPair', () => {
       nav('2026-09-07', 8.1747),
       nav('2026-09-10', 8.0487),
       nav('2026-09-11', 8.1177),
+    ]);
+    expect(pair?.curr.date).toBe('2026-09-11');
+    expect(pair?.prev.date).toBe('2026-09-10');
+  });
+
+  it('被过滤的记录落在尾部时，最新一对取过滤后的相邻两条', () => {
+    // 9/12 是周六，会被 isUsHoliday 判为非交易日而剔除
+    const pair = latestNavPair(fund('广发纳斯达克100ETF联接(QDII)A'), [
+      nav('2026-09-10', 8.0487),
+      nav('2026-09-11', 8.1177),
+      nav('2026-09-12', 8.1177),
     ]);
     expect(pair?.curr.date).toBe('2026-09-11');
     expect(pair?.prev.date).toBe('2026-09-10');
