@@ -8,7 +8,6 @@ import { today } from '../utils/formatter';
 import { isNonTradingDay } from '../utils/chineseHolidays';
 import ReturnCalendar from '../components/ReturnCalendar';
 import HoldingsSummary from '../components/HoldingsSummary';
-import PortfolioTrendChart from '../components/PortfolioTrendChart';
 import {
   formatMoney,
   formatPercent,
@@ -416,9 +415,6 @@ export default function Dashboard() {
           </Card>
         </Col>
       </Row>
-
-      {/* ===== 组合走势图 ===== */}
-      <PortfolioTrendChart />
 
       {/* ===== 收益日历 ===== */}
       <div style={{ marginTop: 16 }}>
