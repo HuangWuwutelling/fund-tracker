@@ -51,7 +51,8 @@ interface HoldingsSummaryProps {
  * - 完全清仓分组（cost=0 & mv=0）跳过——无信息量，避免视图噪声
  * - 最新净值日盈亏用 null-aware 求和（与 Dashboard Statistic 卡同款口径）：
  *   - 全 null → 显示 "—"
- *   - 部分成员有数据 → 显示这些成员的合计，并把各自的净值日列在下方
+ *   - 部分成员有数据 → 显示这些成员的合计；单个净值日时下方补 `净值 MM-DD`，
+ *     多个时补 `净值日 N 个`，完整分桶在 tooltip 里
  * - 不可点击行：聚合行无明确 drill-down 目标（跳到哪只基金？），保持只读
  */
 export default function HoldingsSummary({ summaries, platforms }: HoldingsSummaryProps) {

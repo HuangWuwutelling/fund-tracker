@@ -129,8 +129,8 @@ interface Attribution {
  *   - 最新净值日盈亏：取该基金最新一对已发布 NAV（见 utils/navPair.ts），
  *     用 NAV 自己的日期标注，不假设任何发布延迟
  *
- * QDII 历史格的"是否显示"由 generateDailyReturns 内层 publishDate(curr.date) ≤ snap.date
- * 判定（发布前显示 pending，发布后才计入）。
+ * 历史格与 A 股同口径：只看该归属日在 attributionMap 里有没有 attr，
+ * 有就用、没有则该基金当天涨跌为 0。**不判定发布日**，历史格没有 pending 态。
  *
  * 返回嵌套 Map<归属日, Map<fundId, Attribution>>，按 fundId O(1) 查找，
  * 替代之前的 Map<date, Attribution[]> + 内层 .find()（O(M) 每格）。
@@ -221,9 +221,8 @@ function getSharesAsOf(
  *
  * **今天格 vs 历史格的算法分叉**：
  * - **历史格**：用 attribution map（每只基金的相邻 NAV 对 (prev → curr) 按 navDate
- *   归属——与 A 股同口径，QDII 9/1 NAV 涨跌归到 9/1 这一天）。"是否已发布"由
- *   publishDate(curr.date) ≤ snap.date 判定，未发布则该基金标 pending（避免"未发布
- *   数据提前泄露"）。
+ *   归属——与 A 股同口径，QDII 9/1 NAV 涨跌归到 9/1 这一天）。只看该归属日有没有
+ *   attr，不判定发布日，历史格没有 pending 态（只有今天格可能标 isPending）。
  * - **今天格**：**完全旁路 attribution map，直接取每只基金最新一对已发布 NAV**
  *   （`calcLatestNavPnl`）。这确保 Calendar 今日格 ≡ Dashboard 顶部卡片（共用同一份
  *   "最新已发布 NAV 对"），解决之前几个修复 commit 反复踩的"两边口径漂移"问题。

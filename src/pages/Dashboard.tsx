@@ -25,7 +25,8 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const isDark = settings.theme === 'dark';
 
-  // todayStr 只用于 today 格高亮。它**不在** summaries 的 deps 里——
+  // todayStr 用于 ⚡ 卡片的休市态与「下次开盘自动刷新」提示（日历的 today 高亮
+  // 由 ReturnCalendar 自己算）。它**不在** summaries 的 deps 里——
   // summaries 只依赖 funds / transactions / navHistory，与"跨日"无关。
   const todayStr = today();
   const summaries = useMemo(() => {
