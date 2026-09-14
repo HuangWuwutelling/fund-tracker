@@ -1493,19 +1493,36 @@ UI：
 
 **Files:**
 - Delete: `src/utils/tradingDays.ts`
-- Modify: `src/utils/chineseHolidays.ts:73-82`
+- Modify: `src/utils/chineseHolidays.ts`（第 14-20、23-28、73-82、89-91 行）
 - Modify: `src/utils/usHolidays.ts:60-63`
+- Modify: `src/utils/reportGenerator.ts:127-131`、`src/utils/reportGenerator.ts:286`、`src/utils/reportGenerator.ts:292`
+- Modify: `src/pages/Dashboard.tsx:27-29`
+- Modify: `src/components/HoldingsSummary.tsx:49-55`
+- Modify: `src/components/Layout.tsx:157`
 
 **Interfaces:**
 - Consumes: 无
 - Produces: 无（收尾任务）
 
-- [ ] **Step 1: 确认没有残留引用**
+- [ ] **Step 1: 确认 `tradingDays.ts` 是死代码**
+
+Run: `rg -n "from '.*tradingDays'" src`
+Expected: `exit=1`、无输出——**没有任何文件 import 它**。这是删除前的唯一硬门槛。
+
+若这个命令有输出，**停下**，把引用点报回控制器，不要删。
+
+然后再跑一次完整符号扫描，确认残留只来自"即将被删的文件"与"即将被 Step 3 改掉的注释"：
 
 Run: `rg -n "tradingDays|addTradingDays|getPublishDate|findPublishedNavPair|calcDailyPnl\b|isDailyPnlToday" src`
-Expected: 无输出（`calcDailyPnlBySegments` 不算，它名字里有 `calcDailyPnl` 前缀但匹配词边界 `\b` 后不成立 —— 若 `rg` 仍列出 `calcDailyPnlBySegments`，说明用词边界没生效，改成 `"calcDailyPnl\("` 再跑）。
+Expected: 命中**只**出现在两处——
+- `src/utils/tradingDays.ts` 自身（Step 2 会删掉整个文件）
+- `src/utils/chineseHolidays.ts:81` 的注释里提到 `` `addTradingDays` ``（Step 3(d) 会重写这一段）
 
-若仍有引用，**停下**，说明任务 5/6 漏改了，回到对应任务补。
+除这两处之外的任何命中都说明 Task 5 漏改了，**停下**报回控制器。
+
+> 注意本步**不是**"命令应无输出"——在 Step 2/3 完成前，上面那两处命中本来就该存在。真正要求"彻底无输出"的是 Step 3 末尾的复跑。
+>
+> （`calcDailyPnlBySegments` 不算：词边界 `\b` 之后是 `B`（单词字符），故不匹配。若 `rg` 仍列出它，说明词边界没生效，改用 `"calcDailyPnl\("`。）
 
 - [ ] **Step 2: 删除文件**
 
@@ -1513,9 +1530,57 @@ Expected: 无输出（`calcDailyPnlBySegments` 不算，它名字里有 `calcDai
 git rm src/utils/tradingDays.ts
 ```
 
-- [ ] **Step 3: 更新 `chineseHolidays.ts` 的过期论证**
+- [ ] **Step 3: 清理 `chineseHolidays.ts` 的四处过期内容**
 
-把 `src/utils/chineseHolidays.ts` 第 73-82 行（`isNonTradingDay` 的 JSDoc）替换为：
+这个文件里有 4 处需要改。**逐处按下面的 before / after 替换，不要顺手改 `isNonTradingDay` 的判定逻辑**（本计划 Global Constraints 明确不修改调休补班的判定行为，只改注释）。
+
+**(a) 删掉第 23-28 行整块悬空 JSDoc：**
+
+```ts
+/**
+ * 调休补班周末历史数据（自 2026-09 起视为「非交易日」，QDII 不发 NAV）：
+ * - 2025: 1/26, 2/8, 4/27, 9/28, 10/11
+ * - 2026: 1/4, 2/14, 2/28, 5/9, 9/20, 10/10
+ * 详见 isNonTradingDay 注释。
+ */
+```
+
+整块**删除**（连同前后空行，保持第 22 行的 `*/` 与第 30 行的 `/**` 之间恰好一个空行）。理由：它描述的数据结构 `TRANSFER_WORKDAYS` **在这个文件里根本不存在**——全文只有 `WEEKDAY_HOLIDAYS_2025` / `WEEKDAY_HOLIDAYS_2026` / `WEEKDAY_HOLIDAYS_BY_YEAR`，而 `isNonTradingDay` 只按周末判定。留着它就是留一份指向不存在之物的注释。
+
+**(b) 第 14-16 行**，把：
+
+```
+ * - 调休补班的周末（A 股照常开市）也视为非交易日——
+ *   A 股虽然交易，但 QDII 基金公司当天不发布 NAV（参考 2025-10-11、2026-09-20 实测），
+ *   统一按非交易日处理可以让日历格子、T+2 发布日推算与 QDII 实际节奏一致
+```
+
+改为：
+
+```
+ * - 调休补班的周末（A 股照常开市）也视为非交易日——
+ *   A 股虽然交易，但 QDII 基金公司当天不发布 NAV（参考 2025-10-11），
+ *   统一按非交易日处理可让日历格子的休市着色与 QDII 实际节奏一致
+```
+
+两处改动：删掉 `T+2 发布日推算`（该推算已随 `tradingDays.ts` 一并删除）；删掉 `2026-09-20 实测` 这个引用——该日期在写这份计划时（2026-09-14）**尚未到来**，"实测" 无法成立，`2025-10-11` 是已发生的真实日期，足以支撑同一事实。
+
+**(c) 第 19-20 行**，把：
+
+```
+ * 超过 2026 年的数据暂未公布——isNonTradingDay 对未知年份退化为「仅按周末判定」，
+ * 届时需补全年数据后 QDII 跨节假日的归属才能精确到实际发布日。
+```
+
+改为：
+
+```
+ * 超过 2026 年的数据暂未公布——isNonTradingDay 对未知年份退化为「仅按周末判定」。
+```
+
+（尾句仍在讲"精确到实际发布日"，那是已被删除的发布日推算概念。）
+
+**(d) 第 73-82 行（`isNonTradingDay` 的 JSDoc）** 整块替换为：
 
 ```ts
 /**
@@ -1525,14 +1590,40 @@ git rm src/utils/tradingDays.ts
  * - 未收录年份：退化为「仅按周末判定」——与未引入本工具前一致
  *
  * 已知不准确之处（**故意保留**）：调休补班日（周六 / 周日上班，A 股照常开市）
- * 这里也返回 true。原因：本表没有实现 TRANSFER_WORKDAYS（补班日）数据，
- * 只靠周末判定必然把补班日误判为休市。
+ * 这里也返回 true。本文件只收录了「工作日法定节假日」（WEEKDAY_HOLIDAYS_*），
+ * 没有补班日表，只靠周末判定必然把补班日算作休市。
  *
- * 影响范围被刻意限制在"日历格子的休市着色"，**不影响盈亏数字**：
- * 盈亏取的是每只基金最新一对已发布 NAV（见 utils/navPair.ts），与交易日无关。
- * 修这个需要先补一份准确的补班日表，属于独立任务。
+ * 注意：**不要**简单地把补班日改成交易日来"修"这个问题。
+ * QDII 基金公司在调休补班日同样不发布 NAV（参考 2025-10-11），
+ * 所以对 QDII 而言「非交易日」恰恰是符合其实际发布节奏的口径。
+ * 真要精确，需要把「A 股日历着色」与「QDII 是否看得到新 NAV」拆成两个独立口径，
+ * 属于独立任务。
+ *
+ * 当前影响范围被刻意限制在"日历格子的休市着色"，**不影响盈亏数字**：
+ * 盈亏取的是每只基金最新一对已发布 NAV（见 utils/navPair.ts），与交易日判定无关。
  */
 ```
+
+**(e) 第 89-91 行**（函数体开头的行内注释），把：
+
+```ts
+  // 周末（含调休补班周末）→ 非交易日
+  // 调休补班日 A 股开市但 QDII 不发 NAV；统一视为非交易日可让日历格子、T+2 推算对齐 QDII 实际节奏
+  if (isWeekend) return true;
+```
+
+改为：
+
+```ts
+  // 周末（含调休补班周末）→ 非交易日
+  // 调休补班日 A 股开市但 QDII 不发 NAV；统一视为非交易日的完整理由见上方 JSDoc
+  if (isWeekend) return true;
+```
+
+**改完自检**：`rg -n "TRANSFER_WORKDAYS|T\+2" src/utils/chineseHolidays.ts` 应无输出；`rg -n "2026-09-20" src` 也应无输出。
+
+现在再跑一次 Step 1 的完整符号扫描：`rg -n "tradingDays|addTradingDays|getPublishDate|findPublishedNavPair|calcDailyPnl\b|isDailyPnlToday" src`
+Expected: **彻底无输出**（Step 1 允许存在的两处命中至此都已消失）。有输出就说明有漏改。
 
 - [ ] **Step 4: 更新 `usHolidays.ts` 的过期注释**
 
@@ -1550,29 +1641,134 @@ git rm src/utils/tradingDays.ts
 
 （该文件顶部关于 `isUsTrackedQdii` 关键词启发式的说明保留不动。）
 
-- [ ] **Step 5: 构建 + 测试**
+- [ ] **Step 5: 清理另外 4 处与新语义相邻的过期注释**
+
+这 4 处都在 Task 5 改过的文件里，讲的还是旧语义。逐处替换。
+
+**(a) `src/utils/reportGenerator.ts:127-131`**，把：
+
+```
+ * 注意：「历史格归属日 = navDate」与 Dashboard 顶部「当日盈亏判定 = publishDate」
+ * 是两个不同的概念：
+ *   - 历史格：用户回看某天（9/1），QDII 用 9/1 真实 NAV − 8/29 NAV
+ *   - 当日格：用户看今天（9/3），QDII 用最新已发布的 NAV 对（即 9/1 vs 8/29，标 T+2 延迟）
+```
+
+改为：
+
+```
+ * 注意：「历史格归属日 = navDate」与 Dashboard 顶部「最新净值日盈亏」是两个不同的概念：
+ *   - 历史格：用户回看某天（9/1），QDII 用 9/1 真实 NAV − 8/29 NAV
+ *   - 最新净值日盈亏：取该基金最新一对已发布 NAV（见 utils/navPair.ts），
+ *     用 NAV 自己的日期标注，不假设任何发布延迟
+```
+
+**(b) `src/utils/reportGenerator.ts:286`**，把：
+
+```
+  // - QDII 9/1 NAV 涨跌归到 9/1，T+2 发布前的归属日（publishDate > snap.date）标 isPending=true
+```
+
+改为：
+
+```
+  // - QDII 9/1 NAV 涨跌归到 9/1（与 A 股完全对称，不按 publishDate 判 isPending）
+```
+
+（原句描述的 `publishDate > snap.date` 判定已被删除，且与紧邻的 `:292` 自相矛盾。）
+
+**(c) `src/utils/reportGenerator.ts:292`**，把：
+
+```
+  // 不判定 publishDate（QDII T+2 延迟由今天格处理，参见下方"今天格"分支）。
+```
+
+改为：
+
+```
+  // 不判定 publishDate；今天格取的是最新一对已发布 NAV（见下方"今天格"分支）。
+```
+
+**(d) `src/pages/Dashboard.tsx:28-29`**，把：
+
+```
+  // todayStr 提到组件层，让 useMemo deps 能感知"跨日"——深夜跨过午夜时下一次渲染
+  // 会自动重算 today 格（避免 today 高亮 / 当日盈亏判定卡在前一天）。
+```
+
+改为：
+
+```
+  // todayStr 只用于 today 格高亮。它**不在** summaries 的 deps 里——
+  // summaries 只依赖 funds / transactions / navHistory，与"跨日"无关。
+```
+
+（`summaries` 的 deps 实为 `[funds, transactions, getNavHistory]`，已不含 `todayStr`，原注释描述的行为不存在。）
+
+**(e) `src/components/HoldingsSummary.tsx:52-54`**，把：
+
+```
+ * - 当日盈亏用 null-aware 求和（与 Dashboard Statistic 卡同款口径）：
+ *   - 全 null → 显示 "—"
+ *   - 部分 null → 显示已更新成员的合计，下方小字 "已更新 X/Y 只"
+```
+
+改为：
+
+```
+ * - 最新净值日盈亏用 null-aware 求和（与 Dashboard Statistic 卡同款口径）：
+ *   - 全 null → 显示 "—"
+ *   - 部分成员有数据 → 显示这些成员的合计，并把各自的净值日列在下方
+```
+
+（「已更新 X/Y 只」的小字已被 Task 5 删除，实际渲染的是 `navDateCounts` 的净值日分桶。）
+
+**(f) `src/components/Layout.tsx:157`**（"关于"弹窗里用户可见的功能描述），把：
+
+```
+          做收益分析（总收益、当日盈亏、年化 XIRR、累计分红）和定投管理（多频率执行追踪 + 周报月报）。
+```
+
+改为：
+
+```
+          做收益分析（总收益、最新净值日盈亏、年化 XIRR、累计分红）和定投管理（多频率执行追踪 + 周报月报）。
+```
+
+**不要**动这些 T+1 / T+2 提及——它们讲的是另一件事（待确认交易的净值还没出、刷新时刻窗口），与本次改造无关，属于正确保留：
+
+- `FundDetail.tsx:327`、`FundDetail.tsx:728`、`Transactions.tsx:170`、`Transactions.tsx:464`、`Dashboard.tsx:228`、`App.tsx:59`、`App.tsx:72` —— 交易确认口径
+- `App.tsx:189` —— 定时刷新窗口说明；`Layout.tsx:134`、`Layout.tsx:180` —— "数据为 T+1" 免责声明
+
+- [ ] **Step 6: 构建 + 测试**
 
 Run: `npm run test && npm run build`
-Expected: `16 passed (16)`；构建成功。
+Expected: `18 passed (18)`（Task 5 的修复新增 2 条 `calcLatestNavPnl` 用例，故为 18 而非 16）；构建成功。
 
-- [ ] **Step 6: 手工验收（dev server）**
+若测试文件目录里还有临时的 `_tmp-*.test.ts` 草稿文件，先删掉再跑——`include: ['src/**/*.test.ts']` 会把它们一并计入。
+
+- [ ] **Step 7: 手工验收（dev server）**
 
 Run: `npm run dev`，按下面的清单逐项确认。开着 devtools 的 Network 面板确认 `pingzhongdata` 请求成功。
+
+> 这一节**必须由人在浏览器里完成**，不能由 agent 代签。若无法执行，把清单原样交回给用户，不要标记为通过。
 
 - [ ] **QA-1** Dashboard 持仓表「最新净值日盈亏」列：QDII 行下方小字显示 `净值 09-11`（写本计划时的真实值；实际按当天最新已发布 NAV 日），且数字为正（`+0.857%` 对应广发纳指100 若 NAV 仍是 8.0487 → 8.1177）。A 股基金显示 `净值 <今天或最近交易日>`。
 - [ ] **QA-2** 同一列 A 股与 QDII 的净值日**不同**，且各自与天天基金 / 支付宝上该基金的"最新净值日期"一致。这是本改造的核心验收点。
 - [ ] **QA-3** 顶部 ⚡ 卡片标题为「最新净值日盈亏」，数字下方小字形如 `净值日 09-14 ×3 只 · 净值日 09-11 ×2 只`，分桶计数之和等于持仓基金总数减去 `—` 的行数。
 - [ ] **QA-4** 收益日历「日」Tab 点今天格：明细表中 QDII 行带蓝色 `净值 09-11` 标签，A 股行不带标签（因为 `navDate === dateLabel`）；该格合计与 QA-3 的卡片数字**完全相等**。
 - [ ] **QA-5** 切到周末（月视图里找上周六）：格子显示"休市"，不出现"净值更新中"，且昨天之前的正常交易日格子数字与改造前一致（历史格算法未变，这是回归检查）。
-- [ ] **QA-6** 持仓汇总表最后一列标题为「最新净值日盈亏」；某分组内混合了 A 股与 QDII 时，小数行显示 `净值日 2 个`，hover tooltip 列出两个日期与各只数。
+- [ ] **QA-6** 持仓汇总表最后一列标题为「最新净值日盈亏」；某分组内混合了 A 股与 QDII 时，小数行显示各净值日，hover tooltip 列出 `净值日 <日期> ×N 只`。
 - [ ] **QA-7** 基金详情页「最新净值日盈亏」卡片下方显示 `净值 2026-09-XX`，tooltip 为 `净值 X vs Y`，**不出现任何 T+2 字样**。
-- [ ] **QA-8** 全仓库搜索 `rg -n "T\+2|T\+1" src` 应只在 `navPair.ts` / `navFreshness.ts` / `calculator.ts` 的解释性注释里出现，不在任何 UI 字符串里。
+- [ ] **QA-8** 跑 `rg -n "T\+2|T\+1" src`，剩余命中**必须全部**落在 Step 5 末尾列出的那两组"正确保留"清单里。特别确认 `chineseHolidays.ts` / `usHolidays.ts` / `reportGenerator.ts` / `tradingDays.ts` 已完全不出现——即"QDII 当日盈亏按 T+2 推算发布日"这套说法在整个仓库里消失。
 
-- [ ] **Step 7: Commit**
+> QA-8 的旧版本写的是「只应出现在 `navPair.ts` / `navFreshness.ts` / `calculator.ts` 的注释里」——那个预期与仓库实际不符（这三个文件的注释里本来就没有 T+2，而上面两组正确保留的命中一直都在），照它执行必然误判。以本版为准。
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/utils/chineseHolidays.ts src/utils/usHolidays.ts
-git commit -m "refactor(utils): 删除 tradingDays，清理过期的 T+2 注释"
+git add src/utils/chineseHolidays.ts src/utils/usHolidays.ts src/utils/reportGenerator.ts src/pages/Dashboard.tsx src/components/HoldingsSummary.tsx src/components/Layout.tsx
+git commit -m "refactor(utils,ui): 删除 tradingDays，清理过期的 T+2 注释与「当日盈亏」旧称"
 ```
 
 ---
@@ -1592,8 +1788,8 @@ git commit -m "refactor(utils): 删除 tradingDays，清理过期的 T+2 注释"
 | Dashboard 卡片按净值日分桶 | Task 5 Step 14/16 |
 | 美股节假日复制 NAV 过滤下沉为共享规则 | Task 2（`usableNavSeries`）+ Task 5 Step 5 |
 | 日历今日格 ≡ Dashboard 卡片（口径不漂移） | Task 5 Step 8（`txsByFund` + 同一个 `calcLatestNavPnl`） |
-| 更新过期 T+2 注释 | Task 6 Step 3/4 |
-| **Non-goal：** `isNonTradingDay` 的调休补班误判 | 不修，Task 6 Step 3 把理由写进代码注释 |
+| 更新过期 T+2 注释 | Task 6 Step 3/4/5 |
+| **Non-goal：** `isNonTradingDay` 的调休补班误判 | 不修，Task 6 Step 3(d) 把理由写进代码注释 |
 | **Non-goal：** 货币基金（无 `Data_netWorthTrend`） | 不涉及 |
 
 **2. Placeholder scan**
