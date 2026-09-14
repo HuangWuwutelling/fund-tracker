@@ -154,7 +154,7 @@ export default function AppLayout() {
         <Title level={4} style={{ marginTop: 0 }}>基金投资记录</Title>
         <Paragraph>
           这是一个<strong>个人向</strong>的基金投资跟踪工具，把分散在多个直销平台（南方基金、摩根、广发基金等）的持仓聚合到一处，
-          做收益分析（总收益、当日盈亏、年化 XIRR、累计分红）和定投管理（多频率执行追踪 + 周报月报）。
+          做收益分析（总收益、最新净值日盈亏、年化 XIRR、累计分红）和定投管理（多频率执行追踪 + 周报月报）。
         </Paragraph>
 
         <Title level={5}>技术栈</Title>

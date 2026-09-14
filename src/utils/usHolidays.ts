@@ -59,7 +59,7 @@ const WEEKDAY_HOLIDAYS_BY_YEAR = new Map<number, Set<string>>([
  * - 未收录年份：退化为「仅按周末判定」——与未引入本工具前一致
  *
  * 仅供 QDII attribution map 构建使用；
- * A 股 / QDII T+2 发布日等其他场景仍走 chineseHolidays。
+ * A 股 / QDII 的"休市日"判定等其他场景仍走 chineseHolidays。
  */
 export function isUsHoliday(date: string): boolean {
   const year = parseInt(date.slice(0, 4), 10);

@@ -25,8 +25,8 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const isDark = settings.theme === 'dark';
 
-  // todayStr 提到组件层，让 useMemo deps 能感知"跨日"——深夜跨过午夜时下一次渲染
-  // 会自动重算 today 格（避免 today 高亮 / 当日盈亏判定卡在前一天）。
+  // todayStr 只用于 today 格高亮。它**不在** summaries 的 deps 里——
+  // summaries 只依赖 funds / transactions / navHistory，与"跨日"无关。
   const todayStr = today();
   const summaries = useMemo(() => {
     return funds.map((fund) => ({

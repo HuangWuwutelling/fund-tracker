@@ -49,9 +49,9 @@ interface HoldingsSummaryProps {
  * 设计要点：
  * - 一行 = (platformId, type) 分组，聚合 cost / mv / totalReturn / returnRate / dailyPnl
  * - 完全清仓分组（cost=0 & mv=0）跳过——无信息量，避免视图噪声
- * - 当日盈亏用 null-aware 求和（与 Dashboard Statistic 卡同款口径）：
+ * - 最新净值日盈亏用 null-aware 求和（与 Dashboard Statistic 卡同款口径）：
  *   - 全 null → 显示 "—"
- *   - 部分 null → 显示已更新成员的合计，下方小字 "已更新 X/Y 只"
+ *   - 部分成员有数据 → 显示这些成员的合计，并把各自的净值日列在下方
  * - 不可点击行：聚合行无明确 drill-down 目标（跳到哪只基金？），保持只读
  */
 export default function HoldingsSummary({ summaries, platforms }: HoldingsSummaryProps) {
