@@ -120,6 +120,18 @@ export function removeAllNavHistory(): void {
   }
 }
 
+// --- Seen NAV baseline (观测法新鲜度基线) ---
+// key 故意不叫 `nav:*`：importAllData 会清理所有 `nav:` 前缀的残留 key，
+// 而这份基线是**设备本地观测**而非用户数据，不参与 exportAllData / importAllData
+// （换设备 / 导入备份后没有基线 → 首次观测全部视为"有新净值"，一次刷新后自愈）。
+export function getSeenNavMap(): Record<string, string> {
+  return getItem<Record<string, string>>('seen-nav', {});
+}
+
+export function saveSeenNavMap(map: Record<string, string>): void {
+  setItem('seen-nav', map);
+}
+
 // --- Export / Import ---
 interface ExportData {
   version: number;

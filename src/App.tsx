@@ -146,6 +146,10 @@ export default function App() {
     if (confirmedCount > 0) {
       message.success(`已自动确认 ${confirmedCount} 笔历史交易`);
     }
+    // 所有 updateNavHistory 都已完成 → 用刚写入的 navHistory 对比上次观测基线。
+    // 必须放在循环之后：freshness 读的就是 navHistory，提前调用会看到旧数据。
+    useStore.getState().recordNavFreshness();
+    if (refreshGenerationRef.current !== myGen) return;
     const updatedFunds = useStore.getState().funds;
     const updatedTxs = useStore.getState().transactions;
     const snapshot = generateSnapshot(updatedFunds, updatedTxs);

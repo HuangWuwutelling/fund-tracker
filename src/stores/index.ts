@@ -3,6 +3,8 @@ import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, Nav
 import * as storage from '../utils/storage';
 import { generateSnapshot } from '../utils/snapshot';
 import { getPlanDueDates } from '../utils/calculator';
+import { latestNavPair } from '../utils/navPair';
+import { computeFreshness } from '../utils/navFreshness';
 import { today } from '../utils/formatter';
 import { getFundTypeFromName } from '../api/fundApi';
 import dayjs from 'dayjs';
@@ -59,6 +61,14 @@ interface FundTrackerState {
   getNavHistory: (fundCode: string) => NavRecord[];
   resetNavHistory: (fundCode?: string) => void;
 
+  // Actions - Nav freshness (观测法：不推算发布日，只对比"上次刷新看到的最新 NAV 日")
+  /** 本次刷新中"最新 NAV 日较上次前进"的基金 id 集合；未刷新过时为空集 */
+  freshNavFundIds: Set<string>;
+  /** 最近一次刷新完成时间（ISO 字符串）；null = 本次会话还没跑过刷新 */
+  navRefreshedAt: string | null;
+  /** 刷新结束后调用：对比并更新本地观测基线，产出 freshNavFundIds */
+  recordNavFreshness: () => void;
+
   // Actions - Refresh trigger (App.tsx subscribes to bump to re-run refreshAll)
   refreshTrigger: number;
   requestRefresh: () => void;
@@ -77,6 +87,8 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   dcaPlans: [],
   snapshots: [],
   settings: { theme: 'light', navAutoRefresh: true, reportFrequency: 'both', dcaAutoRecord: true },
+  freshNavFundIds: new Set<string>(),
+  navRefreshedAt: null,
 
   // --- Platforms ---
   addPlatform: (name) => {
@@ -286,6 +298,19 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     set((s) => ({ refreshTrigger: s.refreshTrigger + 1 }));
   },
 
+  // --- Nav freshness ---
+  recordNavFreshness: () => {
+    const { funds, getNavHistory } = get();
+    const { fresh, nextSeen } = computeFreshness(
+      funds,
+      // "最新 NAV 日"与盈亏数字同源：都走 latestNavPair，避免两处对"最新"的定义漂移
+      (fund) => latestNavPair(fund, getNavHistory(fund.id))?.curr.date,
+      storage.getSeenNavMap()
+    );
+    storage.saveSeenNavMap(nextSeen);
+    set({ freshNavFundIds: fresh, navRefreshedAt: new Date().toISOString() });
+  },
+
   // --- Init & Bulk ---
   loadFromStorage: () => {
     navHistoryCache.clear();
@@ -329,6 +354,8 @@ export const useStore = create<FundTrackerState>((set, get) => ({
       snapshots: data.snapshots ?? [],
       settings,
     });
+    // 导入后基金集合已变，旧观测基线作废——重置为空，让下一次刷新重新建立
+    set({ freshNavFundIds: new Set<string>(), navRefreshedAt: null });
     // 导入后立刻补定投记录（页面 mount 的自动记录早已跑过，导入不会重跑它）
     return get().settings.dcaAutoRecord ? get().autoRecordDcaPlans() : 0;
   },
