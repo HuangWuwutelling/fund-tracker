@@ -110,7 +110,7 @@ export default function FundList() {
       }
 
       // API 返回 null 通常表示代码无效或暂时无法访问——拒绝添加，
-      // 避免后续所有"净值缺失"症状都被静默累积（持仓、市值、当日盈亏全为空）
+      // 避免后续所有"净值缺失"症状都被静默累积（持仓、市值、最新净值日盈亏全为空）
       if (!result) {
         message.error('未找到该基金，请确认代码后重试');
         setLoading(false);

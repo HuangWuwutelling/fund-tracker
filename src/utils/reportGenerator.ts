@@ -282,13 +282,13 @@ export function generateDailyReturns(
   const result: DailyReturn[] = [];
 
   // 历史格：QDII 与 A 股统一用 attributionMap（按 navDate 归属，与 A 股同口径）
-  // - QDII 9/1 NAV 涨跌归到 9/1（与 A 股完全对称，不按 publishDate 判 isPending）
+  // - QDII 9/1 NAV 涨跌归到 9/1（与 A 股完全对称）
   // - QDII 发布后正常计入收益，与 A 股完全对称
   // - 按持仓时长拆分 PnL（calcDailyPnlBySegments）：避免买入/卖出日过度计入新份额
   // 修复前：QDII 用「最新已发布对」覆盖所有历史日，导致 5/1-5/5 同一数字；
   //        且买入日 NAV 涨跌全归新份额（pnl 高估）
   // 历史格：只看 attr 是否存在，存在就用 curr/prev + 持仓算 PnL。
-  // 不判定 publishDate；今天格取的是最新一对已发布 NAV（见下方"今天格"分支）。
+  // 今天格取的是最新一对已发布 NAV（见下方"今天格"分支）。
   // 历史回看时数据已发布就一定能在 attributionMap 里查到；attr 不存在说明当天没有
   // NAV 变化（如节假日 / 当日无交易 / QDII NAV 复制填充被 usHolidays 过滤），returnAmount=0，
   // UI 显示为 0 涨跌——历史格无"未发布"概念，无需"净值更新中"提示。

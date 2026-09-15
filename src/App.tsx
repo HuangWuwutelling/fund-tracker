@@ -186,8 +186,8 @@ export default function App() {
     });
   }, [refreshTrigger, funds.length, refreshAll]);
 
-  // 定时刷新：覆盖晚间 NAV 实际发布时间（A 股 20:30-22:00、QDII T+2 同窗口），
-  // 让 app 持续打开的用户无需手动操作即可看到当日盈亏。
+  // 定时刷新：覆盖晚间 NAV 实际发布时间（通常 20:30-22:00；QDII 节奏靠 navFreshness 观测法自适配），
+  // 让 app 持续打开的用户无需手动操作即可看到最新净值日盈亏。
   // 不绑死时间点：纯靠 hasStale 闸门——任一基金 navDate < today 才发起请求，
   // 数据跟齐后所有 tick 早 return，无 API 配额消耗。
   useEffect(() => {
