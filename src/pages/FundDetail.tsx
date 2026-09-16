@@ -725,7 +725,7 @@ export default function FundDetail() {
             </>
           )}
           <Form.Item name="pending" valuePropName="checked" style={{ marginBottom: 16 }}>
-            <Checkbox>待确认（T+1 净值未出，先记账不进入持仓）</Checkbox>
+            <Checkbox>待确认（净值待发布：先记账不进入持仓）</Checkbox>
           </Form.Item>
 
           {/* 新增交易：自动从历史查净值，展示预览 */}

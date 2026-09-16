@@ -461,7 +461,7 @@ export default function Transactions() {
             </>
           )}
           <Form.Item name="pending" valuePropName="checked" style={{ marginBottom: 16 }}>
-            <Checkbox>待确认（T+1 净值未出，先记账不进入持仓）</Checkbox>
+            <Checkbox>待确认（净值待发布：先记账不进入持仓）</Checkbox>
           </Form.Item>
           {/* NAV is hidden - auto-filled from history, shown in preview below */}
           {!pendingWatch && preview.nav !== null && (

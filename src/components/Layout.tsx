@@ -131,7 +131,7 @@ export default function AppLayout() {
           <Outlet />
         </Content>
         <Footer style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: '16px 24px', background: 'transparent' }}>
-          仅为个人记录，不构成投资建议。数据为 T+1，仅供参考。投资有风险，入市需谨慎。
+          仅为个人记录，不构成投资建议。数据延迟以各基金实际披露为准（A 股 T+1、QDII 普遍 T+2），仅供参考。投资有风险，入市需谨慎。
           <Button
             type="link"
             size="small"
@@ -177,7 +177,7 @@ export default function AppLayout() {
         </Paragraph>
 
         <Paragraph type="secondary" style={{ marginTop: 16, fontSize: 12 }}>
-          仅为个人记录，不构成投资建议。数据为 T+1，仅供参考。投资有风险，入市需谨慎。
+          仅为个人记录，不构成投资建议。数据延迟以各基金实际披露为准（A 股 T+1、QDII 普遍 T+2），仅供参考。投资有风险，入市需谨慎。
         </Paragraph>
       </Modal>
     </Layout>

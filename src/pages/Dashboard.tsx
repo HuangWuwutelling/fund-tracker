@@ -225,7 +225,7 @@ export default function Dashboard() {
           type="warning"
           showIcon
           message={`您有 ${pendingCount} 笔未确认交易${pendingAmount > 0 ? `，合计 ${formatMoney(pendingAmount)}` : ''}`}
-          description="这些交易还未生效（T+1 净值待发布），不影响当前持仓显示。点击下方按钮确认份额。"
+          description="这些交易还未生效（净值待发布），不影响当前持仓显示。点击下方按钮确认份额。"
           action={
             <Button size="small" type="primary" onClick={() => navigate('/transactions?status=pending')}>
               去确认
