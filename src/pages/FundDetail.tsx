@@ -5,7 +5,7 @@ import { ArrowLeftOutlined, PlusOutlined, ImportOutlined } from '@ant-design/ico
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts/core';
 import { LineChart } from 'echarts/charts';
-import { TooltipComponent, GridComponent, LegendComponent, DataZoomComponent, MarkLineComponent, MarkPointComponent } from 'echarts/components';
+import { TooltipComponent, GridComponent, LegendComponent, MarkLineComponent, MarkPointComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
@@ -22,7 +22,6 @@ echarts.use([
   TooltipComponent,
   GridComponent,
   LegendComponent,
-  DataZoomComponent,
   MarkLineComponent,
   MarkPointComponent,
   CanvasRenderer,
@@ -189,7 +188,7 @@ export default function FundDetail() {
         data: ['单位净值', '成本均价'],
         textStyle: { fontSize: 12 },
       },
-      grid: { left: 60, right: 20, top: 20, bottom: 50 },
+      grid: { left: 60, right: 20, top: 20, bottom: 30 },
       xAxis: { type: 'category' as const, data: dates, axisLabel: { fontSize: 11 } },
       yAxis: {
         type: 'value' as const,
@@ -197,10 +196,6 @@ export default function FundDetail() {
         axisLabel: { formatter: (v: number) => v.toFixed(2), fontSize: 11 },
         splitLine: { lineStyle: { type: 'dashed' as const, color: '#e8e8e8' } },
       },
-      dataZoom: [
-        { type: 'inside' as const },
-        { type: 'slider' as const, height: 18, bottom: 28 },
-      ],
       series: [
         {
           name: '单位净值',
@@ -211,12 +206,12 @@ export default function FundDetail() {
           lineStyle: { width: 2, color: '#1677ff' },
           areaStyle: { color: 'rgba(22,119,255,0.06)' },
           markPoint: {
-            symbol: 'pin',
-            symbolSize: 36,
+            symbol: 'circle',
+            symbolSize: 8,
             data: [
-              ...txMarkers.buy.map((m) => ({ name: '买', coord: m.coord, itemStyle: { color: '#cf1322' }, label: { fontSize: 10, color: '#fff' } })),
-              ...txMarkers.sell.map((m) => ({ name: '卖', coord: m.coord, itemStyle: { color: '#3f8600' }, label: { fontSize: 10, color: '#fff' } })),
-              ...txMarkers.dividend.map((m) => ({ name: '分', coord: m.coord, itemStyle: { color: '#d48806' }, label: { fontSize: 10, color: '#fff' } })),
+              ...txMarkers.buy.map((m) => ({ name: '买', coord: m.coord, itemStyle: { color: '#cf1322' } })),
+              ...txMarkers.sell.map((m) => ({ name: '卖', coord: m.coord, itemStyle: { color: '#3f8600' } })),
+              ...txMarkers.dividend.map((m) => ({ name: '分', coord: m.coord, itemStyle: { color: '#d48806' } })),
             ],
           },
           markLine: {
