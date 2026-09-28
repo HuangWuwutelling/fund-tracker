@@ -184,11 +184,12 @@ export default function FundDetail() {
         },
       },
       legend: {
-        bottom: 0,
+        top: 5,
+        right: 10,
         data: ['单位净值', '成本均价'],
         textStyle: { fontSize: 12 },
       },
-      grid: { left: 60, right: 20, top: 20, bottom: 30 },
+      grid: { left: 60, right: 20, top: 35, bottom: 30 },
       xAxis: { type: 'category' as const, data: dates, axisLabel: { fontSize: 11 } },
       yAxis: {
         type: 'value' as const,
