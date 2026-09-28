@@ -1,5 +1,6 @@
 import type { Transaction, Fund, NavRecord, DcaPlan } from '../types';
 import { latestNavPair } from './navPair';
+import { isNonTradingDay } from './chineseHolidays';
 import dayjs from 'dayjs';
 
 /** 过滤掉 pending(待确认)交易;只保留 confirmed 或未设状态的(向后兼容) */
@@ -329,6 +330,9 @@ export function isInPlanWindow(plan: DcaPlan, txDate: string): boolean {
 export function isDcaPlanDueToday(plan: DcaPlan, today: Date = new Date()): boolean {
   if (!plan.active) return false;
   const now = dayjs(today);
+  // 法定节假日直接返回 false（与 getPlanDueDates 口径一致），
+  // 周末判定现已包含在 isNonTradingDay 里，保留下面 if 是冗余但无副作用。
+  if (isNonTradingDay(now.format('YYYY-MM-DD'))) return false;
   // 周末不计入（避免补录上周遗漏的定投）
   if (now.day() === 0 || now.day() === 6) return false;
 
@@ -368,6 +372,12 @@ export function getPlanDueDates(plan: DcaPlan, endDate: string | Date): string[]
   const dates: string[] = [];
   let cursor = dayjs(start);
   while (cursor.format('YYYY-MM-DD') <= end) {
+    // 法定节假日当日直接跳过（与 isNonTradingDay 单一事实源对齐），
+    // 周末判定现已包含在 isNonTradingDay 里，保留 isWeekend 是冗余但无副作用。
+    if (isNonTradingDay(cursor.format('YYYY-MM-DD'))) {
+      cursor = cursor.add(1, 'day');
+      continue;
+    }
     const isWeekend = cursor.day() === 0 || cursor.day() === 6;
     let due = false;
 

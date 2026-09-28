@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { calcLatestNavPnl } from './calculator';
-import type { Fund, NavRecord, Transaction } from '../types';
+import { calcLatestNavPnl, getPlanDueDates, isDcaPlanDueToday } from './calculator';
+import type { DcaPlan, Fund, NavRecord, Transaction } from '../types';
 
 function fund(name: string): Fund {
   return { id: 'f1', name, platformId: 'p1', type: 'qdii', currentNav: 1.2, navDate: '2026-09-08' };
@@ -12,6 +12,11 @@ function nav(date: string, value: number): NavRecord {
 
 function buy(date: string, shares: number): Transaction {
   return { id: `t-${date}`, fundId: 'f1', type: 'buy', date, amount: shares, fee: 0, shares, nav: 1 };
+}
+
+/** 用本地正午避免 Date 解析的 TZ 偏移；2026 节假日见 chineseHolidays.ts */
+function noon(date: string): Date {
+  return new Date(`${date}T12:00:00`);
 }
 
 // 广发纳指 100：9/7 是美股劳工节，被 usableNavSeries 过滤掉，
@@ -43,5 +48,81 @@ describe('calcLatestNavPnl', () => {
       buy('2026-09-08', 1000),
     ]);
     expect(r.pnl).toBeCloseTo(100, 6);
+  });
+});
+
+describe('getPlanDueDates - 法定节假日', () => {
+  it('daily 计划跳过 2026-09-25（中秋·周五）', () => {
+    const plan: DcaPlan = {
+      id: 'p1', fundId: 'f1', amount: 100, frequency: 'daily',
+      active: true, startDate: '2026-09-21',
+    };
+    const dates = getPlanDueDates(plan, '2026-09-28');
+    // 9/21-24 工作日，9/25 中秋跳，9/26-27 周末跳，9/28 工作日
+    expect(dates).toEqual([
+      '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-28',
+    ]);
+  });
+
+  it('daily 计划跳过 2026 国庆块（10/1-2 + 10/5-7）', () => {
+    const plan: DcaPlan = {
+      id: 'p1', fundId: 'f1', amount: 100, frequency: 'daily',
+      active: true, startDate: '2026-09-28',
+    };
+    const dates = getPlanDueDates(plan, '2026-10-12');
+    // 9/28-30 工作日；10/1-2 假、10/3-4 周末、10/5-7 假；10/8-9 工作日；10/10-11 周末；10/12 工作日
+    expect(dates).toEqual([
+      '2026-09-28', '2026-09-29', '2026-09-30',
+      '2026-10-08', '2026-10-09', '2026-10-12',
+    ]);
+  });
+
+  it('monthly dayOfMonth=1 跳过 2026-10-01（国庆）——当月不补录', () => {
+    const plan: DcaPlan = {
+      id: 'p1', fundId: 'f1', amount: 100, frequency: 'monthly',
+      dayOfMonth: 1, active: true, startDate: '2026-08-01',
+    };
+    const dates = getPlanDueDates(plan, '2026-10-31');
+    // 9/1 工作日 → 计入；10/1 假日 → 跳过（不顺延）
+    expect(dates).toEqual(['2026-09-01']);
+  });
+
+  it('weekly dayOfWeek=5 跳过节假日周五', () => {
+    const plan: DcaPlan = {
+      id: 'p1', fundId: 'f1', amount: 100, frequency: 'weekly',
+      dayOfWeek: 5, active: true, startDate: '2026-09-18',
+    };
+    const dates = getPlanDueDates(plan, '2026-10-09');
+    // 9/18 Fri ✓、9/25 Fri 中秋 ✗、10/2 Fri 国庆 ✗、10/9 Fri ✓
+    expect(dates).toEqual(['2026-09-18', '2026-10-09']);
+  });
+});
+
+describe('isDcaPlanDueToday - 法定节假日', () => {
+  const basePlan: DcaPlan = {
+    id: 'p1', fundId: 'f1', amount: 100, frequency: 'daily',
+    active: true, startDate: '2020-01-01',
+  };
+
+  it('daily 在中秋当天返回 false', () => {
+    expect(isDcaPlanDueToday(basePlan, noon('2026-09-25'))).toBe(false);
+  });
+
+  it('daily 在国庆当天返回 false', () => {
+    expect(isDcaPlanDueToday(basePlan, noon('2026-10-01'))).toBe(false);
+  });
+
+  it('daily 在普通工作日返回 true', () => {
+    expect(isDcaPlanDueToday(basePlan, noon('2026-09-28'))).toBe(true);
+  });
+
+  it('monthly dayOfMonth=1 在国庆当天返回 false', () => {
+    const plan: DcaPlan = { ...basePlan, frequency: 'monthly', dayOfMonth: 1 };
+    expect(isDcaPlanDueToday(plan, noon('2026-10-01'))).toBe(false);
+  });
+
+  it('monthly dayOfMonth=1 在普通 1 号工作日返回 true', () => {
+    const plan: DcaPlan = { ...basePlan, frequency: 'monthly', dayOfMonth: 1 };
+    expect(isDcaPlanDueToday(plan, noon('2026-09-01'))).toBe(true);
   });
 });
