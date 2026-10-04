@@ -91,13 +91,19 @@ export async function fetchMarketIndex(spec: IndexSpec): Promise<IndexQuoteRaw |
     const data = (resp as { data?: Record<string, number> | null } | null)?.data;
     if (!data) return null;
 
-    const tsMs = data.f86;
-    if (typeof tsMs !== 'number' || tsMs <= 0) return null;
+    // eastmoney push2 字段缩放约定（实测 + curl 验证）：
+    // - f86 是 **秒**（不是毫秒）—— 直接给 dayjs 当 ms 会算成 1970-01-XX
+    // - f43 / f169 是"× 100 原始"（即 435762 = 4357.62）—— 必须除以 100
+    // - f170 是"1/100 百分点"（即 29 = 0.29%）—— 除以 100 后用百分比显示
+    // 转换放在 API 边界，UI 层只看到人类可读的数字。
+    const tsSec = data.f86;
+    if (typeof tsSec !== 'number' || tsSec <= 0) return null;
+    const tsMs = tsSec * 1000;
 
     return {
-      value: data.f43 ?? 0,
-      change: data.f169 ?? 0,
-      changePercent: data.f170 ?? 0,
+      value: (data.f43 ?? 0) / 100,
+      change: (data.f169 ?? 0) / 100,
+      changePercent: (data.f170 ?? 0) / 100,
       date: formatIndexDate(tsMs, spec.market),
       fetchedAt: Date.now(),
     };
