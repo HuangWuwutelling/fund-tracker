@@ -11,7 +11,10 @@ dayjs.locale('zh-cn');
 // 周日作为一周第一天
 dayjs.updateLocale('zh-cn', { weekStart: 0 });
 import { useStore } from './stores';
+import type { IndexQuote } from './types';
 import { fetchFundWithHistory } from './api/fundApi';
+import { fetchMarketIndex, INDEX_LIST } from './api/indexApi';
+import { shouldUpdateIndexQuote } from './utils/indexQuote';
 import { generateSnapshot } from './utils/snapshot';
 import { lookupNavForDate } from './utils/navLookup';
 import { calcSharesFromAmount } from './utils/calculator';
@@ -25,7 +28,7 @@ import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 
 export default function App() {
-  const { settings, funds, refreshTrigger, loadFromStorage, updateFund, updateNavHistory, updateTransaction, addSnapshot } = useStore();
+  const { settings, funds, refreshTrigger, loadFromStorage, updateFund, updateNavHistory, updateTransaction, addSnapshot, updateIndex } = useStore();
 
   useEffect(() => {
     loadFromStorage();
@@ -138,6 +141,35 @@ export default function App() {
       }
     }
 
+    // --- Index 循环 ---
+    // 共享同一个 500ms 节奏（与基金一致），3 条小数目 ≈ 1.5s 总耗时，对首屏可接受。
+    // 设计决策：index 不接 `hasStale` 闸门（那个闸门判断的是"基金 NAV 是否过时"），
+    // 也不接 chineseHolidays（A股休市时美股正常交易，反之亦然）——每个 index 自己判断。
+    for (let j = 0; j < INDEX_LIST.length; j++) {
+      if (refreshGenerationRef.current !== myGen) return; // superseded
+      const spec = INDEX_LIST[j]!;
+      try {
+        const data = await fetchMarketIndex(spec);
+        if (refreshGenerationRef.current !== myGen) return;
+        if (!data) continue;
+        // spec 已知 name + market，把 raw 合成 IndexQuote 后再走 cache 闸门
+        const cached = useStore.getState().indices[spec.code];
+        const newQuote: IndexQuote = {
+          name: spec.name,
+          market: spec.market,
+          ...data,
+        };
+        if (shouldUpdateIndexQuote(cached, newQuote)) {
+          updateIndex(spec.code, newQuote);
+        }
+      } catch (err) {
+        console.error('[App] refreshAll index failed for', spec.secid, err);
+      }
+      if (j < INDEX_LIST.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+
     if (refreshGenerationRef.current !== myGen) return;
     // NAV history is now fresh — try to auto-confirm pending transactions whose NAV is available
     // 用 useStore.getState() 读最新 transactions，避免把 transactions 加进依赖
@@ -154,7 +186,7 @@ export default function App() {
     const updatedTxs = useStore.getState().transactions;
     const snapshot = generateSnapshot(updatedFunds, updatedTxs);
     if (snapshot) addSnapshot(snapshot);
-  }, [funds.length, updateFund, updateNavHistory, updateTransaction, addSnapshot, autoConfirmPending]);
+  }, [funds.length, updateFund, updateNavHistory, updateTransaction, addSnapshot, updateIndex, autoConfirmPending]);
 
   useEffect(() => {
     if (!settings.navAutoRefresh || funds.length === 0) return;

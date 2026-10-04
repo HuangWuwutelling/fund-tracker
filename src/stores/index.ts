@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord } from '../types';
+import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote } from '../types';
 import * as storage from '../utils/storage';
 import { generateSnapshot } from '../utils/snapshot';
 import { getPlanDueDates } from '../utils/calculator';
@@ -56,6 +56,10 @@ interface FundTrackerState {
   // Actions - Settings
   updateSettings: (updates: Partial<Settings>) => void;
 
+  // Actions - Indices (市场指数缓存)
+  indices: Record<string, IndexQuote>;
+  updateIndex: (code: string, quote: IndexQuote) => void;
+
   // Actions - Nav
   updateNavHistory: (fundCode: string, records: NavRecord[]) => void;
   getNavHistory: (fundCode: string) => NavRecord[];
@@ -87,6 +91,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   dcaPlans: [],
   snapshots: [],
   settings: { theme: 'light', navAutoRefresh: true, reportFrequency: 'both', dcaAutoRecord: true },
+  indices: {},
   freshNavFundIds: new Set<string>(),
   navRefreshedAt: null,
 
@@ -266,6 +271,13 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     set({ settings });
   },
 
+  // --- Indices ---
+  updateIndex: (code, quote) => {
+    const indices = { ...get().indices, [code]: quote };
+    storage.saveIndices(indices);
+    set({ indices });
+  },
+
   // --- Nav History ---
   updateNavHistory: (fundCode, records) => {
     navHistoryCache.set(fundCode, records);
@@ -322,6 +334,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
       dcaPlans: storage.getDcaPlans(),
       snapshots: storage.getSnapshots(),
       settings: storage.getSettings(),
+      indices: storage.getIndices(),
     });
   },
 

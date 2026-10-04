@@ -1,4 +1,4 @@
-import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord } from '../types';
+import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote } from '../types';
 
 const PREFIX = 'fund-tracker';
 const CURRENT_VERSION = 2;
@@ -142,6 +142,8 @@ interface ExportData {
   snapshots: DailySnapshot[];
   settings: Settings;
   navHistories: Record<string, NavRecord[]>;
+  /** v1 新增：指数最近一次成功拉取的快照；旧版本备份里没有此字段 */
+  indices?: Record<string, IndexQuote>;
 }
 
 export function exportAllData(): ExportData {
@@ -160,6 +162,7 @@ export function exportAllData(): ExportData {
     snapshots: getSnapshots(),
     settings: getSettings(),
     navHistories,
+    indices: getIndices(),
   };
 }
 
@@ -171,6 +174,9 @@ export function importAllData(data: ExportData): void {
   saveDcaPlans(data.dcaPlans);
   saveSnapshots(data.snapshots);
   saveSettings(data.settings);
+  // indices 是 v1 新字段；旧版本备份里 data.indices === undefined 时取空 map
+  // （清空本地 indices 而不是保留——因为旧备份的语义就是"完全替换状态"）。
+  saveIndices(data.indices ?? {});
   if (data.navHistories) {
     // 完整备份：用备份内的净值历史覆盖
     for (const [fundCode, records] of Object.entries(data.navHistories)) {
@@ -191,6 +197,17 @@ export function importAllData(data: ExportData): void {
     // v0 备份没有 navHistories 字段 → 保留 localStorage 现有的净值历史作为后备
     // （这里什么都不做：save* 没有动 nav:* 这些 key，原有数据自然保留）
   }
+}
+
+// --- Indices cache ---
+// 不参与 export/import 之外的"历史清理"流程（不像 navHistory 会被 importAllData 兜底删除），
+// 是用户能看到的"上次看到什么"快照，导入备份后用备份里的值覆盖即可。
+export function getIndices(): Record<string, IndexQuote> {
+  return getItem<Record<string, IndexQuote>>('indices', {});
+}
+
+export function saveIndices(map: Record<string, IndexQuote>): void {
+  setItem('indices', map);
 }
 
 // --- Init ---
