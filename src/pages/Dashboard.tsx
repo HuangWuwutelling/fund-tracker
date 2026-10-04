@@ -7,7 +7,7 @@ import { calcFundSummary, calcXIRR, calcDividendTotal, calcTodayInvested } from 
 import { today } from '../utils/formatter';
 import { isNonTradingDay } from '../utils/chineseHolidays';
 import ReturnCalendar from '../components/ReturnCalendar';
-import HoldingsSummary from '../components/HoldingsSummary';
+import MarketIndices from '../components/MarketIndices';
 import {
   formatMoney,
   formatPercent,
@@ -421,8 +421,8 @@ export default function Dashboard() {
         <ReturnCalendar />
       </div>
 
-      {/* ===== 持仓汇总（按平台 / 类型） ===== */}
-      <HoldingsSummary summaries={summaries} platforms={platforms} />
+      {/* ===== 市场指数（沪深300 / 纳指100 / 标普500） ===== */}
+      <MarketIndices />
 
       {/* ===== 持仓列表（含类型色条 + 表尾合计行） ===== */}
       <Card

@@ -72,7 +72,7 @@ export const FUND_TYPE_LABELS: Record<Fund['type'], string> = {
   mixed: '混合型',
 };
 
-/** 基金类型 → AntD Tag 颜色（持仓列表 / HoldingsSummary / 报表统一口径） */
+/** 基金类型 → AntD Tag 颜色（持仓列表 / 报表统一口径） */
 export const FUND_TYPE_COLORS: Record<Fund['type'], string> = {
   index: 'cyan',
   bond: 'blue',
