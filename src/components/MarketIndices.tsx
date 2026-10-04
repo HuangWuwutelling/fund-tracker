@@ -13,7 +13,7 @@ function tzLabel(market: Market): string {
 
 /**
  * Dashboard 上的 3 张市场指数卡片。每张显示：名称 + 点位（涨跌色）+ 涨跌额/涨跌幅 +
- * 数据日期（带市场 TZ 前缀）。与 HoldingsSummary 同款红涨绿跌（pnlColor）。
+ * 数据日期（带市场 TZ 前缀）。红涨绿跌（pnlColor）。
  *
  * 数据流：完全被动 —— 读 `useStore().indices[spec.code]`，由 App.refreshAll 在后台更新。
  * 组件本身不发请求、不持有副作用。

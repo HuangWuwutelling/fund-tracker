@@ -366,6 +366,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
       dcaPlans: data.dcaPlans ?? [],
       snapshots: data.snapshots ?? [],
       settings,
+      indices: storage.getIndices(),
     });
     // 导入后基金集合已变，旧观测基线作废——重置为空，让下一次刷新重新建立
     set({ freshNavFundIds: new Set<string>(), navRefreshedAt: null });
