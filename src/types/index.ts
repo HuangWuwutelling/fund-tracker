@@ -141,3 +141,12 @@ export interface IndexSpec {
   name: string;
   market: Market;
 }
+
+/**
+ * 指数历史每日收盘点位。Modal 曲线用；
+ * `date` 为该市场当地的 YYYY-MM-DD，`value` 为当日收盘点位（原单位，非 ETF NAV）。
+ */
+export interface IndexHistoryRecord {
+  date: string;
+  value: number;
+}

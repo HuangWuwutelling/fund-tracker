@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote } from '../types';
+import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote, IndexHistoryRecord } from '../types';
 import * as storage from '../utils/storage';
 import { generateSnapshot } from '../utils/snapshot';
 import { getPlanDueDates } from '../utils/calculator';
@@ -60,6 +60,10 @@ interface FundTrackerState {
   indices: Record<string, IndexQuote>;
   updateIndex: (code: string, quote: IndexQuote) => void;
 
+  // Actions - Index History (按 code 懒加载的历史每日收盘点位)
+  indexHistories: Record<string, IndexHistoryRecord[]>;
+  updateIndexHistory: (code: string, records: IndexHistoryRecord[]) => void;
+
   // Actions - Nav
   updateNavHistory: (fundCode: string, records: NavRecord[]) => void;
   getNavHistory: (fundCode: string) => NavRecord[];
@@ -92,6 +96,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   snapshots: [],
   settings: { theme: 'light', navAutoRefresh: true, reportFrequency: 'both', dcaAutoRecord: true },
   indices: {},
+  indexHistories: {},
   freshNavFundIds: new Set<string>(),
   navRefreshedAt: null,
 
@@ -278,6 +283,14 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     set({ indices });
   },
 
+  // --- Index History ---
+  // 写一次更新全部 map（与 updateIndex 同款语义），持久化到 storage 的 index-history:{code} 单 key。
+  updateIndexHistory: (code, records) => {
+    const indexHistories = { ...get().indexHistories, [code]: records };
+    storage.saveIndexHistory(code, records);
+    set({ indexHistories });
+  },
+
   // --- Nav History ---
   updateNavHistory: (fundCode, records) => {
     navHistoryCache.set(fundCode, records);
@@ -335,6 +348,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
       snapshots: storage.getSnapshots(),
       settings: storage.getSettings(),
       indices: storage.getIndices(),
+      indexHistories: storage.loadAllIndexHistories(),
     });
   },
 
@@ -367,6 +381,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
       snapshots: data.snapshots ?? [],
       settings,
       indices: storage.getIndices(),
+      indexHistories: storage.loadAllIndexHistories(),
     });
     // 导入后基金集合已变，旧观测基线作废——重置为空，让下一次刷新重新建立
     set({ freshNavFundIds: new Set<string>(), navRefreshedAt: null });

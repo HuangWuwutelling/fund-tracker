@@ -1,4 +1,4 @@
-import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote } from '../types';
+import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote, IndexHistoryRecord, IndexSpec } from '../types';
 
 const PREFIX = 'fund-tracker';
 const CURRENT_VERSION = 2;
@@ -144,6 +144,8 @@ interface ExportData {
   navHistories: Record<string, NavRecord[]>;
   /** v1 新增：指数最近一次成功拉取的快照；旧版本备份里没有此字段 */
   indices?: Record<string, IndexQuote>;
+  /** v2 新增：指数历史每日收盘点位（懒加载，按 code 持久化）；旧备份里没有 */
+  indexHistories?: Record<string, IndexHistoryRecord[]>;
 }
 
 export function exportAllData(): ExportData {
@@ -151,6 +153,12 @@ export function exportAllData(): ExportData {
   const navHistories: Record<string, NavRecord[]> = {};
   for (const fund of funds) {
     navHistories[fund.id] = getNavHistory(fund.id);
+  }
+  // 指数历史：只把 INDEX_LIST 里实际存在的 code 导出来，避免孤儿数据污染备份
+  const indexHistories: Record<string, IndexHistoryRecord[]> = {};
+  for (const code of INDEX_CODES) {
+    const recs = getIndexHistory(code);
+    if (recs.length > 0) indexHistories[code] = recs;
   }
 
   return {
@@ -163,6 +171,7 @@ export function exportAllData(): ExportData {
     settings: getSettings(),
     navHistories,
     indices: getIndices(),
+    indexHistories,
   };
 }
 
@@ -177,6 +186,8 @@ export function importAllData(data: ExportData): void {
   // indices 是 v1 新字段；旧版本备份里 data.indices === undefined 时取空 map
   // （清空本地 indices 而不是保留——因为旧备份的语义就是"完全替换状态"）。
   saveIndices(data.indices ?? {});
+  // indexHistories: 真替换策略——备份里有就覆盖，没有就清空（与 navHistories 同款语义）
+  saveAllIndexHistories(data.indexHistories ?? {});
   if (data.navHistories) {
     // 完整备份：用备份内的净值历史覆盖
     for (const [fundCode, records] of Object.entries(data.navHistories)) {
@@ -221,6 +232,61 @@ export function getIndices(): Record<string, IndexQuote> {
 export function saveIndices(map: Record<string, IndexQuote>): void {
   setItem('indices', map);
 }
+
+/**
+ * INDEX_LIST 的稳定 code 列表。exportAllData 用它决定哪些 index-history:* 要打包。
+ * 保持与 api/indexApi.ts INDEX_LIST 同步——这里刻意不 import INDEX_LIST 避免循环依赖
+ * （api → storage 用于 getIndices/installData? no，但 INDEX_LIST 在 stores 中间引用会形成环）。
+ */
+export const INDEX_CODES: readonly string[] = [
+  'sh000300', 'sz399006', 'sh000905',
+  'usNDX', 'usSPX', 'usDJI',
+];
+
+// --- Index History (per code) ---
+// 懒加载缓存：首次打开 Modal 才拉，写到 localStorage 后下次打开即时显示。
+// 不参与 refreshAll（历史数据不太变，没必要 30 分钟拉一次）。
+// 7 天后的"该刷新"判断由调用方 (IndexHistoryModal) 完成，不进 storage。
+export function getIndexHistory(code: string): IndexHistoryRecord[] {
+  return getItem<IndexHistoryRecord[]>(`index-history:${code}`, []);
+}
+
+export function saveIndexHistory(code: string, records: IndexHistoryRecord[]): void {
+  setItem(`index-history:${code}`, records);
+}
+
+/**
+ * 把整个 indexHistories map 落地（importAllData 用）。
+ * 先清理掉本地所有 `index-history:*` key，再按 map 写入新值（孤儿清理）。
+ */
+export function saveAllIndexHistories(map: Record<string, IndexHistoryRecord[]>): void {
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(`${PREFIX}:index-history:`)) {
+      localStorage.removeItem(k);
+    }
+  }
+  for (const [code, records] of Object.entries(map)) {
+    saveIndexHistory(code, records);
+  }
+}
+
+/**
+ * 一次性把所有 `index-history:*` 读进 map（store.loadFromStorage 用）。
+ * 只挑 INDEX_CODES 里实际存在的 code——避免历史脏数据（比如有 v2 时期别的指数）。
+ */
+export function loadAllIndexHistories(): Record<string, IndexHistoryRecord[]> {
+  const out: Record<string, IndexHistoryRecord[]> = {};
+  for (const code of INDEX_CODES) {
+    const recs = getIndexHistory(code);
+    if (recs.length > 0) out[code] = recs;
+  }
+  return out;
+}
+
+// Re-export type aliases so consumers can import everything from storage if they want.
+// (Not strictly needed since types/index.ts is the canonical source.)
+export type { IndexSpec };
 
 // --- Init ---
 export function initStorage(): void {

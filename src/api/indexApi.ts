@@ -1,4 +1,4 @@
-import type { IndexSpec } from '../types';
+import type { IndexSpec, IndexHistoryRecord } from '../types';
 import { parseIndexTimestamp } from '../utils/indexQuote';
 
 /**
@@ -149,4 +149,48 @@ export async function fetchMarketIndices(): Promise<Record<string, IndexQuoteRaw
 export async function fetchMarketIndex(spec: IndexSpec): Promise<IndexQuoteRaw | null> {
   const all = await fetchMarketIndices();
   return all[spec.code] ?? null;
+}
+
+// ===== Index History (daily K-line for chart) =====
+const KLINE_URL = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get';
+
+/**
+ * 拉指数的每日 K 线 → 取 [date, close] 对，输出 IndexHistoryRecord[]。
+ *
+ * 端点：`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,{count},qfq`
+ *   - 单 symbol 一次请求（不带其他指数）；
+ *   - 字段 0 = date (YYYY-MM-DD), 1 = open, 2 = close, 3 = high, 4 = low, 5 = volume；
+ *   - `count` 实测最大 2000（≈8 年日线），够个人图表用；
+ *   - `qfq` = 前复权；指数没有分红，影响甚微但加 qfq 保持口径一致；
+ *   - `Access-Control-Allow-Origin: *`，浏览器 fetch 直连；UTF-8（与 qt.gtimg.cn 的 GBK 不同）。
+ *
+ * 失败统一返回 []（不抛）——Modal 自己判空显示"暂无数据"，不用 try-catch。
+ */
+export async function fetchIndexHistory(
+  spec: IndexSpec,
+  days: number = 2000,
+): Promise<IndexHistoryRecord[]> {
+  const url = `${KLINE_URL}?param=${spec.symbol},day,,,${days},qfq&_=${Date.now()}`;
+  try {
+    const resp = await fetch(url, { cache: 'no-store' });
+    if (!resp.ok) {
+      console.error('[indexApi] fetchIndexHistory HTTP', resp.status, spec.symbol);
+      return [];
+    }
+    const data = await resp.json();
+    const rows = data?.data?.[spec.symbol]?.day;
+    if (!Array.isArray(rows)) return [];
+    const out: IndexHistoryRecord[] = [];
+    for (const row of rows) {
+      if (!Array.isArray(row) || row.length < 3) continue;
+      const date = row[0];
+      const close = Number(row[2]);
+      if (typeof date !== 'string' || !Number.isFinite(close)) continue;
+      out.push({ date, value: close });
+    }
+    return out;
+  } catch (err) {
+    console.error('[indexApi] fetchIndexHistory failed for', spec.symbol, err);
+    return [];
+  }
 }
