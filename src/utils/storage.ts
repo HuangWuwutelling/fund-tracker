@@ -202,8 +202,20 @@ export function importAllData(data: ExportData): void {
 // --- Indices cache ---
 // 不参与 export/import 之外的"历史清理"流程（不像 navHistory 会被 importAllData 兜底删除），
 // 是用户能看到的"上次看到什么"快照，导入备份后用备份里的值覆盖即可。
+//
+// 一次性迁移（2026-10）：v1.0 的 fetcher 走 pingzhongdata ETF（sh000300 → 510310 NAV ≈ 4.3 元），
+// v1.1 改用腾讯 qt.gtimg.cn（sh000300 → 真实指数点位 4357+）。如果 cache 里 sh000300 的
+// value 还在 < 100（ETF 形态），说明是旧 cache ——`shouldUpdateIndexQuote` 只看 date 字符串
+// 比较、而新旧的 date 又恰好都是 2026-09-30，会一直拒写到下一个交易日。检测到就清掉，
+// 让 refreshAll 当次拿到的真实点位直接写进去。
 export function getIndices(): Record<string, IndexQuote> {
-  return getItem<Record<string, IndexQuote>>('indices', {});
+  const data = getItem<Record<string, IndexQuote>>('indices', {});
+  const sh000300 = data.sh000300;
+  if (sh000300 && sh000300.value > 0 && sh000300.value < 100) {
+    localStorage.removeItem(key('indices'));
+    return {};
+  }
+  return data;
 }
 
 export function saveIndices(map: Record<string, IndexQuote>): void {
