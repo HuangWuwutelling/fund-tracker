@@ -13,7 +13,7 @@ dayjs.updateLocale('zh-cn', { weekStart: 0 });
 import { useStore } from './stores';
 import type { IndexQuote } from './types';
 import { fetchFundWithHistory } from './api/fundApi';
-import { fetchMarketIndex, INDEX_LIST } from './api/indexApi';
+import { fetchMarketIndices, INDEX_LIST } from './api/indexApi';
 import { shouldUpdateIndexQuote } from './utils/indexQuote';
 import { generateSnapshot } from './utils/snapshot';
 import { lookupNavForDate } from './utils/navLookup';
@@ -141,33 +141,34 @@ export default function App() {
       }
     }
 
-    // --- Index 循环 ---
-    // 共享同一个 500ms 节奏（与基金一致），3 条小数目 ≈ 1.5s 总耗时，对首屏可接受。
+    // --- Index 批量拉取 ---
+    // 腾讯 qt.gtimg.cn 支持 `q=a,b,c` 一次拿 3 条，所以这里只发 1 个 HTTP。
     // 设计决策：index 不接 `hasStale` 闸门（那个闸门判断的是"基金 NAV 是否过时"），
     // 也不接 chineseHolidays（A股休市时美股正常交易，反之亦然）——每个 index 自己判断。
-    for (let j = 0; j < INDEX_LIST.length; j++) {
-      if (refreshGenerationRef.current !== myGen) return; // superseded
-      const spec = INDEX_LIST[j]!;
-      try {
-        const data = await fetchMarketIndex(spec);
+    try {
+      const allData = await fetchMarketIndices();
+      if (refreshGenerationRef.current !== myGen) return;
+      for (const spec of INDEX_LIST) {
         if (refreshGenerationRef.current !== myGen) return;
-        if (!data) continue;
-        // spec 已知 name + market，把 raw 合成 IndexQuote 后再走 cache 闸门
+        const raw = allData[spec.code];
+        if (!raw) continue;
         const cached = useStore.getState().indices[spec.code];
         const newQuote: IndexQuote = {
           name: spec.name,
           market: spec.market,
-          ...data,
+          value: raw.value,
+          change: raw.change,
+          changePercent: raw.changePercent,
+          date: raw.date,
+          time: raw.rawTime,
+          fetchedAt: Date.now(),
         };
         if (shouldUpdateIndexQuote(cached, newQuote)) {
           updateIndex(spec.code, newQuote);
         }
-      } catch (err) {
-        console.error('[App] refreshAll index failed for', spec.secid, err);
       }
-      if (j < INDEX_LIST.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
+    } catch (err) {
+      console.error('[App] refreshAll index batch failed:', err);
     }
 
     if (refreshGenerationRef.current !== myGen) return;

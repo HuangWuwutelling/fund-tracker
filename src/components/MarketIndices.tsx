@@ -12,8 +12,18 @@ function tzLabel(market: Market): string {
 }
 
 /**
- * Dashboard 上的 3 张市场指数卡片。每张显示：名称 + 点位（涨跌色）+ 涨跌额/涨跌幅 +
- * 数据日期（带市场 TZ 前缀）。红涨绿跌（pnlColor）。
+ * Dashboard 上的 3 张市场指数卡片。版式（v2）：
+ *   ┌────────────────────────┐
+ *   │ 📊 沪深300            │
+ *   │                        │
+ *   │  4357.62    ↑+12.41    │
+ *   │             +0.29%     │
+ *   │                        │
+ *   │  09-30 16:14           │
+ *   └────────────────────────┘
+ *
+ * 大字是指数点位（不是 ETF NAV），旁边的箭头 + 涨跌额 + 涨跌幅是右栏；
+ * 下方一行是数据日期 + 时间（带市场 TZ 前缀）。
  *
  * 数据流：完全被动 —— 读 `useStore().indices[spec.code]`，由 App.refreshAll 在后台更新。
  * 组件本身不发请求、不持有副作用。
@@ -28,7 +38,7 @@ export default function MarketIndices() {
     <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
       {INDEX_LIST.map((spec) => {
         const quote = indices[spec.code];
-        // value === 0 也算"没拉到"：push2 在 f43=0 时通常是 "data: null" 的退化形态
+        // value === 0 也算"没拉到"
         const showQuote = quote && quote.value !== 0;
 
         return (
@@ -39,41 +49,51 @@ export default function MarketIndices() {
               </div>
               {showQuote ? (
                 <>
-                  <div
-                    style={{
-                      fontSize: 26,
-                      fontWeight: 700,
-                      lineHeight: 1.2,
-                      fontFamily: 'DIN, "Helvetica Neue", Arial, sans-serif',
-                      color: pnlColor(quote.change),
-                    }}
-                  >
-                    {quote.change > 0 && (
-                      <ArrowUpOutlined style={{ fontSize: 14, marginRight: 4 }} />
-                    )}
-                    {quote.change < 0 && (
-                      <ArrowDownOutlined style={{ fontSize: 14, marginRight: 4 }} />
-                    )}
-                    {quote.value.toLocaleString('en-US', { maximumFractionDigits: 2 })}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: pnlColor(quote.change),
-                      marginTop: 6,
-                    }}
-                  >
-                    {quote.change >= 0 ? '+' : ''}
-                    {quote.change.toFixed(2)}{' '}
-                    ({quote.changePercent >= 0 ? '+' : ''}
-                    {quote.changePercent.toFixed(2)}%)
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+                    <div
+                      style={{
+                        fontSize: 28,
+                        fontWeight: 700,
+                        lineHeight: 1.2,
+                        fontFamily: 'DIN, "Helvetica Neue", Arial, sans-serif',
+                        color: pnlColor(quote.change),
+                      }}
+                    >
+                      {quote.value.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: pnlColor(quote.change),
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'flex-end',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <span style={{ fontWeight: 600 }}>
+                        {quote.change > 0 && (
+                          <ArrowUpOutlined style={{ fontSize: 12, marginRight: 2 }} />
+                        )}
+                        {quote.change < 0 && (
+                          <ArrowDownOutlined style={{ fontSize: 12, marginRight: 2 }} />
+                        )}
+                        {quote.change >= 0 ? '+' : ''}
+                        {quote.change.toFixed(2)}
+                      </span>
+                      <span style={{ fontSize: 11 }}>
+                        ({quote.changePercent >= 0 ? '+' : ''}
+                        {quote.changePercent.toFixed(2)}%)
+                      </span>
+                    </div>
                   </div>
                   <Tooltip
                     title={`本地拉取于 ${dayjs(quote.fetchedAt).format('YYYY-MM-DD HH:mm:ss')}`}
                   >
-                    <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
+                    <div style={{ fontSize: 11, color: '#999', marginTop: 8 }}>
                       {tzLabel(quote.market)}
                       {quote.date.slice(5)}
+                      {quote.time ? ` ${quote.time}` : ''}
                     </div>
                   </Tooltip>
                 </>

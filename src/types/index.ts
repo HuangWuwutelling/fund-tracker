@@ -113,9 +113,10 @@ export type Market = 'CN' | 'US';
 
 /**
  * 单个指数最近一次成功拉取的快照，存进 localStorage 后下次进 app 立刻显示。
- * `date` 是该市场当地的 YYYY-MM-DD（CN = 北京，US = 美东），
- * `fetchedAt` 是本地拉取时间戳 ms —— 仅用于 UI 提示"已更新于 X 分钟前"，
- * 不参与"是不是新数据"的判定（那由 `data.date` 自己说了算，见 utils/indexQuote.ts）。
+ * - `date` 是该市场当地的 YYYY-MM-DD（CN = 北京，US = 美东）；
+ * - `time` 是 API 时间戳里的 HH:mm（数据更新时间，不做 TZ 转换），仅 UI 展示；
+ * - `fetchedAt` 是本地拉取时间戳 ms —— 仅用于 UI 提示"已更新于 X 分钟前"，
+ *   不参与"是不是新数据"的判定（那由 `data.date` 自己说了算，见 utils/indexQuote.ts）。
  */
 export interface IndexQuote {
   name: string;
@@ -124,17 +125,19 @@ export interface IndexQuote {
   change: number;
   changePercent: number;
   date: string;
+  time: string;
   fetchedAt: number;
 }
 
 /**
  * 硬编码的指数清单（v1 不做"用户自定义"）。
- * `code` 是项目内部的稳定代号（也是 localStorage 的 key），
- * `secid` 是 eastmoney push2 的 secid 编码（`{market前缀}.{指数代码}`）。
+ * - `code` 是项目内部的稳定代号（也是 localStorage 的 key）；
+ * - `symbol` 是腾讯 qt.gtimg.cn 的 q= 参数（CN 用 `sh000300` / `sz399006`，
+ *   US 用 `us.NDX` / `us.INX` / `us.DJI`，见 indexApi.ts 注释）。
  */
 export interface IndexSpec {
   code: string;
-  secid: string;
+  symbol: string;
   name: string;
   market: Market;
 }

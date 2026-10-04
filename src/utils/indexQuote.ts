@@ -1,38 +1,46 @@
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc';
-import timezone from 'dayjs/plugin/timezone';
-import type { IndexQuote, Market } from '../types';
-
-// 项目此前未引入 timezone 插件；这里 extend 后全仓库共享。
-dayjs.extend(utc);
-dayjs.extend(timezone);
-
-const MARKET_TZ: Record<Market, string> = {
-  CN: 'Asia/Shanghai',
-  US: 'America/New_York',
-};
+import type { IndexQuote } from '../types';
 
 /**
- * 把 API f86 时间戳（毫秒）格式化成该市场**当地**日历日 YYYY-MM-DD。
+ * 腾讯 qt.gtimg.cn 的时间戳格式两种：
+ *   - CN: `20260930161412` (YYYYMMDDHHmmss 数字串,北京时间)
+ *   - US: `2026-10-02 17:15:59` (带分隔符;具体 TZ 解释有歧义,我们只用日期+时分)
  *
- * CN 用 Asia/Shanghai，US 用 America/New_York。这样同一 timestamp 在两个市场下可以
- * 落在不同的日期上（例如 UTC 2026-10-04 04:00 = 美东 10-04 00:00 = 北京 10-04 12:00），
- * 各自的"数据日期"由该市场开盘日说了算，跟对方无关。
+ * 我们只关心"YYYY-MM-DD"和"HH:mm"两段,**不做时区换算**——理由:
+ *   - CN 的时间戳本身是北京时间,直接剥就行;
+ *   - US 的时间戳 TZ 解释在文档里没有定论(Beijing 还是 ET 都没强证据),
+ *     既然显示里已经有"美东 MM-DD"前缀承担时区说明,这里就只取 HH:mm 给用户看;
+ *     万一解析出来不可信,可以在 IndexQuote 里把 time 改成可选再放宽。
+ *
+ * 失败返回 `{date: '', time: ''}`,由 fetcher 决定是否算 null。
  */
-export function formatIndexDate(timestampMs: number, market: Market): string {
-  return dayjs(timestampMs).tz(MARKET_TZ[market]).format('YYYY-MM-DD');
+export function parseIndexTimestamp(raw: string): { date: string; time: string } {
+  if (!raw) return { date: '', time: '' };
+  // 剥离所有非数字字符,得到 YYYYMMDDHHmmss 这种纯数字串
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 8) return { date: '', time: '' };
+  const yyyy = digits.slice(0, 4);
+  const mm = digits.slice(4, 6);
+  const dd = digits.slice(6, 8);
+  const date = `${yyyy}-${mm}-${dd}`;
+  let time = '';
+  if (digits.length >= 12) {
+    const hh = digits.slice(8, 10);
+    const mi = digits.slice(10, 12);
+    time = `${hh}:${mi}`;
+  }
+  return { date, time };
 }
 
 /**
  * 决定 API 这次返回的数据要不要写进 cache。
  *
- * 规则就是字面的日期比较：`fetched.date > cached.date` 才写。理由（见设计文档 §3）：
+ * 规则就是字面的日期比较:`fetched.date > cached.date` 才写。理由(见设计文档 §3):
  * API 不会给我们"今天是交易日吗 / 该不该刷新"的判定——但**它返回的日期**就是权威——
- * 同一日重复拉说明市场没动（休市 / 周末 / 已收盘），cache 留旧值即可；
- * 日期前进了说明有新数据，写入。
+ * 同一日重复拉说明市场没动(休市 / 周末 / 已收盘),cache 留旧值即可;
+ * 日期前进了说明有新数据,写入。
  *
- * 无 cache 永远 true（首次观测，区别于"已知 cache 但 fetch 拿到旧日期"）。
- * 这里**不**用 `fetchedAt` 参与判定——`fetchedAt` 只是 UI 显示用，不该影响 cache 内容。
+ * 无 cache 永远 true(首次观测,区别于"已知 cache 但 fetch 拿到旧日期")。
+ * 这里**不**用 `fetchedAt` 参与判定——`fetchedAt` 只是 UI 显示用,不该影响 cache 内容。
  */
 export function shouldUpdateIndexQuote(
   cached: IndexQuote | undefined,
