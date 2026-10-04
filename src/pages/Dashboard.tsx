@@ -416,13 +416,13 @@ export default function Dashboard() {
         </Col>
       </Row>
 
+      {/* ===== 市场指数（沪深300 / 创业板 / 中证500 / 纳指100 / 标普500 / 道琼斯） ===== */}
+      <MarketIndices />
+
       {/* ===== 收益日历 ===== */}
       <div style={{ marginTop: 16 }}>
         <ReturnCalendar />
       </div>
-
-      {/* ===== 市场指数（沪深300 / 纳指100 / 标普500） ===== */}
-      <MarketIndices />
 
       {/* ===== 持仓列表（含类型色条 + 表尾合计行） ===== */}
       <Card
