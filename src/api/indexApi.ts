@@ -3,13 +3,20 @@ import { formatIndexDate } from '../utils/indexQuote';
 
 /**
  * v1 硬编码的指数清单。后续要做"用户自定义"再加 UI / 持久化。
- * - secid 是 eastmoney push2 的 secid 编码：`{market 前缀}.{指数代码}`
- * - market 前缀：CN=1., US=100.
+ *
+ * 实现走 pingzhongdata 上的指数跟踪 ETF（push2 quote 接口在 2026-10 之后
+ * 间歇性返回空响应 / ERR_EMPTY_RESPONSE；详见设计文档 §9.1 的 fallback 路径）：
+ * - 510310 = 沪深300ETF 易方达（贴沪深300）
+ * - 513100 = 纳指ETF 国泰（贴纳斯达克100）
+ * - 513500 = 标普500ETF 博时（贴标普500）
+ *
+ * 代价：显示的是 ETF NAV（贴指数但滞后 1 分钟~1 天），而非指数原值。
+ * 优点：和 fundApi.ts 同源 / 同模式，CORS 工作正常。
  */
 export const INDEX_LIST: IndexSpec[] = [
-  { code: 'sh000300', secid: '1.000300', name: '沪深300',     market: 'CN' },
-  { code: 'usNDX',    secid: '100.NDX',  name: '纳斯达克100', market: 'US' },
-  { code: 'usSPX',    secid: '100.SPX',  name: '标普500',     market: 'US' },
+  { code: 'sh000300', secid: '510310', name: '沪深300',     market: 'CN' },
+  { code: 'usNDX',    secid: '513100', name: '纳斯达克100', market: 'US' },
+  { code: 'usSPX',    secid: '513500', name: '标普500',    market: 'US' },
 ];
 
 /**
@@ -26,43 +33,58 @@ export interface IndexQuoteRaw {
 }
 
 const TIMEOUT_MS = 15000;
-const SCRIPT_SRC = 'https://push2.eastmoney.com/api/qt/stock/get';
+const SCRIPT_SRC = 'https://fund.eastmoney.com/pingzhongdata';
 
 /**
- * 注入一段 JSONP `<script>`，cb 回调名每次唯一，避免并发调用互相覆盖。
- * 仿 fundApi.ts 的 loadPingzhongScript：var 全局 set undefined（不是 delete），
- * script.removeChild 摘掉。**唯一差异**：pingzhongdata 用 var 声明固定名字
- * （fS_name 等），push2 是 `?cb=xxx` 把回调名传给服务端，服务端回 `xxx({...})`。
+ * pingzhongdata 设置的 ~25 个 var 全局（与 fundApi.ts loadPingzhongScript
+ * 同名单，独立维护）。cleanup 必须全部 set undefined（不是 delete —— ESM
+ * strict mode 禁止删除 var 声明），否则下一只指数会读到上一只的 stale 值。
  */
-function loadIndexScript(secid: string, cb: string): Promise<unknown> {
+const PINGZHONG_ALL_VARS = [
+  'ishb', 'fS_name', 'fS_code', 'fund_sourceRate', 'fund_Rate', 'fund_minsg',
+  'stockCodes', 'zqCodes', 'stockCodesNew', 'zqCodesNew',
+  'syl_1n', 'syl_6y', 'syl_3y', 'syl_1y',
+  'Data_fundSharesPositions', 'Data_netWorthTrend',
+  'Data_ACWorthTrend', 'Data_grandTotal', 'Data_rateInSimilarType',
+  'Data_rateInSimilarFund', 'Data_performanceEvaluation',
+  'Data_currentFundManager', 'Data_fundSale', 'Data_fundStocks',
+  'Data_fundBond', 'Data_fundManager',
+] as const;
+
+/**
+ * 注入一段 pingzhongdata `<script>`，等 onload 后从 window.Data_netWorthTrend
+ * 读 NAV 历史（`[{x: ms, y: NAV}, ...]`）。
+ */
+function loadIndexScript(fundCode: string): Promise<Array<{ x: number; y: number }>> {
   return new Promise((resolve, reject) => {
     const script = document.createElement('script');
     const w = window as unknown as Record<string, unknown>;
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error(`Index script timeout: ${secid}`));
+      reject(new Error(`Index script timeout: ${fundCode}`));
     }, TIMEOUT_MS);
 
     const cleanup = () => {
       clearTimeout(timeout);
-      try { w[cb] = undefined; } catch { /* ignore */ }
+      for (const key of PINGZHONG_ALL_VARS) {
+        try { w[key] = undefined; } catch { /* ignore */ }
+      }
       if (script.parentNode) script.parentNode.removeChild(script);
     };
 
-    w[cb] = (data: unknown) => { cleanup(); resolve(data); };
+    script.onload = () => {
+      const trend = w['Data_netWorthTrend'] as Array<{ x: number; y: number }> | undefined;
+      cleanup();
+      resolve(trend ?? []);
+    };
 
     script.onerror = () => {
       cleanup();
-      reject(new Error(`Index script load failed: ${secid}`));
+      reject(new Error(`Index script load failed: ${fundCode}`));
     };
 
     // _=Date.now() 强制绕过 CDN / 浏览器缓存，避免开发期被 304 卡住
-    const fields = 'f43,f169,f170,f86';
-    script.src =
-      `${SCRIPT_SRC}?cb=${encodeURIComponent(cb)}` +
-      `&secid=${encodeURIComponent(secid)}` +
-      `&fields=${encodeURIComponent(fields)}` +
-      `&_=${Date.now()}`;
+    script.src = `${SCRIPT_SRC}/${fundCode}.js?_=${Date.now()}`;
     script.setAttribute('charset', 'utf-8');
     script.setAttribute('referrerpolicy', 'no-referrer');
     document.head.appendChild(script);
@@ -70,40 +92,38 @@ function loadIndexScript(secid: string, cb: string): Promise<unknown> {
 }
 
 /**
- * 拉一个指数的当前行情。失败统一返回 null（不抛）——App.tsx 的循环靠 null
- * 判断"是否要更新 cache"，抛错会让循环中断、影响后续指数。
+ * 拉一个指数的当前行情（走跟踪 ETF 的 NAV 路径）。失败统一返回 null（不抛）
+ * ——App.tsx 的循环靠 null 判断"是否要更新 cache"，抛错会让循环中断、
+ * 影响后续指数。
  *
- * 字段映射：
- * - f43: 当前点位
- * - f169: 涨跌额
- * - f170: 涨跌幅 (%)
- * - f86: 时间戳 ms
+ * 字段来源（Data_netWorthTrend 数组最后 2 条）：
+ * - value:  最新一条 NAV（已 = 原生单位，不需 ÷100）
+ * - change: (最新 NAV) - (上一条 NAV)
+ * - changePercent: change / 上一条 NAV × 100
+ * - date:   formatIndexDate(last.x ms, market)
  *
- * 失败 case：网络断 / `<script>` 注入失败 / 返回 `{ data: null }`（基金代码错或退市）/
- * `f86` 缺失或 0。统一 null 返回，让调用方静默保留旧 cache。
+ * 失败 case：网络断 / `<script>` 注入失败 / trend 为空 / trend 长度 < 2 /
+ * last.x 缺失或 ≤0。统一 null 返回，让调用方静默保留旧 cache。
  */
 export async function fetchMarketIndex(spec: IndexSpec): Promise<IndexQuoteRaw | null> {
-  // 每次唯一回调名 —— push2 不像 pingzhongdata 用固定 var 名，必须避免并发覆盖。
-  const cb = `__idxCb_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   try {
-    const resp = await loadIndexScript(spec.secid, cb);
-    // 响应形如 { rc, rt, svr, lt, full, dlmkts, data: { f43, ..., f86 } | null }
-    const data = (resp as { data?: Record<string, number> | null } | null)?.data;
-    if (!data) return null;
+    const trend = await loadIndexScript(spec.secid);
+    if (trend.length < 2) return null;
 
-    // eastmoney push2 字段缩放约定（实测 + curl 验证）：
-    // - f86 是 **秒**（不是毫秒）—— 直接给 dayjs 当 ms 会算成 1970-01-XX
-    // - f43 / f169 是"× 100 原始"（即 435762 = 4357.62）—— 必须除以 100
-    // - f170 是"1/100 百分点"（即 29 = 0.29%）—— 除以 100 后用百分比显示
-    // 转换放在 API 边界，UI 层只看到人类可读的数字。
-    const tsSec = data.f86;
-    if (typeof tsSec !== 'number' || tsSec <= 0) return null;
-    const tsMs = tsSec * 1000;
+    const last = trend[trend.length - 1];
+    const prev = trend[trend.length - 2];
+    if (!last || !prev) return null;
+
+    const tsMs = last.x;
+    if (typeof tsMs !== 'number' || tsMs <= 0) return null;
+
+    const change = last.y - prev.y;
+    const changePercent = prev.y !== 0 ? (change / prev.y) * 100 : 0;
 
     return {
-      value: (data.f43 ?? 0) / 100,
-      change: (data.f169 ?? 0) / 100,
-      changePercent: (data.f170 ?? 0) / 100,
+      value: last.y,
+      change,
+      changePercent,
       date: formatIndexDate(tsMs, spec.market),
       fetchedAt: Date.now(),
     };
