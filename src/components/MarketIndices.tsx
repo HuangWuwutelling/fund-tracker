@@ -5,12 +5,26 @@ import dayjs from 'dayjs';
 import { useStore } from '../stores';
 import { INDEX_LIST } from '../api/indexApi';
 import { pnlColor } from '../utils/formatter';
+import { etToBeijing } from '../utils/indexQuote';
 import type { Market } from '../types';
 import IndexHistoryModal from './IndexHistoryModal';
 
 /** US 指数的日期前缀，明示"这是美东时区"——避免用户混淆美东 10-04 与北京 10-04 */
 function tzLabel(market: Market): string {
   return market === 'US' ? '美东 ' : '';
+}
+
+/**
+ * US 指数的日期行："美东 MM-DD HH:mm (北京 MM-DD HH:mm)"
+ * 转换走 etToBeijing()，DST 期间 +12h，标准时期间 +13h。
+ */
+function usDateLine(date: string, time: string): string {
+  if (!date) return '';
+  const etLine = `${date.slice(5)}${time ? ` ${time}` : ''}`;
+  if (!time) return `美东 ${etLine}`;
+  const bj = etToBeijing(date, time);
+  const bjLine = `${bj.date.slice(5)} ${bj.time}`;
+  return `美东 ${etLine}（北京 ${bjLine}）`;
 }
 
 /**
@@ -108,9 +122,9 @@ export default function MarketIndices() {
                       title={`本地拉取于 ${dayjs(quote.fetchedAt).format('YYYY-MM-DD HH:mm:ss')}`}
                     >
                       <div style={{ fontSize: 11, color: '#999', marginTop: 8 }}>
-                        {tzLabel(quote.market)}
-                        {quote.date.slice(5)}
-                        {quote.time ? ` ${quote.time}` : ''}
+                        {quote.market === 'US'
+                          ? usDateLine(quote.date, quote.time)
+                          : `${tzLabel(quote.market)}${quote.date.slice(5)}${quote.time ? ` ${quote.time}` : ''}`}
                       </div>
                     </Tooltip>
                   </>

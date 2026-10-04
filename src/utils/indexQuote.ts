@@ -49,3 +49,85 @@ export function shouldUpdateIndexQuote(
   if (!cached) return true;
   return fetched.date > cached.date;
 }
+
+/**
+ * 判断某个 ET 日期是否在美国夏令时区间内。
+ *
+ * 美国 DST 规则:3 月第二个周日 02:00 ET → 11 月第一个周日 02:00 ET。
+ * 区间内 ET = UTC-4(EDT),区间外 ET = UTC-5(EST)。
+ *
+ * 实现说明:用 Date.UTC 算"3 月第 2 个周日"和"11 月第 1 个周日"的具体日期,
+ * 然后只比较 YYYYMMDD 整数——这样判断**不依赖**运行时的浏览器 TZ,
+ * 在任何时区下都一致。
+ */
+function isETDST(yyyy: number, mm: number, dd: number): boolean {
+  const dstStart = nthSundayOfMonthUTC(yyyy, 2, 2); // 3 月第 2 个周日
+  const dstEnd = nthSundayOfMonthUTC(yyyy, 10, 1); // 11 月第 1 个周日
+
+  const dateNum = yyyy * 10000 + mm * 100 + dd;
+  const startNum =
+    dstStart.getUTCFullYear() * 10000 +
+    (dstStart.getUTCMonth() + 1) * 100 +
+    dstStart.getUTCDate();
+  const endNum =
+    dstEnd.getUTCFullYear() * 10000 +
+    (dstEnd.getUTCMonth() + 1) * 100 +
+    dstEnd.getUTCDate();
+
+  return dateNum >= startNum && dateNum < endNum;
+}
+
+function nthSundayOfMonthUTC(year: number, month: number, n: number): Date {
+  const first = new Date(Date.UTC(year, month, 1));
+  // getUTCDay: 0 = 周日
+  const dayOfWeek = first.getUTCDay();
+  const firstSundayDay = 1 + (7 - dayOfWeek) % 7;
+  return new Date(Date.UTC(year, month, firstSundayDay + (n - 1) * 7));
+}
+
+/**
+ * 把 ET(美东)日期 + 时间转成对应的北京时间(UTC+8)。
+ *
+ * 转换关系:
+ *   - DST 期间(EDT,UTC-4):北京 = ET + 12 小时
+ *   - 标准时期间(EST,UTC-5):北京 = ET + 13 小时
+ *
+ * 实现要点:把 ET(date, time) 当作"假 UTC"喂给 Date.UTC(),加上偏移后
+ * 再用 UTC 方法读回,这样**完全不依赖运行时 TZ**,在任何地区跑结果都一样。
+ *
+ * 例如:`2026-10-02 17:15`(DST,EDT)→ 北京 `2026-10-03 05:15`。
+ *
+ * 失败时(空 / 解析不出来)返回 `{date: '', time: ''}`,由 UI 决定是否显示。
+ */
+export function etToBeijing(
+  etDate: string,
+  etTime: string,
+): { date: string; time: string } {
+  if (!etDate || !etTime) return { date: '', time: '' };
+
+  const dateParts = etDate.split('-').map(Number);
+  const timeParts = etTime.split(':').map(Number);
+  if (
+    dateParts.length !== 3 ||
+    dateParts.some((n) => !Number.isFinite(n)) ||
+    timeParts.length < 2 ||
+    timeParts.some((n) => !Number.isFinite(n))
+  ) {
+    return { date: '', time: '' };
+  }
+
+  const yyyy = dateParts[0]!;
+  const mm = dateParts[1]!;
+  const dd = dateParts[2]!;
+  const hh = timeParts[0]!;
+  const mi = timeParts[1]!;
+
+  const offsetHours = isETDST(yyyy, mm, dd) ? 12 : 13;
+  const fakeEtAsUtcMs = Date.UTC(yyyy, mm - 1, dd, hh, mi);
+  const fakeBjtAsUtcMs = fakeEtAsUtcMs + offsetHours * 3600 * 1000;
+  const bj = new Date(fakeBjtAsUtcMs);
+
+  const date = `${bj.getUTCFullYear()}-${String(bj.getUTCMonth() + 1).padStart(2, '0')}-${String(bj.getUTCDate()).padStart(2, '0')}`;
+  const time = `${String(bj.getUTCHours()).padStart(2, '0')}:${String(bj.getUTCMinutes()).padStart(2, '0')}`;
+  return { date, time };
+}
