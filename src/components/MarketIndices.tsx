@@ -42,7 +42,7 @@ export default function MarketIndices() {
         const showQuote = quote && quote.value !== 0;
 
         return (
-          <Col xs={24} sm={8} key={spec.code}>
+          <Col xs={24} sm={12} md={8} key={spec.code}>
             <Card size="small" hoverable>
               <div style={{ color: '#666', fontSize: 13, marginBottom: 6 }}>
                 📊 {spec.name}
