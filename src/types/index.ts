@@ -107,3 +107,34 @@ export const FREQUENCY_LABELS: Record<DcaPlan['frequency'], string> = {
   biweekly: '双周',
   monthly: '每月',
 };
+
+/** 指数所在市场的本地时区分类。决定数据日期格式化与 TZ 显示标签。 */
+export type Market = 'CN' | 'US';
+
+/**
+ * 单个指数最近一次成功拉取的快照，存进 localStorage 后下次进 app 立刻显示。
+ * `date` 是该市场当地的 YYYY-MM-DD（CN = 北京，US = 美东），
+ * `fetchedAt` 是本地拉取时间戳 ms —— 仅用于 UI 提示"已更新于 X 分钟前"，
+ * 不参与"是不是新数据"的判定（那由 `data.date` 自己说了算，见 utils/indexQuote.ts）。
+ */
+export interface IndexQuote {
+  name: string;
+  market: Market;
+  value: number;
+  change: number;
+  changePercent: number;
+  date: string;
+  fetchedAt: number;
+}
+
+/**
+ * 硬编码的指数清单（v1 不做"用户自定义"）。
+ * `code` 是项目内部的稳定代号（也是 localStorage 的 key），
+ * `secid` 是 eastmoney push2 的 secid 编码（`{market前缀}.{指数代码}`）。
+ */
+export interface IndexSpec {
+  code: string;
+  secid: string;
+  name: string;
+  market: Market;
+}
