@@ -250,7 +250,10 @@ export default function App() {
         },
       }}
     >
-      <BrowserRouter basename="/fund-tracker">
+      <BrowserRouter
+        basename="/fund-tracker"
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
         <Routes>
           <Route element={<AppLayout />}>
             <Route path="/" element={<Dashboard />} />
