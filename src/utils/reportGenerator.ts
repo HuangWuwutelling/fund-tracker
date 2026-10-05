@@ -453,44 +453,6 @@ function calcWeightedPortfolioValueInRange(
   return countedDays > 0 ? sumDailyValue / countedDays : 0;
 }
 
-function calcFundPerformanceInRange(
-  fund: Fund,
-  transactions: Transaction[],
-  startDate: string,
-  endDate: string
-): FundPerformance {
-  // 只看已确认交易——pending 买入尚未成交，不计入持仓份额也不计入本期投入
-  const confirmed = onlyConfirmed(transactions);
-  const txBeforeStart = confirmed.filter((t) => t.fundId === fund.id && t.date < startDate);
-  const txBeforeEnd = confirmed.filter((t) => t.fundId === fund.id && t.date <= endDate);
-
-  const sharesStart = calcShares(txBeforeStart);
-  const sharesEnd = calcShares(txBeforeEnd);
-
-  const navStart = lookupNavForDate(fund.id, startDate);
-  const navEnd = lookupNavForDate(fund.id, endDate);
-
-  // 拿不到期初或期末净值，无法计算区间收益
-  if (!navStart || !navEnd) {
-    return { fundId: fund.id, fundName: fund.name, returnAmount: 0, returnRate: 0 };
-  }
-
-  const valueStart = sharesStart * navStart.nav;
-  const valueEnd = sharesEnd * navEnd.nav;
-
-  // fee 内扣：用户的总付出/总收入就是 tx.amount（不再额外加/减 fee，否则重复计算）
-  const buyInRange = confirmed
-    .filter((t) => t.fundId === fund.id && t.type === 'buy' && t.date >= startDate && t.date <= endDate)
-    .reduce((sum, t) => sum + t.amount, 0);
-  const sellInRange = confirmed
-    .filter((t) => t.fundId === fund.id && t.type === 'sell' && t.date >= startDate && t.date <= endDate)
-    .reduce((sum, t) => sum + (t.amount - t.fee), 0);
-
-  const returnAmount = valueEnd - valueStart - buyInRange + sellInRange;
-  const returnRate = valueStart > 0 ? (returnAmount / valueStart) * 100 : 0;
-  return { fundId: fund.id, fundName: fund.name, returnAmount, returnRate };
-}
-
 export function generateWeeklyReport(
   date: Date,
   funds: Fund[],
@@ -500,11 +462,14 @@ export function generateWeeklyReport(
 ): WeeklyReport {
   const [weekStart, weekEnd] = getWeekRange(date);
 
-  // 用"期初持仓×期初净值"和"期末持仓×期末净值"算总市值——比 snapshot 更可靠：
-  //   1) 没有期初快照时 startValue 不会是 0（不再把本金算成收益）
-  //   2) 净值用真实历史数据，能正确反映期内涨跌
-  const startValue = calcPortfolioValueAtDate(weekStart, funds, transactions);
-  const endValue = calcPortfolioValueAtDate(weekEnd, funds, transactions);
+  // **WC 算法**：聚合自 generateDailyReturns 的周内日格（portfolio + 每基金），
+  // 保证 totalReturn = sum(weekDailies.totalReturn) = sum(weekDailies.perFund[*].returnAmount)
+  //   即 cashDelta = shares×NAV_end - shares×NAV_start - buyCashOut + (sellCashIn + cashDiv) - fee
+  // 与 portfolio 日历（generateMonthlyReturns 周聚合）口径完全一致——"日 vs 周/月/年算法分叉"消除。
+  // 旧 `endValue - startValue - buy + sell` 公式漏现金分红且把卖出视为投资回报，导致与日历对不上。
+  const allDailies = generateDailyReturns(funds, transactions);
+  const weekDailies = allDailies.filter((d) => d.date >= weekStart && d.date <= weekEnd);
+  const totalReturn = weekDailies.reduce((sum, d) => sum + d.totalReturn, 0);
 
   // 区间内交易只看已确认的——pending 买入尚未成交，不计入本期投入/笔数
   const weekTxs = onlyConfirmed(transactions).filter((t) => t.date >= weekStart && t.date <= weekEnd);
@@ -512,18 +477,32 @@ export function generateWeeklyReport(
   const sellCount = weekTxs.filter((t) => t.type === 'sell').length;
   const dividendCount = weekTxs.filter((t) => t.type === 'dividend').length;
 
-  const buyTotal = weekTxs
-    .filter((t) => t.type === 'buy')
-    .reduce((sum, t) => sum + t.amount, 0);
-  const sellTotal = weekTxs
-    .filter((t) => t.type === 'sell')
-    .reduce((sum, t) => sum + (t.amount - t.fee), 0);
+  // 周 returnRate：分母用"资金加权持仓市值"（同 generateMonthlyReturns 的口径），
+  // 解决"周中买入的份额贡献收益但分母未含买入资金"导致的 returnRate 偏高
+  const confirmed = onlyConfirmed(transactions);
+  const sharesTimeline = buildSharesTimeline(funds, confirmed);
+  const weightedValue = calcWeightedPortfolioValueInRange(weekStart, weekEnd, funds, sharesTimeline);
+  const returnRate = weightedValue > 0 ? (totalReturn / weightedValue) * 100 : 0;
 
-  const totalReturn = endValue - startValue - buyTotal + sellTotal;
-  const returnRate = startValue > 0 ? (totalReturn / startValue) * 100 : 0;
-
+  // 每只基金：从 weekDailies.perFund 聚合 returnAmount，returnRate 用 startValue 做分母
+  // （与 generateMonthlyReport 行为对齐，便于跨函数排序）
+  const periodPerFundByFund = new Map<string, number>();
+  for (const d of weekDailies) {
+    for (const pf of d.perFund) {
+      periodPerFundByFund.set(pf.fundId, (periodPerFundByFund.get(pf.fundId) ?? 0) + pf.returnAmount);
+    }
+  }
   const fundRankings = funds
-    .map((f) => calcFundPerformanceInRange(f, transactions, weekStart, weekEnd))
+    .map((f) => {
+      const returnAmount = periodPerFundByFund.get(f.id) ?? 0;
+      const startValue = calcPortfolioValueAtDate(weekStart, [f], transactions);
+      return {
+        fundId: f.id,
+        fundName: f.name,
+        returnAmount,
+        returnRate: startValue > 0 ? (returnAmount / startValue) * 100 : 0,
+      };
+    })
     .sort((a, b) => b.returnRate - a.returnRate);
 
   // DCA: count expected vs actual for active plans
@@ -634,33 +613,46 @@ export function generateMonthlyReport(
     .filter((s) => s.date >= monthStart && s.date <= monthEnd)
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  // 用"期初持仓×期初净值"和"期末持仓×期末净值"算总市值
-  const startValue = calcPortfolioValueAtDate(monthStart, funds, transactions);
-  const endValue = calcPortfolioValueAtDate(monthEnd, funds, transactions);
+  // **WC 算法**：聚合自 generateDailyReturns 的月内日格（portfolio + 每基金），
+  // 与 portfolio 日历（generateMonthlyReturns）口径完全一致——"日 vs 月报算法分叉"消除。
+  // 旧 `endValue - startValue - buy + sell` 漏现金分红（Aug 6.66 仅 ¥200 而已、
+  // Sep 漏 14.95 + 卖出视为投资回报导致符号反转到 -448.75）。
+  const allDailies = generateDailyReturns(funds, transactions);
+  const monthDailies = allDailies.filter((d) => d.date >= monthStart && d.date <= monthEnd);
+  const totalReturn = monthDailies.reduce((sum, d) => sum + d.totalReturn, 0);
 
-  // 区间内交易只看已确认的——pending 买入尚未成交，不计入本期投入
-  const monthTxs = onlyConfirmed(transactions).filter((t) => t.date >= monthStart && t.date <= monthEnd);
-  const buyTotal = monthTxs
-    .filter((t) => t.type === 'buy')
-    .reduce((sum, t) => sum + t.amount, 0);
-  const sellTotal = monthTxs
-    .filter((t) => t.type === 'sell')
-    .reduce((sum, t) => sum + (t.amount - t.fee), 0);
+  // 月 returnRate：分母用"资金加权持仓市值"（同 generateMonthlyReturns 口径）
+  const confirmed = onlyConfirmed(transactions);
+  const sharesTimeline = buildSharesTimeline(funds, confirmed);
+  const weightedValue = calcWeightedPortfolioValueInRange(monthStart, monthEnd, funds, sharesTimeline);
+  const returnRate = weightedValue > 0 ? (totalReturn / weightedValue) * 100 : 0;
 
-  const totalReturn = endValue - startValue - buyTotal + sellTotal;
-  const returnRate = startValue > 0 ? (totalReturn / startValue) * 100 : 0;
-
-  // 每只基金算一次，Map 缓存供下面三处复用
-  const perfByFund = new Map<string, FundPerformance>();
-  for (const f of funds) {
-    perfByFund.set(f.id, calcFundPerformanceInRange(f, transactions, monthStart, monthEnd));
+  // 每只基金：从 monthDailies.perFund 聚合 returnAmount，returnRate 用 startValue 做分母
+  const periodPerFundByFund = new Map<string, number>();
+  for (const d of monthDailies) {
+    for (const pf of d.perFund) {
+      periodPerFundByFund.set(pf.fundId, (periodPerFundByFund.get(pf.fundId) ?? 0) + pf.returnAmount);
+    }
   }
 
-  // Per-platform contribution
+  const fundRankings = funds
+    .map((f) => {
+      const returnAmount = periodPerFundByFund.get(f.id) ?? 0;
+      const startValue = calcPortfolioValueAtDate(monthStart, [f], transactions);
+      return {
+        fundId: f.id,
+        fundName: f.name,
+        returnAmount,
+        returnRate: startValue > 0 ? (returnAmount / startValue) * 100 : 0,
+      };
+    })
+    .sort((a, b) => b.returnRate - a.returnRate);
+
+  // Per-platform contribution: 平台内所有基金的 returnAmount 之和（WC）
   const platformContributions = platforms.map((p) => {
     const platformFunds = funds.filter((f) => f.platformId === p.id);
     const returnAmount = platformFunds.reduce(
-      (sum, f) => sum + (perfByFund.get(f.id)?.returnAmount ?? 0),
+      (sum, f) => sum + (periodPerFundByFund.get(f.id) ?? 0),
       0
     );
     return { name: p.name, returnAmount };
@@ -671,14 +663,11 @@ export function generateMonthlyReport(
   const typeContributions = types.map((type) => {
     const typeFunds = funds.filter((f) => f.type === type);
     const returnAmount = typeFunds.reduce(
-      (sum, f) => sum + (perfByFund.get(f.id)?.returnAmount ?? 0),
+      (sum, f) => sum + (periodPerFundByFund.get(f.id) ?? 0),
       0
     );
     return { type: FUND_TYPE_LABELS[type], returnAmount };
   });
-
-  // Fund rankings
-  const fundRankings = Array.from(perfByFund.values()).sort((a, b) => b.returnRate - a.returnRate);
 
   const bestFund = fundRankings[0] ?? null;
   const worstFund = fundRankings[fundRankings.length - 1] ?? null;
