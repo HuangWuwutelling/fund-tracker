@@ -20,7 +20,7 @@ type Granularity = 'day' | 'month' | 'year';
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
 
 /** PeriodDetail 共用：选中格子的 per-fund 明细表（三 Tab 复用） */
-interface PeriodDetailRow {
+export interface PeriodDetailRow {
   fundId: string;
   fundName: string;
   returnAmount: number;
@@ -36,7 +36,7 @@ interface PeriodDetailProps {
   perFund: PeriodDetailRow[];
 }
 
-function PeriodDetail({ dateLabel, total, perFund }: PeriodDetailProps) {
+export function PeriodDetail({ dateLabel, total, perFund }: PeriodDetailProps) {
   const navigate = useNavigate();
   return (
     <div style={{ marginTop: 16 }}>
@@ -94,7 +94,7 @@ function PeriodDetail({ dateLabel, total, perFund }: PeriodDetailProps) {
 }
 
 /** 日 Tab：月内日格子（1 个月，~30 格） */
-function DayView({
+export function DayView({
   dailyReturns,
   firstTxDate,
   selectedKey,
@@ -252,7 +252,7 @@ function DayView({
 }
 
 /** 月 Tab：12 个月格子（一年视图） */
-function MonthView({
+export function MonthView({
   monthlyReturns,
   year,
   minYear,
@@ -353,7 +353,7 @@ function MonthView({
 }
 
 /** 年 Tab：自首笔交易年起所有年份格子（单行，无分页） */
-function YearView({
+export function YearView({
   yearlyReturns,
   selectedKey,
   onSelect,

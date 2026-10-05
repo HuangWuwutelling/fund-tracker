@@ -14,6 +14,7 @@ import { calcFundSummary, calcSharesFromAmount, calcShares, calcCost, onlyConfir
 import { pnlColor, formatDate, formatMoney, formatPercent } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
 import InitialPositionModal from '../components/InitialPositionModal';
+import FundReturnCalendar from '../components/FundReturnCalendar';
 import { FUND_TYPE_LABELS, FUND_TYPE_COLORS, TRANSACTION_TYPE_LABELS, TX_TYPE_COLORS, FREQUENCY_LABELS, LATEST_NAV_PNL_LABEL } from '../types';
 import type { Transaction, DcaPlan, Fund } from '../types';
 
@@ -523,6 +524,8 @@ export default function FundDetail() {
           </Card>
         </Col>
       </Row>
+
+      <FundReturnCalendar fund={fundRef} transactions={transactions} />
 
       <Card
         title="净值走势"

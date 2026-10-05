@@ -1,5 +1,5 @@
 import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform, NavRecord } from '../types';
-import { calcShares, calcLatestNavPnl, calcDailyPnlBySegments, onlyConfirmed, isInPlanWindow } from './calculator';
+import { calcShares, onlyConfirmed, isInPlanWindow } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
 import { countTradingDays, lookupNavForDate } from './navLookup';
 import { getNavHistory } from './storage';
@@ -7,6 +7,171 @@ import { today } from './formatter';
 import { usableNavSeries } from './navPair';
 import { isNonTradingDay } from './chineseHolidays';
 import dayjs from 'dayjs';
+
+/**
+ * Test seam：单测里通过 `__setNavHistoryForTest(() => records)` 注入 NAV 历史，
+ * 避免 vitest node 环境里 localStorage stub 的麻烦。
+ * 设为 `null` 恢复走真实 `getNavHistory`。
+ *
+ * 设计动机：vitest 跑在 node 环境（见 vite.config.ts），`localStorage` 不存在；
+ * `getNavHistory` 直接读 localStorage，会抛 ReferenceError。让测试走真实路径
+ * 需要 jsdom + 全套存储 stub，反而更脆——纯函数的 wealth-change 算法不依赖
+ * 任何存储副作用。
+ */
+let _navHistoryOverride: ((fundCode: string) => NavRecord[]) | null = null;
+export function __setNavHistoryForTest(fn: ((code: string) => NavRecord[]) | null) {
+  _navHistoryOverride = fn;
+}
+
+/** 内部用：测试 seam 优先，否则走真实 storage。供 reportGenerator 内函数复用 */
+function getNavHistoryOverrideable(fundCode: string): NavRecord[] {
+  return _navHistoryOverride ? _navHistoryOverride(fundCode) : getNavHistory(fundCode);
+}
+
+/**
+ * 单只基金的每日收益序列（wealth-change 算法）。
+ *
+ * 算法核心：
+ *   cumulativeReturn(D) = shares(D) × NAV(D)
+ *                       − Σ buy.amount(D)
+ *                       + Σ (sell.amount − sell.fee)(D)
+ *                       + Σ cashDividend.amount(D)
+ *
+ *   dailyReturn(D) = cumulativeReturn(D) − cumulativeReturn(prevMeaningfulDate)
+ *
+ * 与"前一个有意义日"的差值是该日收益；非有意义日 / 非交易日 prevCum 不前进。
+ *
+ * **关键不变量**：
+ *   - 月格 = 当月日格之和；年格 = 当年日格之和。portfolio 月/年格 = 各基金月/年格之和。
+ *     三种粒度构造上严格相等，无需额外"凑对账"逻辑。
+ *   - 单基金日历（FundDetail）和组合日历（Dashboard）走同一函数同一个 cumReturn 时间线，
+ *     单基金日格 = 组合日格里这只基金的子集。
+ *
+ * **现金分红 vs 红利再投资**：两种语义在数据模型上不互斥，按字段独立累加：
+ *   - `tx.amount > 0` → 现金分红：`totalCashDiv += tx.amount`
+ *   - `tx.shares > 0` → 红利再投资：`shares += tx.shares`
+ *
+ * **今日格**：与历史格同一形状，`navDate` 取的是这只基金最新已发布 NAV 的归属日
+ * （QDII 常落后 1 个交易日）；持仓基金无任何可用 NAV 时标 `noNav: true`。
+ *
+ * **非交易日**：历史日跳过周末 / 法定节假日（由 `isNonTradingDay` 判定），
+ * 今天格若今天是交易日则强制包含；若今天是非交易日，则按历史日规则跳过（与
+ * `generateDailyReturns` 历史格一致）。
+ */
+export function generateFundDailyReturns(
+  fund: Fund,
+  transactions: Transaction[],
+  todayStr: string = today(),
+): DailyReturn[] {
+  // 1. 只看已确认 + 当前基金；按日期升序
+  const confirmed = onlyConfirmed(transactions.filter((t) => t.fundId === fund.id));
+  const usable = usableNavSeries(fund, getNavHistoryOverrideable(fund.id));
+  if (usable.length === 0 && confirmed.length === 0) return [];
+
+  // 2. 有意义日 = NAV 发布日 ∪ 交易确认日
+  const meaningful = new Set<string>();
+  for (const n of usable) meaningful.add(n.date);
+  for (const tx of confirmed) meaningful.add(tx.date);
+
+  // 3. 按日 NAV 查找表（升序的 usable 已是升序）
+  const usableByDate = new Map(usable.map((n) => [n.date, n] as const));
+
+  // 4. 遍历升序有意义日，累积 shares / totalBuy / totalSellNet / totalCashDiv，
+  //    在每个有 NAV 的日期记下 cumReturn
+  const sortedMeaningful = Array.from(meaningful).sort();
+  const cumByDate = new Map<string, number>();
+  let totalBuy = 0;
+  let totalSellNet = 0;
+  let totalCashDiv = 0;
+  let shares = 0;
+  const sortedTxs = [...confirmed].sort((a, b) => a.date.localeCompare(b.date));
+  let txIdx = 0;
+
+  for (const date of sortedMeaningful) {
+    // 把 date 之前（含）的所有交易应用进状态
+    while (txIdx < sortedTxs.length && sortedTxs[txIdx]!.date <= date) {
+      const tx = sortedTxs[txIdx]!;
+      if (tx.type === 'buy') {
+        shares += tx.shares;
+        totalBuy += tx.amount;
+      } else if (tx.type === 'sell') {
+        shares -= tx.shares;
+        totalSellNet += tx.amount - tx.fee;
+      } else if (tx.type === 'dividend') {
+        // 现金分红与红利再投资独立：amount > 0 视为现金；shares > 0 视为再投
+        if (tx.amount > 0) totalCashDiv += tx.amount;
+        if (tx.shares > 0) shares += tx.shares;
+      }
+      txIdx++;
+    }
+    const navRecord = usableByDate.get(date);
+    if (navRecord) {
+      cumByDate.set(
+        date,
+        shares * navRecord.nav - totalBuy + totalSellNet + totalCashDiv,
+      );
+    }
+  }
+
+  // 5. 走 [firstDate, todayStr] 的自然日序列，发射 DailyReturn
+  const firstDate = sortedMeaningful[0]!;
+  const out: DailyReturn[] = [];
+  let prevCum = 0;
+
+  for (
+    let cursor = dayjs(firstDate);
+    cursor.format('YYYY-MM-DD') <= todayStr;
+    cursor = cursor.add(1, 'day')
+  ) {
+    const date = cursor.format('YYYY-MM-DD');
+    const isToday = date === todayStr;
+
+    // 历史日：跳过周末 / 法定节假日；今天格若今天是非交易日也跳过
+    // （与 generateDailyReturns 历史格口径一致）
+    if (!isToday && isNonTradingDay(date)) continue;
+    if (isToday && isNonTradingDay(todayStr)) continue;
+
+    const cumToday = cumByDate.get(date) ?? prevCum;
+    const dailyReturn = cumToday - prevCum;
+
+    // navDate：cumByDate 命中说明今天/这一天有 NAV 落地，navDate = 这天；
+    // 否则（仅在 today 格可能命中）取最新已发布 NAV 的归属日。
+    let navDate = '';
+    if (cumByDate.has(date)) {
+      navDate = date;
+    } else if (isToday) {
+      const last = usable.length > 0 ? usable[usable.length - 1]! : null;
+      navDate = last?.date ?? '';
+    }
+
+    const last = usable.length > 0 ? usable[usable.length - 1]! : null;
+    const hasUsableNav = !!last;
+    const hasPosition = shares > 0;
+
+    out.push({
+      date,
+      totalReturn: dailyReturn,
+      perFund: [
+        {
+          fundId: fund.id,
+          fundName: fund.name,
+          returnAmount: dailyReturn,
+          navDate,
+          noNav: isToday && hasPosition && !hasUsableNav,
+        },
+      ],
+    });
+    prevCum = cumToday;
+  }
+
+  // 6. 今天格 isPending 传播：与 generateDailyReturns 旧 today 格一致
+  const todayEntry = out[out.length - 1];
+  if (todayEntry && todayEntry.date === todayStr) {
+    const pf = todayEntry.perFund[0]!;
+    todayEntry.isPending = pf.noNav === true;
+  }
+  return out;
+}
 
 export interface FundPerformance {
   fundId: string;
@@ -113,57 +278,6 @@ export interface DailyReturn {
   isPending?: boolean;
 }
 
-interface Attribution {
-  fund: Fund;
-  curr: NavRecord;
-  prev: NavRecord;
-}
-
-/**
- * 预计算每只基金的"相邻 NAV 变化"及其归属日：
- * 对每对相邻 NAV（prev → curr），把 (curr.nav - prev.nav) 的收益归属到 navDate = curr.date
- * （与 A 股同口径：QDII 9/1 NAV 涨跌归到 9/1 这一天）。
- *
- * 注意：「历史格归属日 = navDate」与 Dashboard 顶部「最新净值日盈亏」是两个不同的概念：
- *   - 历史格：用户回看某天（9/1），QDII 用 9/1 真实 NAV − 8/29 NAV
- *   - 最新净值日盈亏：取该基金最新一对已发布 NAV（见 utils/navPair.ts），
- *     用 NAV 自己的日期标注，不假设任何发布延迟
- *
- * 历史格与 A 股同口径：只看该归属日在 attributionMap 里有没有 attr，
- * 有就用、没有则该基金当天涨跌为 0。**不判定发布日**，历史格没有 pending 态。
- *
- * 返回嵌套 Map<归属日, Map<fundId, Attribution>>，按 fundId O(1) 查找，
- * 替代之前的 Map<date, Attribution[]> + 内层 .find()（O(M) 每格）。
- */
-function buildAttributionMap(funds: Fund[]): Map<string, Map<string, Attribution>> {
-  const map = new Map<string, Map<string, Attribution>>();
-  for (const fund of funds) {
-    // 可用性规则（含美股节假日复制 NAV 的剔除）统一收敛在 usableNavSeries，
-    // 与 latestNavPair 共用同一份判断，避免"日历不算、卡片算"的口径分叉。
-    //
-    // QDII 的「复制 NAV」条目（基金公司从上一交易日复制 NAV 填充，如 9/7 美股劳工节）
-    // 剔除后，9/8 attribution 自动跳到 prev=9/4 的真实涨跌；9/7 不在 attribution map 中
-    // → perFund 里 QDII 不计入（A 股 / 债仍正常显示）。
-    // A 股 / 港股通（type='index'）不动 —— US 假日与它们无关。
-    // 不在 fundApi.ts ingestion 时剔除：navHistory 保持原始记录，让 FundDetail 的
-    // NAV 曲线仍能展示 US 节假日空档；仅在 attribution 配对时跳过。
-    const usable = usableNavSeries(fund, getNavHistory(fund.id));
-    if (usable.length < 2) continue;
-    for (let i = 1; i < usable.length; i++) {
-      const curr = usable[i]!;
-      const prev = usable[i - 1]!;
-      const attributionDate = curr.date;
-      let inner = map.get(attributionDate);
-      if (!inner) {
-        inner = new Map();
-        map.set(attributionDate, inner);
-      }
-      inner.set(fund.id, { fund, curr, prev });
-    }
-  }
-  return map;
-}
-
 /**
  * 按基金预分桶 confirmed 交易，附加"截至各交易日"的累计份额时间线。
  * 历史格计算 shares 时不再 filter+sort 全表——直接对时间线二分定位到 snap.date 的最新累计值，
@@ -219,147 +333,58 @@ function getSharesAsOf(
 /**
  * 生成每日收益明细（按日期升序）
  *
- * **今天格 vs 历史格的算法分叉**：
- * - **历史格**：用 attribution map（每只基金的相邻 NAV 对 (prev → curr) 按 navDate
- *   归属——与 A 股同口径，QDII 9/1 NAV 涨跌归到 9/1 这一天）。只看该归属日有没有
- *   attr，不判定发布日，历史格没有 pending 态（只有今天格可能标 isPending）。
- * - **今天格**：**完全旁路 attribution map，直接取每只基金最新一对已发布 NAV**
- *   （`calcLatestNavPnl`）。这确保 Calendar 今日格 ≡ Dashboard 顶部卡片（共用同一份
- *   "最新已发布 NAV 对"），解决之前几个修复 commit 反复踩的"两边口径漂移"问题。
- *   注意今天格的 `navDate` 可能早于 `date`（A 股当天发布、QDII 常落后 1 个交易日），
- *   UI 必须把 `navDate` 展示出来，不要假装它就是"今天的"。
+ * **Task 2 重构**：body 改为组合各基金的 `generateFundDailyReturns` 输出。
+ * 算法口径完全由单基金函数接管——portfolio 日历天然 = 各基金日历之和，
+ * 月/年格（generateMonthlyReturns / generateYearlyReturns）也是日格之和，
+ * 三种粒度构造上严格相等，不再有"日 vs 月/年算法分叉"。
  *
- * **isPending 判定**：只看有持仓（shares>0）的基金——全部**没有可用 NAV 对**才视为待更新。
- * 排除空持仓基金（已清仓的基金 NAV 更新不应阻塞显示）。
- *
- * 注意：Day/Month/Year 三 Tab 现在**统一用 attribution 算法**——Month/Year Tab 直接聚合
- * 本函数的 dailyReturns 结果，保证「月格 = 当月日格之和」「年格 = 当年日格之和」，
- * 彻底消除之前"日 vs 月/年"算法分叉导致的查表对账差异（QDII 跨月归属尤其明显）。
+ * **isPending 判定**：只看有持仓（shares>0）的基金——所有这些基金的 perFund.noNav 都为
+ * true 才视为待更新；空持仓（已清仓）基金的 NAV 缺失不阻塞持仓基金显示。
  */
 export function generateDailyReturns(
   funds: Fund[],
   transactions: Transaction[]
 ): DailyReturn[] {
-  const confirmed = onlyConfirmed(transactions);
   const todayStr = today();
+  const confirmed = onlyConfirmed(transactions);
 
-  // 历史格日期序列：自驱动生成 [firstTxDate, today] 的所有应展示日
-  // - 起点：用户最早一笔 confirmed 交易日期（仅含持有期，与 yearlyReturns.minYear 口径一致）
-  // - 终点：今天（含 today 格——独立判定 isPending，不走 attribution map）
-  // - 跳过：周末 / A 股法定节假日（isNonTradingDay 已含调休补班周末判定）
-  //
-  // 修复前：snapshots 缺失的日子（如 9/8 没打开 App）不会生成格子 → UI fallback 0
-  // 修复后：日期序列完整 → 9/8 显示真实涨跌 ≈ +73.5 元（QDII -12.34 + 非 QDII +85.84）
-  const firstTxDate = confirmed.length > 0
-    ? confirmed.map((t) => t.date).sort()[0]!
-    : todayStr;
-  const sorted: Array<{ date: string }> = [];
-  for (
-    let cursor = dayjs(firstTxDate);
-    cursor.format('YYYY-MM-DD') <= todayStr;
-    cursor = cursor.add(1, 'day')
-  ) {
-    const date = cursor.format('YYYY-MM-DD');
-    if (!isNonTradingDay(date) || date === todayStr) {
-      sorted.push({ date });
+  // Per-fund series → 按日期合并
+  const mergedByDate = new Map<string, DailyReturn>();
+  for (const fund of funds) {
+    const series = generateFundDailyReturns(fund, transactions, todayStr);
+    for (const dr of series) {
+      let entry = mergedByDate.get(dr.date);
+      if (!entry) {
+        entry = { date: dr.date, totalReturn: 0, perFund: [], isPending: false };
+        mergedByDate.set(dr.date, entry);
+      }
+      entry.totalReturn += dr.totalReturn;
+      // 每个基金最多贡献一个 perFund entry（assert）
+      entry.perFund.push(dr.perFund[0]!);
     }
   }
 
-  // 一次性构建：归属 map + 份额时间线（避免内层每次循环 filter+sort 全表）
-  const attributionMap = buildAttributionMap(funds);
-  const sharesTimeline = buildSharesTimeline(funds, confirmed);
+  const result = Array.from(mergedByDate.values()).sort((a, b) =>
+    a.date.localeCompare(b.date),
+  );
 
-  // 按基金预分桶 confirmed 交易——今日格要按 fund 调 calcLatestNavPnl，
-  // 它内部用 calcShares 算份额，与 calcFundSummary 完全同源，
-  // 保证「日历今日格合计 === Dashboard 卡片数字」这个来之不易的不变量继续成立。
-  const txsByFund = new Map<string, Transaction[]>();
-  for (const tx of confirmed) {
-    const arr = txsByFund.get(tx.fundId);
-    if (arr) arr.push(tx);
-    else txsByFund.set(tx.fundId, [tx]);
-  }
-
-  const result: DailyReturn[] = [];
-
-  // 历史格：QDII 与 A 股统一用 attributionMap（按 navDate 归属，与 A 股同口径）
-  // - QDII 9/1 NAV 涨跌归到 9/1（与 A 股完全对称）
-  // - QDII 发布后正常计入收益，与 A 股完全对称
-  // - 按持仓时长拆分 PnL（calcDailyPnlBySegments）：避免买入/卖出日过度计入新份额
-  // 修复前：QDII 用「最新已发布对」覆盖所有历史日，导致 5/1-5/5 同一数字；
-  //        且买入日 NAV 涨跌全归新份额（pnl 高估）
-  // 历史格：只看 attr 是否存在，存在就用 curr/prev + 持仓算 PnL。
-  // 今天格取的是最新一对已发布 NAV（见下方"今天格"分支）。
-  // 历史回看时数据已发布就一定能在 attributionMap 里查到；attr 不存在说明当天没有
-  // NAV 变化（如节假日 / 当日无交易 / QDII NAV 复制填充被 usHolidays 过滤），returnAmount=0，
-  // UI 显示为 0 涨跌——历史格无"未发布"概念，无需"净值更新中"提示。
-  // 与 aa740c6 语义一致：历史格永远不 pending。
-  for (const snap of sorted) {
-    if (snap.date === todayStr) continue; // 今天格单独算，不走 attribution
-    const dayAttrs = attributionMap.get(snap.date);
-    const perFund = funds.map((fund) => {
-      const attr = dayAttrs?.get(fund.id);
-      // 无 attr：当天该基金没有 NAV 变化（节假日 / QDII 复制 NAV 被过滤）→ 0 涨跌。
-      // navDate 留空，UI 不显示归属日标签（没变化谈不上归属哪天）。
-      if (!attr) return { fundId: fund.id, fundName: fund.name, returnAmount: 0, navDate: '' };
-      const timeline = sharesTimeline.get(fund.id);
-      const sharesAfter = getSharesAsOf(timeline, snap.date);
-      if (sharesAfter <= 0) {
-        return { fundId: fund.id, fundName: fund.name, returnAmount: 0, navDate: '' };
-      }
-      // 按子时段拆分：shares_before = snap.date 之前的累计份额（不含当日交易）
-      // 避免买入/卖出日过度计入新份额（参见 calcDailyPnlBySegments 注释）
-      const sharesBefore = getSharesAsOf(timeline, attr.prev.date);
-      return {
-        fundId: fund.id,
-        fundName: fund.name,
-        returnAmount: calcDailyPnlBySegments(attr.prev.nav, attr.curr.nav, sharesBefore, sharesAfter),
-        navDate: attr.curr.date,
-      };
-    });
-    const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
-    // 历史格不 pending——"净值更新中"语义只用于今天格
-    result.push({ date: snap.date, totalReturn, perFund });
-  }
-
-  // 今天格：旁路 attribution map，直接取每只基金"最新一对已发布 NAV"（同 Dashboard 口径）
-  // 即便 today 不在 snapshots 列表也照常生成——避免"关闭自动刷新 → today 显示 ¥0"的退化
-  // 但如果 today 是非交易日（周末 / 节假日），今天格不生成——与历史格一致
-  //
-  // 与历史格的区别：历史格回答"9/1 那天赚了多少"（navDate === date）；
-  // 今天格回答"现在屏幕上这只基金最近一期净值赚了多少"（navDate 可能 < date）。
-  // 两者都是"净值的真实归属日"口径，所以合计值天然可比、不需要凑发布节奏。
-  if (funds.length > 0 && !isNonTradingDay(todayStr)) {
-    const perFund = funds.map((fund) => {
-      const daily = calcLatestNavPnl(fund, getNavHistory(fund.id), txsByFund.get(fund.id) ?? []);
-      return {
-        fundId: fund.id,
-        fundName: fund.name,
-        returnAmount: daily.pnl ?? 0,
-        navDate: daily.currDate,
-        // pnl=null → 该基金可用 NAV 不足 2 期，UI 渲染时与"持平=0"区分
-        noNav: daily.pnl === null,
-      };
-    });
-    const totalReturn = perFund.reduce((sum, p) => sum + p.returnAmount, 0);
-
-    // 只看"有持仓"的基金：所有持有基金都没有可用 NAV 对才标 pending
-    // 排除空持仓（已清仓）基金——它们的净值缺失不应阻塞持仓基金的显示
+  // isPending 传播：所有持仓基金的 perFund 都标 noNav 才标 pending
+  const todayEntry = result.find((r) => r.date === todayStr);
+  if (todayEntry) {
     const heldFundIds = new Set(
       funds
         .filter((f) => {
-          const timeline = sharesTimeline.get(f.id);
-          return !!timeline && timeline.length > 0 && timeline[timeline.length - 1]!.cumShares > 0;
+          const fundTxs = confirmed.filter((t) => t.fundId === f.id);
+          return fundTxs.length > 0 && calcShares(fundTxs) > 0;
         })
-        .map((f) => f.id)
+        .map((f) => f.id),
     );
-    const isPending =
+    todayEntry.isPending =
       heldFundIds.size > 0 &&
-      perFund.filter((p) => heldFundIds.has(p.fundId)).every((p) => p.noNav);
-
-    result.push({ date: todayStr, totalReturn, perFund, isPending });
-    result.sort((a, b) => a.date.localeCompare(b.date));
+      todayEntry.perFund
+        .filter((p) => heldFundIds.has(p.fundId))
+        .every((p) => p.noNav === true);
   }
-
   return result;
 }
 
