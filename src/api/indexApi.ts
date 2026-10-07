@@ -19,7 +19,7 @@ export const INDEX_LIST: IndexSpec[] = [
   { code: 'sh000300', symbol: 'sh000300', name: '沪深300',     market: 'CN' },
   { code: 'sz399006', symbol: 'sz399006', name: '创业板指',    market: 'CN' },
   { code: 'sh000905', symbol: 'sh000905', name: '中证500',     market: 'CN' },
-  { code: 'usNDX',    symbol: 'us.NDX',   name: '纳斯达克100', market: 'US' },
+  { code: 'usNDX',    symbol: 'usNDX',    name: '纳斯达克100', market: 'US' },
   { code: 'usSPX',    symbol: 'us.INX',   name: '标普500',    market: 'US' },
   { code: 'usDJI',    symbol: 'us.DJI',   name: '道琼斯',     market: 'US' },
 ];
