@@ -73,6 +73,11 @@ export function shouldRefreshIndexHistory(
   now: number = Date.now(),
 ): boolean {
   if (!cached || cached.length === 0) return true;
+  // 数据残缺兜底：cache 条数过少视为 API 截断 / 坏数据，主动重拉。
+  // 这条专门兜住 2026-10-07 NDX 旧 cache：旧 `usNDX` K 线只回 1 条，导致 cache 只有 1
+  // 条、cache.last.date 与 quote.date 同一天不刷新、用户卡死 1 天的状态。
+  // 30 ≈ 1.5 个月，K 线接口实测 2000（8 年），远大于这个值；少数 N 日内不会触发。
+  if (cached.length < MIN_REASONABLE_HISTORY) return true;
   const lastDate = cached[cached.length - 1]!.date;
   // 主路径：quote 已前进 → history 落后了，拉
   if (quoteDate && quoteDate > lastDate) return true;
@@ -83,6 +88,9 @@ export function shouldRefreshIndexHistory(
 
 /** 兜底阈值：history 7 天没新条目就静默拉一次。沿用旧 IndexHistoryModal 的常量。 */
 const STALE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** cache 条数合理下限。远低于 K 线接口 2000 上限，足以发现 API 截断的残缺数据。 */
+const MIN_REASONABLE_HISTORY = 30;
 
 /**
  * 判断某个 ET 日期是否在美国夏令时区间内。

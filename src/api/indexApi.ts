@@ -11,6 +11,10 @@ import { parseIndexTimestamp } from '../utils/indexQuote';
  *     513100 上 6 天滞后的问题不复存在）；
  *   - 字段是真实指数点位（不是 ETF NAV），与本意一致。
  *
+ * NDX 行情 / K 线 symbol 不对称——`usNDX`（无点）走 qt.gtimg.cn 行情 OK，但 web.ifzq
+ * （K 线）只回 1 天；`us.NDX`（带点）K 线回多日但最新日是 DX.N 股价错值。两边各发一次
+ * 合并：历史取 `us.NDX`、最新日取 `usNDX`（逻辑见 fetchIndexHistory 注释）。
+ *
  * 已知 trade-off：
  *   - push2（eastmoney）的字段更规整，但 2026-10 起间歇 ERR_EMPTY_RESPONSE；
  *   - 腾讯接口偶尔会出现 `v_pv_none_match="1"` 空匹配（标的代码下线/输错），落到 catch。
@@ -172,27 +176,61 @@ export async function fetchIndexHistory(
 ): Promise<IndexHistoryRecord[]> {
   // 行情 / K 线 symbol 不同的情况（如 usNDX）：klineSymbol 优先，fallback 到 symbol。
   const klineParam = spec.klineSymbol ?? spec.symbol;
-  const url = `${KLINE_URL}?param=${klineParam},day,,,${days},qfq&_=${Date.now()}`;
+  // NDX 复合请求：`us.NDX`（带点）回多日但最新一日错（API bug，误识别为 DX.N 股价）；
+  // `usNDX`（无点）回单日但值正确。两边各发一次、合并：历史日取 `us.NDX`，最新日取 `usNDX`。
+  // 见 design notes；该 bug 是腾讯 K 线接口对 NDX 的特殊行为，与 SPX/DJI 无关。
+  const altParam = spec.code === 'usNDX' && klineParam !== 'usNDX' ? 'usNDX' : null;
+
+  const urls = [`${KLINE_URL}?param=${klineParam},day,,,${days},qfq&_=${Date.now()}`];
+  if (altParam) {
+    urls.push(`${KLINE_URL}?param=${altParam},day,,,${days},qfq&_=${Date.now()}`);
+  }
+
   try {
-    const resp = await fetch(url, { cache: 'no-store' });
-    if (!resp.ok) {
-      console.error('[indexApi] fetchIndexHistory HTTP', resp.status, klineParam);
+    const responses = await Promise.all(
+      urls.map((u) => fetch(u, { cache: 'no-store' })),
+    );
+    const mainResp = responses[0]!;
+    if (!mainResp.ok) {
+      console.error('[indexApi] fetchIndexHistory HTTP', mainResp.status, klineParam);
       return [];
     }
-    const data = await resp.json();
-    const rows = data?.data?.[klineParam]?.day;
-    if (!Array.isArray(rows)) return [];
-    const out: IndexHistoryRecord[] = [];
-    for (const row of rows) {
-      if (!Array.isArray(row) || row.length < 3) continue;
-      const date = row[0];
-      const close = Number(row[2]);
-      if (typeof date !== 'string' || !Number.isFinite(close)) continue;
-      out.push({ date, value: close });
-    }
-    return out;
+    const mainData = await mainResp.json();
+    const mainRecords = parseKlineRows(mainData?.data?.[klineParam]?.day);
+
+    if (!altParam || responses.length < 2) return mainRecords;
+
+    const altResp = responses[1]!;
+    if (!altResp.ok) return mainRecords;
+    const altData = await altResp.json();
+    const altRecords = parseKlineRows(altData?.data?.[altParam]?.day);
+
+    if (altRecords.length === 0) return mainRecords;
+    if (mainRecords.length === 0) return altRecords;
+
+    // 合并：main 去掉最后一日（被 alt 覆盖）后接 alt。日期对齐假设：两边最新日同一天。
+    const altLastDate = altRecords[altRecords.length - 1]!.date;
+    const mainWithoutLast =
+      mainRecords[mainRecords.length - 1]!.date === altLastDate
+        ? mainRecords.slice(0, -1)
+        : mainRecords;
+    return [...mainWithoutLast, ...altRecords];
   } catch (err) {
     console.error('[indexApi] fetchIndexHistory failed for', klineParam, err);
     return [];
   }
+}
+
+/** 从 K 线 day 数组抽出 `[date, close]` 对，非法行丢弃。 */
+function parseKlineRows(rows: unknown): IndexHistoryRecord[] {
+  if (!Array.isArray(rows)) return [];
+  const out: IndexHistoryRecord[] = [];
+  for (const row of rows) {
+    if (!Array.isArray(row) || row.length < 3) continue;
+    const date = row[0];
+    const close = Number(row[2]);
+    if (typeof date !== 'string' || !Number.isFinite(close)) continue;
+    out.push({ date, value: close });
+  }
+  return out;
 }

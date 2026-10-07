@@ -68,6 +68,18 @@ describe('shouldRefreshIndexHistory', () => {
   function history(dates: string[]): IndexHistoryRecord[] {
     return dates.map((date) => ({ date, value: 100 }));
   }
+  // 生成 N 条日期升序的 cache，最后一天是 lastDate；前面用 self._firstOfMonth..lastDate-N+1 填。
+  // 用真实 Date 算日期避免 "2026-09-31" 这类非法字符串漏过。
+  function makeHistoryOfSize(n: number, lastDate: string): IndexHistoryRecord[] {
+    const out: IndexHistoryRecord[] = [];
+    const end = new Date(lastDate);
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(end);
+      d.setDate(d.getDate() - i);
+      out.push({ date: d.toISOString().slice(0, 10), value: 100 });
+    }
+    return out;
+  }
   // 固定 now = 2026-10-07 12:00 local；测试时区差异不影响纯字符串日期比较
   const NOW = new Date(2026, 9, 7, 12, 0, 0).getTime();
 
@@ -83,46 +95,65 @@ describe('shouldRefreshIndexHistory', () => {
   // 这是用户 2026-10-07 报告的 bug：cache 截止 2026-10-05，quote 已到 2026-10-07，
   // 旧逻辑按 7 天判断不刷新，导致 modal 显示陈旧曲线。
   it('quote 日期 > cache 最后日期 → true（NASDAQ 100 那条 bug）', () => {
-    expect(shouldRefreshIndexHistory(history(['2026-10-05']), '2026-10-07')).toBe(true);
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(60, '2026-10-05'), '2026-10-07')).toBe(true);
   });
 
   it('quote 日期比 cache 早 1 天 → true（保持主路径优先）', () => {
-    expect(shouldRefreshIndexHistory(history(['2026-10-06']), '2026-10-07')).toBe(true);
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(60, '2026-10-06'), '2026-10-07')).toBe(true);
   });
 
   it('quote 日期 === cache 最后日期 → false（已对齐）', () => {
-    expect(shouldRefreshIndexHistory(history(['2026-10-07']), '2026-10-07')).toBe(false);
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(60, '2026-10-07'), '2026-10-07')).toBe(false);
   });
 
   it('quote 日期 < cache 最后日期 → false（cache 反而更近，理论不该发生但保险）', () => {
-    expect(shouldRefreshIndexHistory(history(['2026-10-07']), '2026-10-05')).toBe(false);
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(60, '2026-10-07'), '2026-10-05')).toBe(false);
   });
 
   // 兜底：quote 不可用（quote 还没拉到 / quote fetch 失败）时按时间判断。
   // 旧逻辑用的 7 天阈值是这路径的来源，新逻辑保留同样的兜底语义。
-  it('无 quote + cache 2 天前 → false（兜底没到）', () => {
-    expect(shouldRefreshIndexHistory(history(['2026-10-05']), undefined, NOW)).toBe(false);
+  it('无 quote + cache 满 + 末日期 2 天前 → false（兜底没到）', () => {
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(60, '2026-10-05'), undefined, NOW)).toBe(false);
   });
 
-  it('无 quote + cache 8 天前 → true（兜底）', () => {
-    expect(shouldRefreshIndexHistory(history(['2026-09-29']), undefined, NOW)).toBe(true);
+  it('无 quote + cache 满 + 末日期 8 天前 → true（兜底）', () => {
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(60, '2026-09-29'), undefined, NOW)).toBe(true);
   });
 
   // 边界：严格大于 7*24h 才算 stale（与旧逻辑一致）
-  it('无 quote + cache 恰好 7 天 → false', () => {
+  it('无 quote + cache 满 + 末日期恰好 7 天 → false', () => {
     // Sep 30 + 7 * 24h = Oct 7 00:00（恰好 7 天整）。strict `>` 不触发。
     const now = new Date('2026-09-30').getTime() + SEVEN_DAYS_MS;
-    expect(shouldRefreshIndexHistory(history(['2026-09-30']), undefined, now)).toBe(false);
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(60, '2026-09-30'), undefined, now)).toBe(false);
   });
 
-  it('无 quote + cache 7 天零 1 毫秒 → true', () => {
+  it('无 quote + cache 满 + 末日期 7 天零 1 毫秒 → true', () => {
     const now = new Date('2026-09-30').getTime() + SEVEN_DAYS_MS + 1;
-    expect(shouldRefreshIndexHistory(history(['2026-09-30']), undefined, now)).toBe(true);
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(60, '2026-09-30'), undefined, now)).toBe(true);
   });
 
   // quote 为空字符串（quote 拉取失败的标记，indices[code] 里见过）也算"无 quote"
-  it('quote 是空字符串 + cache 2 天前 → false', () => {
-    expect(shouldRefreshIndexHistory(history(['2026-10-05']), '', NOW)).toBe(false);
+  it('quote 是空字符串 + cache 满 + 末日期 2 天前 → false', () => {
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(60, '2026-10-05'), '', NOW)).toBe(false);
+  });
+
+  // 残缺数据兜底：cache 只有几条意味着 API 截断（如 NDX 旧 `usNDX` 只回 1 天），
+  // 即便 quote 与 cache 同日期、无 7 天过期，也必须刷新把数据救出来。
+  it('cache 残缺（10 条）+ quote 与 cache 同日 → true', () => {
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(10, '2026-09-10'), '2026-09-10')).toBe(true);
+  });
+
+  it('cache 残缺（1 条 + 同时是当日）→ true（NDX 旧 cache 场景）', () => {
+    expect(shouldRefreshIndexHistory(history(['2026-10-07']), '2026-10-07')).toBe(true);
+  });
+
+  it('cache 满（30 条边界） + quote 与 cache 同日 → false', () => {
+    // 30 条上限的边界：恰好 30 条视为合理，不重拉
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(30, '2026-10-07'), '2026-10-07')).toBe(false);
+  });
+
+  it('cache 残缺（29 条边界） + quote 与 cache 同日 → true', () => {
+    expect(shouldRefreshIndexHistory(makeHistoryOfSize(29, '2026-10-07'), '2026-10-07')).toBe(true);
   });
 });
 
