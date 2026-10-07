@@ -8,13 +8,11 @@ import { CanvasRenderer } from 'echarts/renderers';
 import { useStore } from '../stores';
 import { INDEX_LIST, fetchIndexHistory } from '../api/indexApi';
 import { pnlColor } from '../utils/formatter';
+import { shouldRefreshIndexHistory } from '../utils/indexQuote';
 
 echarts.use([LineChart, TooltipComponent, GridComponent, CanvasRenderer]);
 
 type Range = '1m' | '6m' | '1y' | 'all';
-
-/** 7 天 = 一周。历史点位拉一次就能用很久，超过 7 天没新条目就后台静默刷新一次。 */
-const STALE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
 
 const RANGE_DAYS: Record<Range, number | null> = {
   '1m': 30,
@@ -64,10 +62,8 @@ export default function IndexHistoryModal({ code, onClose }: Props) {
     if (!code || !spec) return;
     const cached = indexHistories[code] ?? [];
     const needsInitial = cached.length === 0;
-    const lastDateMs = cached.length > 0
-      ? new Date(cached[cached.length - 1]!.date).getTime()
-      : 0;
-    const stale = cached.length > 0 && Date.now() - lastDateMs > STALE_THRESHOLD_MS;
+    // 静默：memo 在 quote 前进时也触发——modal 开着也能实时看到 curve 跟上
+    const needsSilentRefresh = shouldRefreshIndexHistory(cached, quote?.date);
 
     if (needsInitial) {
       setLoading(true);
@@ -76,14 +72,15 @@ export default function IndexHistoryModal({ code, onClose }: Props) {
           if (rows.length > 0) updateIndexHistory(code, rows);
         })
         .finally(() => setLoading(false));
-    } else if (stale) {
+    } else if (needsSilentRefresh) {
       // 后台静默：不清 loading、不阻塞 UI；fetch 完直接覆盖 store
       fetchIndexHistory(spec).then((rows) => {
         if (rows.length > 0) updateIndexHistory(code, rows);
       });
     }
-    // 故意只依赖 code：spec/records 变化会触发 re-render，但 fetch 的触发条件只看 code
-  }, [code, spec]);
+    // 依赖 code + quote.date：quote 在 refreshAll 里从 Oct 5 → Oct 7 时，
+    // 当前已打开的 modal 也会自动跟上，而不是要"关闭再开"才刷。
+  }, [code, spec, quote?.date]);
 
   // 按时间范围过滤（客户端切片，不发请求）
   const filtered = useMemo(() => {
