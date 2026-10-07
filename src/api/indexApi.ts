@@ -19,7 +19,7 @@ export const INDEX_LIST: IndexSpec[] = [
   { code: 'sh000300', symbol: 'sh000300', name: '沪深300',     market: 'CN' },
   { code: 'sz399006', symbol: 'sz399006', name: '创业板指',    market: 'CN' },
   { code: 'sh000905', symbol: 'sh000905', name: '中证500',     market: 'CN' },
-  { code: 'usNDX',    symbol: 'usNDX',    name: '纳斯达克100', market: 'US' },
+  { code: 'usNDX',    symbol: 'usNDX', klineSymbol: 'us.NDX', name: '纳斯达克100', market: 'US' },
   { code: 'usSPX',    symbol: 'us.INX',   name: '标普500',    market: 'US' },
   { code: 'usDJI',    symbol: 'us.DJI',   name: '道琼斯',     market: 'US' },
 ];
@@ -170,15 +170,17 @@ export async function fetchIndexHistory(
   spec: IndexSpec,
   days: number = 2000,
 ): Promise<IndexHistoryRecord[]> {
-  const url = `${KLINE_URL}?param=${spec.symbol},day,,,${days},qfq&_=${Date.now()}`;
+  // 行情 / K 线 symbol 不同的情况（如 usNDX）：klineSymbol 优先，fallback 到 symbol。
+  const klineParam = spec.klineSymbol ?? spec.symbol;
+  const url = `${KLINE_URL}?param=${klineParam},day,,,${days},qfq&_=${Date.now()}`;
   try {
     const resp = await fetch(url, { cache: 'no-store' });
     if (!resp.ok) {
-      console.error('[indexApi] fetchIndexHistory HTTP', resp.status, spec.symbol);
+      console.error('[indexApi] fetchIndexHistory HTTP', resp.status, klineParam);
       return [];
     }
     const data = await resp.json();
-    const rows = data?.data?.[spec.symbol]?.day;
+    const rows = data?.data?.[klineParam]?.day;
     if (!Array.isArray(rows)) return [];
     const out: IndexHistoryRecord[] = [];
     for (const row of rows) {
@@ -190,7 +192,7 @@ export async function fetchIndexHistory(
     }
     return out;
   } catch (err) {
-    console.error('[indexApi] fetchIndexHistory failed for', spec.symbol, err);
+    console.error('[indexApi] fetchIndexHistory failed for', klineParam, err);
     return [];
   }
 }

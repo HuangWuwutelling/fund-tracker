@@ -137,7 +137,15 @@ export interface IndexQuote {
  */
 export interface IndexSpec {
   code: string;
+  /** 行情接口（qt.gtimg.cn）的 symbol。多数标的无需特殊处理，用这个字段即可。 */
   symbol: string;
+  /**
+   * K 线接口（web.ifzq.gtimg.cn）的 symbol。**仅**当行情与 K 线需要的格式不同时
+   * 才需设置——例：usNDX 在 qt.gtimg.cn 端需要 `usNDX`（带点会被解析为 DX.N 股票），
+   * 但 K 线端需要 `us.NDX` 才能识别为指数（不带点时只匹配到不索引的标的，回 1 条）。
+   * 未设置时 fallback 到 `symbol`。
+   */
+  klineSymbol?: string;
   name: string;
   market: Market;
 }
