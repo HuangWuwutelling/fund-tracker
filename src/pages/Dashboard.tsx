@@ -15,7 +15,16 @@ import {
   pnlBg,
   formatMoneyShortWithSign,
 } from '../utils/formatter';
-import { FUND_TYPE_LABELS, FUND_TYPE_COLORS, FUND_TYPE_STRIPE_COLORS, LATEST_NAV_PNL_LABEL } from '../types';
+import { computeFundIndicators } from '../utils/indicators';
+import {
+  FUND_TYPE_LABELS,
+  FUND_TYPE_COLORS,
+  FUND_TYPE_STRIPE_COLORS,
+  LATEST_NAV_PNL_LABEL,
+  TEMPERATURE_COLORS,
+  classifyTemperature,
+  type Fund,
+} from '../types';
 
 
 
@@ -23,6 +32,7 @@ export default function Dashboard() {
   const { funds, transactions, platforms, dcaPlans, getNavHistory, settings, freshNavFundIds, navRefreshedAt } = useStore();
   const navigate = useNavigate();
   const isDark = settings.theme === 'dark';
+  const usQdiiFilterMode = settings.usQdiiFilterMode;
 
   // todayStr 用于 ⚡ 卡片的休市态与「下次开盘自动刷新」提示（日历的 today 高亮
   // 由 ReturnCalendar 自己算）。它**不在** summaries 的 deps 里——
@@ -31,9 +41,9 @@ export default function Dashboard() {
   const summaries = useMemo(() => {
     return funds.map((fund) => ({
       fund,
-      ...calcFundSummary(fund, transactions, getNavHistory(fund.id)),
+      ...calcFundSummary(fund, transactions, getNavHistory(fund.id), usQdiiFilterMode),
     }));
-  }, [funds, transactions, getNavHistory]);
+  }, [funds, transactions, getNavHistory, usQdiiFilterMode]);
 
   // 衍生统计：memoize 避免每次渲染重算 + 重复 getNavHistory 调用
   const totals = useMemo(() => {
@@ -92,6 +102,40 @@ export default function Dashboard() {
     () => calcTodayInvested(transactions, dcaPlans),
     [transactions, dcaPlans]
   );
+
+  /* ============================================================
+   *  组合信号排行 —— 按每只基金的 MA250 偏离度分两桶
+   *  - 低估桶：MA250 偏离度 < −15%
+   *  - 高估桶：MA250 偏离度 > +15%
+   *  - 桶内按"偏离度极端程度"排序（低估最深的在顶，高估最贵的在顶）
+   *  - 仅统计 hasEnoughHistory 的基金（≥ 250 个交易日）
+   *  - 额外统计今日 MACD 金叉/死叉计数，首页底部展示
+   * ============================================================ */
+  const portfolioSignals = useMemo(() => {
+    const undervalued: Array<{ fund: Fund; deviation: number }> = [];
+    const overvalued: Array<{ fund: Fund; deviation: number }> = [];
+    let goldenCrossCount = 0;
+    let deathCrossCount = 0;
+    let historyReadyCount = 0;
+
+    for (const fund of funds) {
+      const history = getNavHistory(fund.id);
+      const ind = computeFundIndicators(fund, history, usQdiiFilterMode);
+      if (!ind.hasEnoughHistory) continue;
+      historyReadyCount += 1;
+      if (ind.ma250Deviation !== null) {
+        if (ind.ma250Deviation <= -15) undervalued.push({ fund, deviation: ind.ma250Deviation });
+        else if (ind.ma250Deviation >= 15) overvalued.push({ fund, deviation: ind.ma250Deviation });
+      }
+      if (ind.macdState.state === 'golden_cross') goldenCrossCount += 1;
+      else if (ind.macdState.state === 'death_cross') deathCrossCount += 1;
+    }
+
+    undervalued.sort((a, b) => a.deviation - b.deviation); // 越负 → 越便宜 → 越靠前
+    overvalued.sort((a, b) => b.deviation - a.deviation); // 越正 → 越贵 → 越靠前
+
+    return { undervalued, overvalued, goldenCrossCount, deathCrossCount, historyReadyCount };
+  }, [funds, getNavHistory, usQdiiFilterMode]);
 
   // 未确认定投(pending):不计入持仓/收益,但提示用户去确认
   const pendingTransactions = transactions.filter((t) => t.status === 'pending');
@@ -416,6 +460,134 @@ export default function Dashboard() {
         </Col>
       </Row>
 
+      {/* ===== 组合信号排行（按每只基金的 MA250 偏离度聚焦） ===== */}
+      <div style={{ marginTop: 16 }}>
+        <Row gutter={16}>
+          {/* 低估信号 */}
+          <Col xs={24} md={12}>
+            <Card
+              title={
+                <span style={{ color: '#1677ff' }}>
+                  ❄️ 低估信号（MA250 &lt; −15%）
+                </span>
+              }
+              extra={
+                <span style={{ fontSize: 12, color: '#999' }}>
+                  {portfolioSignals.undervalued.length} 只
+                </span>
+              }
+              styles={{ body: { padding: portfolioSignals.undervalued.length === 0 ? 24 : 12 } }}
+            >
+              {portfolioSignals.undervalued.length === 0 ? (
+                <div style={{ color: '#999', textAlign: 'center' }}>
+                  {portfolioSignals.historyReadyCount === 0
+                    ? '组合尚无 ≥ 250 个交易日的基金'
+                    : '组合无 MA250 偏离度 < −15% 的基金'}
+                </div>
+              ) : (
+                <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                  {portfolioSignals.undervalued.map(({ fund, deviation }) => {
+                    const color = TEMPERATURE_COLORS[classifyTemperature(deviation)!];
+                    return (
+                      <div
+                        key={fund.id}
+                        onClick={() => navigate(`/funds/${fund.id}`)}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '8px 12px',
+                          borderRadius: 4,
+                          background: '#f5faff',
+                          cursor: 'pointer',
+                          borderLeft: `3px solid ${color}`,
+                        }}
+                      >
+                        <span style={{ flex: 1, marginRight: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {fund.name}
+                        </span>
+                        <Tag color={color} style={{ marginRight: 0 }}>
+                          {deviation.toFixed(1)}%
+                        </Tag>
+                      </div>
+                    );
+                  })}
+                </Space>
+              )}
+            </Card>
+          </Col>
+
+          {/* 高估信号 */}
+          <Col xs={24} md={12}>
+            <Card
+              title={
+                <span style={{ color: '#cf1322' }}>
+                  🔥 高估信号（MA250 &gt; +15%）
+                </span>
+              }
+              extra={
+                <span style={{ fontSize: 12, color: '#999' }}>
+                  {portfolioSignals.overvalued.length} 只
+                </span>
+              }
+              styles={{ body: { padding: portfolioSignals.overvalued.length === 0 ? 24 : 12 } }}
+            >
+              {portfolioSignals.overvalued.length === 0 ? (
+                <div style={{ color: '#999', textAlign: 'center' }}>
+                  {portfolioSignals.historyReadyCount === 0
+                    ? '组合尚无 ≥ 250 个交易日的基金'
+                    : '组合无 MA250 偏离度 > +15% 的基金'}
+                </div>
+              ) : (
+                <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                  {portfolioSignals.overvalued.map(({ fund, deviation }) => {
+                    const color = TEMPERATURE_COLORS[classifyTemperature(deviation)!];
+                    return (
+                      <div
+                        key={fund.id}
+                        onClick={() => navigate(`/funds/${fund.id}`)}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '8px 12px',
+                          borderRadius: 4,
+                          background: '#fff5f5',
+                          cursor: 'pointer',
+                          borderLeft: `3px solid ${color}`,
+                        }}
+                      >
+                        <span style={{ flex: 1, marginRight: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {fund.name}
+                        </span>
+                        <Tag color={color} style={{ marginRight: 0 }}>
+                          {deviation.toFixed(1)}%
+                        </Tag>
+                      </div>
+                    );
+                  })}
+                </Space>
+              )}
+            </Card>
+          </Col>
+        </Row>
+
+        {/* 底部副信息：今日 MACD 信号统计 + 历史就绪度 */}
+        <div style={{ marginTop: 12, color: '#999', fontSize: 12, textAlign: 'center' }}>
+          <span>
+            今日 MACD：<span style={{ color: '#cf1322', fontWeight: 600 }}>金叉 {portfolioSignals.goldenCrossCount}</span>
+            {' '}｜{' '}
+            <span style={{ color: '#3f8600', fontWeight: 600 }}>死叉 {portfolioSignals.deathCrossCount}</span>
+          </span>
+          <span style={{ marginLeft: 12 }}>
+            ｜ 历史就绪 {portfolioSignals.historyReadyCount} / {funds.length} 只
+          </span>
+          <Button type="link" size="small" onClick={() => navigate('/settings')}>
+            指标说明
+          </Button>
+        </div>
+      </div>
+
       {/* ===== 市场指数（沪深300 / 创业板 / 中证500 / 纳指100 / 标普500 / 道琼斯） ===== */}
       <MarketIndices />
 
@@ -484,3 +656,8 @@ export default function Dashboard() {
     </div>
   );
 }
+
+/* ============================================================
+ *  旧版组合温度计的 TemperatureBar / MiniHistogram 组件已移除 —
+ *  改为上方「组合信号排行」两桶卡片。
+ * ============================================================ */

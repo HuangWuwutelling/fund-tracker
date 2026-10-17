@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Descriptions, Row, Col, Statistic, Table, Button, Tag, Modal, Form, Input, Select, DatePicker, InputNumber, message, Space, Radio, Checkbox, Popconfirm, Alert, Tooltip } from 'antd';
-import { ArrowLeftOutlined, PlusOutlined, ImportOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, PlusOutlined, ImportOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts/core';
 import { LineChart } from 'echarts/charts';
@@ -13,9 +13,25 @@ import { useStore } from '../stores';
 import { calcFundSummary, calcSharesFromAmount, calcShares, calcCost, onlyConfirmed } from '../utils/calculator';
 import { pnlColor, formatDate, formatMoney, formatPercent } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
+import { usableNavSeries } from '../utils/navPair';
+import { sma, computeFundIndicators, INDICATOR_TOOLTIPS } from '../utils/indicators';
 import InitialPositionModal from '../components/InitialPositionModal';
 import FundReturnCalendar from '../components/FundReturnCalendar';
-import { FUND_TYPE_LABELS, FUND_TYPE_COLORS, TRANSACTION_TYPE_LABELS, TX_TYPE_COLORS, FREQUENCY_LABELS, LATEST_NAV_PNL_LABEL } from '../types';
+import {
+  FUND_TYPE_LABELS,
+  FUND_TYPE_COLORS,
+  TRANSACTION_TYPE_LABELS,
+  TX_TYPE_COLORS,
+  FREQUENCY_LABELS,
+  LATEST_NAV_PNL_LABEL,
+  MACD_STATE_LABELS,
+  MACD_STATE_COLORS,
+  MACD_STATE_HINTS,
+  classifyTemperature,
+  TEMPERATURE_COLORS,
+  TEMPERATURE_LABELS,
+  TEMPERATURE_ADVICE,
+} from '../types';
 import type { Transaction, DcaPlan, Fund } from '../types';
 
 echarts.use([
@@ -31,7 +47,8 @@ echarts.use([
 export default function FundDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { platforms, transactions, getNavHistory, addTransaction, updateTransaction, removeTransaction, getFundById, dcaPlans, addDcaPlan, updateDcaPlan, removeDcaPlan, toggleDcaPlan } = useStore();
+  const { platforms, transactions, getNavHistory, addTransaction, updateTransaction, removeTransaction, getFundById, dcaPlans, addDcaPlan, updateDcaPlan, removeDcaPlan, toggleDcaPlan, settings } = useStore();
+  const usQdiiFilterMode = settings.usQdiiFilterMode;
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [editingTxId, setEditingTxId] = useState<string | null>(null);
   const [txForm] = Form.useForm();
@@ -94,9 +111,9 @@ export default function FundDetail() {
   const summary = useMemo(
     () =>
       fund
-        ? calcFundSummary(fund, transactions, navHistory)
+        ? calcFundSummary(fund, transactions, navHistory, usQdiiFilterMode)
         : { shares: 0, cost: 0, marketValue: 0, totalReturn: 0, returnRate: 0, dailyPnl: null, currNavDate: '', prevNavDate: '', xirr: 0, dividend: 0 },
-    [fund, transactions, navHistory]
+    [fund, transactions, navHistory, usQdiiFilterMode]
   );
   const fundTxs = useMemo(
     () =>
@@ -169,16 +186,29 @@ export default function FundDetail() {
     // markLine 需要 series.data 里 yAxis 数值字段
     const costLineData = avgCost > 0 ? [{ yAxis: avgCost, name: `成本均价 ${avgCost.toFixed(4)}` }] : [];
 
+    // MA250：必须基于 usableNavSeries（QDII 美股节假日过滤）上的**全量**净值计算，
+    // 然后按日期对齐回 filteredNav。前 249 个交易日为 null（暖机期）。
+    const usable = fund ? usableNavSeries(fund, navHistory, usQdiiFilterMode) : [];
+    const usableDates = usable.map((r) => r.date);
+    const usableDateIndex = new Map<string, number>();
+    for (let i = 0; i < usableDates.length; i++) usableDateIndex.set(usableDates[i]!, i);
+    const usableMa = sma(usable.map((r) => r.nav), 250);
+    const maAligned: (number | null)[] = dates.map((d) => {
+      const idx = usableDateIndex.get(d);
+      return idx === undefined ? null : (usableMa[idx] ?? null);
+    });
+
     return {
       tooltip: {
         trigger: 'axis' as const,
-        formatter: (params: Array<{ axisValue: string; value: number; seriesName: string; color: string; marker: string }>) => {
+        formatter: (params: Array<{ axisValue: string; value: number | null | undefined; seriesName: string; color: string; marker: string }>) => {
           if (!params || params.length === 0) return '';
           const date = params[0]!.axisValue;
           const lines = params
             .filter((p) => p.seriesName !== '成本均价' || p.value === avgCost)
             .map((p) => {
-              const v = typeof p.value === 'number' ? p.value.toFixed(4) : String(p.value);
+              // null / undefined → "—"（MA250 暖机期；或成本均价不在 yAxis 命中）
+              const v = typeof p.value === 'number' ? p.value.toFixed(4) : '—';
               return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.color};margin-right:6px;"></span>${p.seriesName}：<b>${v}</b>`;
             });
           return `<div style="font-weight:600;margin-bottom:4px;">${date}</div>${lines.join('<br/>')}`;
@@ -186,9 +216,18 @@ export default function FundDetail() {
       },
       legend: {
         top: 5,
-        right: 10,
-        data: ['单位净值', '成本均价'],
+        right: 80, // 留出右边 80px 给成本均价标签，避免互相挤
+        data: ['单位净值', 'MA250', '成本均价'],
         textStyle: { fontSize: 12 },
+        // series.name 保持简短供 Tooltip 用，legend 显示长标签让用户一眼能读懂
+        formatter: (name: string) => {
+          const map: Record<string, string> = {
+            '单位净值': '单位净值',
+            'MA250': 'MA250 · 250日均线',
+            '成本均价': '成本均价',
+          };
+          return map[name] ?? name;
+        },
       },
       grid: { left: 60, right: 20, top: 35, bottom: 30 },
       xAxis: { type: 'category' as const, data: dates, axisLabel: { fontSize: 11 } },
@@ -220,12 +259,44 @@ export default function FundDetail() {
             symbol: 'none',
             data: costLineData,
             lineStyle: { color: '#fa8c16', type: 'dashed' as const, width: 1.5 },
-            label: { fontSize: 11, color: '#fa8c16', formatter: '成本均价' },
+            // 标签放进图表内右侧顶部，避免出 grid 被裁
+            label: {
+              fontSize: 11,
+              color: '#fa8c16',
+              position: 'insideEndTop',
+              distance: [0, -2],
+              formatter: `成本均价 ${avgCost > 0 ? avgCost.toFixed(4) : ''}`,
+            },
           },
+        },
+        {
+          name: 'MA250',
+          type: 'line' as const,
+          smooth: true,
+          symbol: 'none',
+          data: maAligned,
+          lineStyle: { width: 1.5, color: '#722ed1' },
+          connectNulls: false,
         },
       ],
     };
-  }, [filteredNav, avgCost, txMarkers]);
+  }, [filteredNav, avgCost, txMarkers, navHistory, fund, usQdiiFilterMode]);
+
+  /* ============================================================
+   *  技术指标：MA250 偏离度 / MACD / 净值回撤百分位
+   *  - 基于 usableNavSeries 自动过滤 QDII 美股节假日占位
+   *  - 渲染时按日期切回到 filteredNav 范围（图表只画可见区间）
+   * ============================================================ */
+  const indicators = useMemo(
+    () => (fund ? computeFundIndicators(fund, navHistory, usQdiiFilterMode) : null),
+    [fund, navHistory, usQdiiFilterMode]
+  );
+
+  // 缓存：MA250 卡要 4 处用 classifyTemperature，避免重复调用
+  const ma250Level =
+    indicators && indicators.ma250Deviation !== null
+      ? classifyTemperature(indicators.ma250Deviation)
+      : null;
 
   const handleSaveTransaction = async () => {
     try {
@@ -524,6 +595,111 @@ export default function FundDetail() {
           </Card>
         </Col>
       </Row>
+
+      {indicators && (
+        <Row gutter={16} style={{ marginTop: 16 }}>
+          {/* MA250 偏离度 */}
+          <Col xs={24} sm={8}>
+            <Card>
+              <Tooltip title={INDICATOR_TOOLTIPS.ma250}>
+                <Statistic
+                  title={
+                    <span>
+                      MA250 偏离度{' '}
+                      <QuestionCircleOutlined style={{ color: '#999', fontSize: 12 }} />
+                    </span>
+                  }
+                  value={indicators.ma250Deviation ?? '—'}
+                  precision={2}
+                  suffix={indicators.ma250Deviation !== null ? '%' : ''}
+                  valueStyle={{
+                    color: ma250Level ? TEMPERATURE_COLORS[ma250Level] : '#999',
+                    fontWeight: 700,
+                  }}
+                />
+              </Tooltip>
+              {ma250Level ? (
+                <>
+                  <Tag color={TEMPERATURE_COLORS[ma250Level]} style={{ marginTop: 4 }}>
+                    {TEMPERATURE_LABELS[ma250Level]}
+                  </Tag>
+                  <div style={{ fontSize: 12, color: '#666', marginTop: 6, lineHeight: 1.4 }}>
+                    {TEMPERATURE_ADVICE[ma250Level]}
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+                  需 {Math.max(0, 250 - indicators.usableNavs.length)} 个交易日历史
+                </div>
+              )}
+            </Card>
+          </Col>
+
+          {/* MACD 状态 */}
+          <Col xs={24} sm={8}>
+            <Card>
+              <Tooltip title={INDICATOR_TOOLTIPS.macd}>
+                <div style={{ color: '#666', fontSize: 13, marginBottom: 8 }}>
+                  MACD 状态 <QuestionCircleOutlined style={{ color: '#999', fontSize: 12 }} />
+                </div>
+                <div
+                  style={{
+                    fontSize: 24,
+                    fontWeight: 700,
+                    lineHeight: 1.2,
+                    color: MACD_STATE_COLORS[indicators.macdState.state],
+                    fontFamily: 'DIN, "Helvetica Neue", Arial, sans-serif',
+                  }}
+                >
+                  {MACD_STATE_LABELS[indicators.macdState.state]}
+                </div>
+                <div style={{ fontSize: 12, color: '#666', marginTop: 6, lineHeight: 1.4 }}>
+                  {MACD_STATE_HINTS[indicators.macdState.state]}
+                </div>
+                {indicators.macdState.daysSinceCross !== null && (
+                  <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                    {indicators.macdState.daysSinceCross === 0 ? '今日' : `${indicators.macdState.daysSinceCross} 天前`}{' '}
+                    {indicators.macdState.state === 'golden_cross' ? '形成金叉' : '形成死叉'}
+                  </div>
+                )}
+              </Tooltip>
+            </Card>
+          </Col>
+
+          {/* 净值回撤百分位 */}
+          <Col xs={24} sm={8}>
+            <Card>
+              <Tooltip title={INDICATOR_TOOLTIPS.drawdown}>
+                <div style={{ color: '#666', fontSize: 13, marginBottom: 8 }}>
+                  净值回撤百分位 <QuestionCircleOutlined style={{ color: '#999', fontSize: 12 }} />
+                </div>
+                <div
+                  style={{
+                    fontSize: 24,
+                    fontWeight: 700,
+                    lineHeight: 1.2,
+                    color: indicators.drawdownPercentile !== null ? '#1677ff' : '#999',
+                    fontFamily: 'DIN, "Helvetica Neue", Arial, sans-serif',
+                  }}
+                >
+                  {indicators.drawdownPercentile === null
+                    ? '—'
+                    : `${indicators.drawdownPercentile.toFixed(0)}%`}
+                </div>
+                <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>
+                  {indicators.drawdownPercentile === null
+                    ? '需 ≥ 30 个交易日数据'
+                    : indicators.drawdownPercentile >= 80
+                      ? '处于历史最便宜 20% 区间'
+                      : indicators.drawdownPercentile >= 50
+                        ? '处于历史中位偏便宜区间'
+                        : '处于历史中位偏贵区间'}
+                </div>
+              </Tooltip>
+            </Card>
+          </Col>
+        </Row>
+      )}
 
       <FundReturnCalendar fund={fundRef} transactions={transactions} />
 

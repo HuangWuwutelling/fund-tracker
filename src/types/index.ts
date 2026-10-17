@@ -56,6 +56,16 @@ export interface Settings {
   reportFrequency: 'weekly' | 'monthly' | 'both';
   /** 定投计划自动生成交易记录（打开页面时把到期计划补成待确认买入） */
   dcaAutoRecord: boolean;
+  /**
+   * 美股跟踪 QDII 的节假日过滤模式（详见 `navPair.ts:UsQdiiFilterMode`）。
+   * - auto（默认）：数据驱动，剔除与前条 nav+accNav 完全相同的占位条目。
+   * - strict：日期驱动，按美股工作日节假日 + 周末剔除。
+   * - off：不过滤。
+   *
+   * 类型上为必填——老备份导入时由 `storage.getSettings()` / `importData()` 与
+   * `DEFAULT_SETTINGS` 合并兜底为 'auto'，调用方无需 `?? 'auto'`。
+   */
+  usQdiiFilterMode: 'auto' | 'strict' | 'off';
 }
 
 /**
@@ -158,3 +168,86 @@ export interface IndexHistoryRecord {
   date: string;
   value: number;
 }
+
+/* ============================================================
+ *  技术指标（MA250 偏离度 / MACD / 回撤百分位）相关常量与类型
+ *  阈值与色档按中国散户惯例；调整请同步更新 Settings 的说明面板
+ * ============================================================ */
+
+/** MA250 偏离度温度档位。6 档：deep_cold（极冷）→ deep_hot（过热） */
+export type TemperatureLevel = 'deep_cold' | 'cold' | 'cool' | 'warm' | 'hot' | 'deep_hot';
+
+/** 偏离度阈值表（百分比）。负值越深越冷，正值越深越热 */
+export const TEMPERATURE_THRESHOLDS: readonly number[] = [-30, -15, -5, 5, 15] as const;
+
+/** MA250 偏离度颜色档（蓝→青→橙→红梯度） */
+export const TEMPERATURE_COLORS: Record<TemperatureLevel, string> = {
+  deep_cold: '#003a8c', // 深蓝：< -30%
+  cold: '#1677ff', // 蓝：-30% ~ -15%
+  cool: '#13c2c2', // 青：-15% ~ -5%
+  warm: '#fa8c16', // 橙：-5% ~ +5%
+  hot: '#fa541c', // 深橙：+5% ~ +15%
+  deep_hot: '#cf1322', // 红：> +15%
+};
+
+/** 偏离度 → 中文档位标签 */
+export const TEMPERATURE_LABELS: Record<TemperatureLevel, string> = {
+  deep_cold: '极冷',
+  cold: '偏冷',
+  cool: '微冷',
+  warm: '适中',
+  hot: '偏热',
+  deep_hot: '过热',
+};
+
+/** 偏离度 → 一行建议（Dashboard 温度计用） */
+export const TEMPERATURE_ADVICE: Record<TemperatureLevel, string> = {
+  deep_cold: '深度低估，分批布局',
+  cold: '低于均线，估值偏低',
+  cool: '略低于均线，适合定投',
+  warm: '贴近均线，正常持有',
+  hot: '高于均线，谨慎追高',
+  deep_hot: '深度高估，考虑止盈',
+};
+
+/** 把 (curr - MA250)/MA250 × 100 映射到档位。null/无效值返回 null */
+export function classifyTemperature(deviationPct: number | null | undefined): TemperatureLevel | null {
+  if (deviationPct === null || deviationPct === undefined) return null;
+  if (!Number.isFinite(deviationPct)) return null;
+  if (deviationPct < TEMPERATURE_THRESHOLDS[0]!) return 'deep_cold';
+  if (deviationPct < TEMPERATURE_THRESHOLDS[1]!) return 'cold';
+  if (deviationPct < TEMPERATURE_THRESHOLDS[2]!) return 'cool';
+  if (deviationPct < TEMPERATURE_THRESHOLDS[3]!) return 'warm';
+  if (deviationPct < TEMPERATURE_THRESHOLDS[4]!) return 'hot';
+  return 'deep_hot';
+}
+
+/** MACD 当前状态 */
+export type MacdState = 'golden_cross' | 'death_cross' | 'above_zero' | 'below_zero' | 'unknown';
+
+/** MACD 状态 → 中文标签 */
+export const MACD_STATE_LABELS: Record<MacdState, string> = {
+  golden_cross: '金叉',
+  death_cross: '死叉',
+  above_zero: '多头',
+  below_zero: '空头',
+  unknown: '—',
+};
+
+/** MACD 状态 → 颜色（中国红涨绿跌） */
+export const MACD_STATE_COLORS: Record<MacdState, string> = {
+  golden_cross: '#cf1322', // 红
+  death_cross: '#3f8600', // 绿
+  above_zero: '#fa541c', // 深橙（强势但未交叉）
+  below_zero: '#1677ff', // 蓝（弱势但未交叉）
+  unknown: '#999',
+};
+
+/** MACD 状态 → 行动提示（一行文案，给 FundDetail 指标卡用） */
+export const MACD_STATE_HINTS: Record<MacdState, string> = {
+  golden_cross: '↗ 短期动能转强，注意追高风险',
+  death_cross: '↘ 短期动能转弱，可分批布局',
+  above_zero: '↗ 多头排列，趋势向上',
+  below_zero: '↘ 空头排列，趋势向下',
+  unknown: '— 数据不足',
+};

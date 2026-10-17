@@ -1,8 +1,10 @@
 import { useState, useRef } from 'react';
-import { Card, Table, Button, Input, Switch, Space, message, Popconfirm, Typography, Modal, Select } from 'antd';
+import type { CSSProperties } from 'react';
+import { Card, Collapse, Table, Button, Input, Switch, Space, message, Popconfirm, Typography, Modal, Select } from 'antd';
 import { PlusOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useStore } from '../stores';
 import type { Platform } from '../types';
+import type { UsQdiiFilterMode } from '../utils/navPair';
 
 
 export default function Settings() {
@@ -250,6 +252,36 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
             <span>按名称重新分类基金类型</span>
             <Button size="small" onClick={handleReclassify}>重新分类</Button>
           </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div>美股 QDII 节假日过滤</div>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                仅影响跟踪美股指数的 QDII（纳指 / 标普 / 道指 / 罗素等）。其他基金（含 A 股、港股 QDII）不套用 strict / auto 模式——A 股若选「不过滤」也会生效（数据本就稀缺，跨节假日"压扁"通常更能接受）。
+              </Typography.Text>
+            </div>
+            <Select
+              value={settings.usQdiiFilterMode}
+              onChange={(v: UsQdiiFilterMode) => updateSettings({ usQdiiFilterMode: v })}
+              style={{ width: 220 }}
+              options={[
+                {
+                  value: 'auto',
+                  label: '智能（推荐）',
+                  title: '智能：剔除与前一条完全相同的占位条目（nav + accNav 都一致）——数据驱动，对所有年份都生效。',
+                },
+                {
+                  value: 'strict',
+                  label: '严格（按美股节假日）',
+                  title: '严格：按美股工作日节假日 + 周末剔除（仅 2025-2026 精确，其它年退化为仅周末）。仅对美股跟踪 QDII 生效。',
+                },
+                {
+                  value: 'off',
+                  label: '不过滤',
+                  title: '不过滤：保留所有原始记录，attribution 跨节假日会被压扁，但 MA250 暖机期最短。**对所有基金生效**（含 A 股），不只是 QDII。',
+                },
+              ]}
+            />
+          </div>
         </Space>
       </Card>
 
@@ -323,6 +355,115 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
           </div>
         </Space>
       </Card>
+
+      <Collapse
+        style={{ marginTop: 16 }}
+        items={[
+          {
+            key: 'ma250',
+            label: <strong>MA250 偏离度（估值温度）</strong>,
+            children: (
+              <div>
+                <Typography.Paragraph>
+                  <strong>公式：</strong>
+                </Typography.Paragraph>
+                <pre style={formulaPreStyle}>{`MA250(t) = (NAV(t) + NAV(t-1) + ... + NAV(t-249)) / 250
+偏离度(t) = (NAV(t) − MA250(t)) / MA250(t) × 100%
+
+暖机期：前 249 个交易日 MA250 为 null（数据不足）`}</pre>
+                <Typography.Paragraph>
+                  <strong>怎么读：</strong>
+                </Typography.Paragraph>
+                <ul style={{ paddingLeft: 20, margin: '8px 0' }}>
+                  <li>偏离度 −30% ~ −15%：深度低估（深蓝），分批布局</li>
+                  <li>偏离度 −15% ~ −5%：偏低（青），适合定投</li>
+                  <li>偏离度 −5% ~ +5%：贴近均线（橙），正常持有</li>
+                  <li>偏离度 +5% ~ +15%：偏热（深橙），谨慎追高</li>
+                  <li>偏离度 &gt; +15%：深度高估（红），考虑止盈</li>
+                </ul>
+                <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
+                  ⚠ MA250 是趋势指标，单用容易在趋势反转时给出错误信号。建议与 MACD、回撤百分位联合判断。
+                  <br />
+                  ⚠ 美股 QDII 节假日占位（数据源在美股休市日补的"复制 NAV"）会影响 EMA / MA250 精度——
+                  上述指标计算时已自动剔除，剔除行为由「其他设置 → 美股 QDII 节假日过滤」控制。
+                </Typography.Paragraph>
+              </div>
+            ),
+          },
+          {
+            key: 'macd',
+            label: <strong>MACD（指数平滑异同移动平均线）</strong>,
+            children: (
+              <div>
+                <Typography.Paragraph>
+                  <strong>公式：</strong>
+                </Typography.Paragraph>
+                <pre style={formulaPreStyle}>{`EMA(t) = NAV(t) × k + EMA(t-1) × (1 − k)，其中 k = 2 / (N + 1)
+DIF  = EMA12 − EMA26
+DEA  = EMA9(DIF)   （DIF 的 9 日 EMA）
+MACD 柱 = (DIF − DEA) × 2
+
+默认参数 12/26/9 由 Gerald Appel 在 1970 年代提出，沿用至今。
+暖机期：DIF 自 26 日起有效；DEA/HIST 自 34 日起有效。`}</pre>
+                <Typography.Paragraph>
+                  <strong>怎么读：</strong>
+                </Typography.Paragraph>
+                <ul style={{ paddingLeft: 20, margin: '8px 0' }}>
+                  <li>
+                    <strong style={{ color: '#cf1322' }}>金叉</strong>：DIF 上穿 DEA，短期动能转强
+                  </li>
+                  <li>
+                    <strong style={{ color: '#3f8600' }}>死叉</strong>：DIF 下穿 DEA，短期动能转弱
+                  </li>
+                  <li>MACD 柱由负转正：DIF 上行加速（强多）</li>
+                  <li>MACD 柱由正转负：DIF 下行加速（强空）</li>
+                  <li>顶背离 / 底背离：价格新高但 DIF 没新高 = 见顶警示；价格新低但 DIF 没新低 = 见底信号</li>
+                </ul>
+                <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
+                  ⚠ MACD 在震荡市频繁假信号（"MACD 反复金叉死叉"），建议先看 MA250 判断大趋势方向。
+                </Typography.Paragraph>
+              </div>
+            ),
+          },
+          {
+            key: 'drawdown',
+            label: <strong>净值回撤百分位</strong>,
+            children: (
+              <div>
+                <Typography.Paragraph>
+                  <strong>公式：</strong>
+                </Typography.Paragraph>
+                <pre style={formulaPreStyle}>{`回撤(t) = (NAV(t) − max(NAV(0..t))) / max(NAV(0..t)) × 100%
+百分位(t) = #{ i : 回撤(i) ≥ 回撤(t) } / #{ 有效回撤数 } × 100
+
+百分位越高 → 当前净值越接近历史最低点（越便宜）
+百分位越低 → 当前净值越接近历史最高点（越贵）`}</pre>
+                <Typography.Paragraph>
+                  <strong>怎么读：</strong>
+                </Typography.Paragraph>
+                <ul style={{ paddingLeft: 20, margin: '8px 0' }}>
+                  <li>百分位 ≥ 80%：处于历史最便宜 20% 区间，潜在买入时机</li>
+                  <li>百分位 50% ~ 80%：偏便宜</li>
+                  <li>百分位 &lt; 50%：偏贵，谨慎追高</li>
+                </ul>
+                <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
+                  ⚠ 历史回撤百分位不预测未来，仅反映当前在历史分布里的位置。新成立基金（&lt; 30 个交易日）数据不足，百分位会显示 — 。
+                </Typography.Paragraph>
+              </div>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }
+
+const formulaPreStyle: CSSProperties = {
+  background: '#f5f5f5',
+  padding: 12,
+  borderRadius: 4,
+  overflow: 'auto',
+  margin: '8px 0',
+  fontSize: 12,
+  lineHeight: 1.6,
+};
