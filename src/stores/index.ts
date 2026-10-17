@@ -94,7 +94,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   transactions: [],
   dcaPlans: [],
   snapshots: [],
-  settings: { theme: 'light', navAutoRefresh: true, reportFrequency: 'both', dcaAutoRecord: true },
+  settings: storage.DEFAULT_SETTINGS,
   indices: {},
   indexHistories: {},
   freshNavFundIds: new Set<string>(),
@@ -325,11 +325,12 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
   // --- Nav freshness ---
   recordNavFreshness: () => {
-    const { funds, getNavHistory } = get();
+    const { funds, getNavHistory, settings } = get();
+    const mode = settings.usQdiiFilterMode;
     const { fresh, nextSeen } = computeFreshness(
       funds,
       // "最新 NAV 日"与盈亏数字同源：都走 latestNavPair，避免两处对"最新"的定义漂移
-      (fund) => latestNavPair(fund, getNavHistory(fund.id))?.curr.date,
+      (fund) => latestNavPair(fund, getNavHistory(fund.id), mode)?.curr.date,
       storage.getSeenNavMap()
     );
     storage.saveSeenNavMap(nextSeen);

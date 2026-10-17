@@ -1,5 +1,5 @@
 import type { Transaction, Fund, NavRecord, DcaPlan } from '../types';
-import { latestNavPair } from './navPair';
+import { latestNavPair, type UsQdiiFilterMode, DEFAULT_US_QDII_FILTER_MODE } from './navPair';
 import { isNonTradingDay } from './chineseHolidays';
 import dayjs from 'dayjs';
 
@@ -132,9 +132,10 @@ export function calcDailyPnlBySegments(
 export function calcLatestNavPnl(
   fund: Fund,
   navHistory: NavRecord[],
-  fundTransactions: Transaction[]
+  fundTransactions: Transaction[],
+  mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE
 ): { pnl: number | null; currDate: string; prevDate: string } {
-  const pair = latestNavPair(fund, navHistory);
+  const pair = latestNavPair(fund, navHistory, mode);
   if (!pair) return { pnl: null, currDate: '', prevDate: '' };
 
   const shares = calcShares(fundTransactions);
@@ -448,7 +449,8 @@ export function calcTodayInvested(
 export function calcFundSummary(
   fund: Fund,
   transactions: Transaction[],
-  navHistory: NavRecord[]
+  navHistory: NavRecord[],
+  mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE
 ) {
   const fundTransactions = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
   const shares = calcShares(fundTransactions);
@@ -456,7 +458,7 @@ export function calcFundSummary(
   const marketValue = calcMarketValue(shares, fund.currentNav);
   const totalReturn = calcReturn(marketValue, cost);
   const returnRate = calcReturnRate(totalReturn, cost);
-  const latest = calcLatestNavPnl(fund, navHistory, fundTransactions);
+  const latest = calcLatestNavPnl(fund, navHistory, fundTransactions, mode);
   const xirr = calcXIRR(fundTransactions, marketValue);
   const dividend = calcDividendTotal(fundTransactions);
 

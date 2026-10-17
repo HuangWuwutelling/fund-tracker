@@ -405,7 +405,8 @@ export function YearView({
 
 /** 主组件：Tabs 容器，自包含从 useStore() 取数据 */
 export default function ReturnCalendar() {
-  const { funds, transactions } = useStore();
+  const { funds, transactions, settings } = useStore();
+  const usQdiiFilterMode = settings.usQdiiFilterMode;
   const [granularity, setGranularity] = useState<Granularity>('day');
   const [selected, setSelected] = useState<{ g: Granularity; key: string } | null>(null);
 
@@ -414,8 +415,8 @@ export default function ReturnCalendar() {
 
   // 各粒度数据（日粒度由现有 generateDailyReturns 算；月/年用 Task 1 新增）
   const dailyReturns = useMemo(
-    () => generateDailyReturns(funds, transactions),
-    [funds, transactions]
+    () => generateDailyReturns(funds, transactions, usQdiiFilterMode),
+    [funds, transactions, usQdiiFilterMode]
   );
 
   // 用户最早一笔 confirmed 交易的日期；用于 DayView 把"建仓前"格子标 beforeHolding 隐藏 0

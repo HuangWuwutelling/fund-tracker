@@ -87,6 +87,7 @@ export const DEFAULT_SETTINGS: Settings = {
   navAutoRefresh: true,
   reportFrequency: 'both',
   dcaAutoRecord: true,
+  usQdiiFilterMode: 'auto',
 };
 
 export function getSettings(): Settings {

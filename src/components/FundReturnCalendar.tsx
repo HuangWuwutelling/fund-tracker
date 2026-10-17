@@ -8,6 +8,7 @@ import {
   generateYearlyReturns,
 } from '../utils/reportGenerator';
 import { DayView, MonthView, YearView } from './ReturnCalendar';
+import { useStore } from '../stores';
 
 interface Props {
   fund: Fund;
@@ -30,10 +31,12 @@ export default function FundReturnCalendar({ fund, transactions }: Props) {
   const [granularity, setGranularity] = useState<Granularity>('day');
   const [selected, setSelected] = useState<{ g: Granularity; key: string } | null>(null);
   const [viewYear, setViewYear] = useState<number>(() => dayjs().year());
+  const { settings } = useStore();
+  const usQdiiFilterMode = settings.usQdiiFilterMode;
 
   const dailyReturns = useMemo(
-    () => generateFundDailyReturns(fund, transactions),
-    [fund, transactions]
+    () => generateFundDailyReturns(fund, transactions, undefined, usQdiiFilterMode),
+    [fund, transactions, usQdiiFilterMode]
   );
 
   const firstTxDate = useMemo(() => {

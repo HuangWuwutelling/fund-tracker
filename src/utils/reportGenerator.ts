@@ -4,7 +4,7 @@ import { FUND_TYPE_LABELS } from '../types';
 import { countTradingDays, lookupNavForDate } from './navLookup';
 import { getNavHistory } from './storage';
 import { today } from './formatter';
-import { usableNavSeries } from './navPair';
+import { usableNavSeries, type UsQdiiFilterMode, DEFAULT_US_QDII_FILTER_MODE } from './navPair';
 import { isNonTradingDay } from './chineseHolidays';
 import dayjs from 'dayjs';
 
@@ -62,10 +62,11 @@ export function generateFundDailyReturns(
   fund: Fund,
   transactions: Transaction[],
   todayStr: string = today(),
+  mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE,
 ): DailyReturn[] {
   // 1. 只看已确认 + 当前基金；按日期升序
   const confirmed = onlyConfirmed(transactions.filter((t) => t.fundId === fund.id));
-  const usable = usableNavSeries(fund, getNavHistoryOverrideable(fund.id));
+  const usable = usableNavSeries(fund, getNavHistoryOverrideable(fund.id), mode);
   if (usable.length === 0 && confirmed.length === 0) return [];
 
   // 2. 有意义日 = NAV 发布日 ∪ 交易确认日
@@ -343,7 +344,8 @@ function getSharesAsOf(
  */
 export function generateDailyReturns(
   funds: Fund[],
-  transactions: Transaction[]
+  transactions: Transaction[],
+  mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE
 ): DailyReturn[] {
   const todayStr = today();
   const confirmed = onlyConfirmed(transactions);
@@ -351,7 +353,7 @@ export function generateDailyReturns(
   // Per-fund series → 按日期合并
   const mergedByDate = new Map<string, DailyReturn>();
   for (const fund of funds) {
-    const series = generateFundDailyReturns(fund, transactions, todayStr);
+    const series = generateFundDailyReturns(fund, transactions, todayStr, mode);
     for (const dr of series) {
       let entry = mergedByDate.get(dr.date);
       if (!entry) {
@@ -458,7 +460,8 @@ export function generateWeeklyReport(
   funds: Fund[],
   transactions: Transaction[],
   dcaPlans: DcaPlan[],
-  _snapshots: DailySnapshot[]
+  _snapshots: DailySnapshot[],
+  mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE
 ): WeeklyReport {
   const [weekStart, weekEnd] = getWeekRange(date);
 
@@ -467,7 +470,7 @@ export function generateWeeklyReport(
   //   即 cashDelta = shares×NAV_end - shares×NAV_start - buyCashOut + (sellCashIn + cashDiv) - fee
   // 与 portfolio 日历（generateMonthlyReturns 周聚合）口径完全一致——"日 vs 周/月/年算法分叉"消除。
   // 旧 `endValue - startValue - buy + sell` 公式漏现金分红且把卖出视为投资回报，导致与日历对不上。
-  const allDailies = generateDailyReturns(funds, transactions);
+  const allDailies = generateDailyReturns(funds, transactions, mode);
   const weekDailies = allDailies.filter((d) => d.date >= weekStart && d.date <= weekEnd);
   const totalReturn = weekDailies.reduce((sum, d) => sum + d.totalReturn, 0);
 
@@ -604,7 +607,8 @@ export function generateMonthlyReport(
   funds: Fund[],
   transactions: Transaction[],
   snapshots: DailySnapshot[],
-  platforms: Platform[]
+  platforms: Platform[],
+  mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE
 ): MonthlyReport {
   const [monthStart, monthEnd] = getMonthRange(year, month);
   const monthStr = `${year}-${String(month).padStart(2, '0')}`;
@@ -617,7 +621,7 @@ export function generateMonthlyReport(
   // 与 portfolio 日历（generateMonthlyReturns）口径完全一致——"日 vs 月报算法分叉"消除。
   // 旧 `endValue - startValue - buy + sell` 漏现金分红（Aug 6.66 仅 ¥200 而已、
   // Sep 漏 14.95 + 卖出视为投资回报导致符号反转到 -448.75）。
-  const allDailies = generateDailyReturns(funds, transactions);
+  const allDailies = generateDailyReturns(funds, transactions, mode);
   const monthDailies = allDailies.filter((d) => d.date >= monthStart && d.date <= monthEnd);
   const totalReturn = monthDailies.reduce((sum, d) => sum + d.totalReturn, 0);
 
