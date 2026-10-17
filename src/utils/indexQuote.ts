@@ -79,9 +79,13 @@ export function shouldRefreshIndexHistory(
   // 30 ≈ 1.5 个月，K 线接口实测 2000（8 年），远大于这个值；少数 N 日内不会触发。
   if (cached.length < MIN_REASONABLE_HISTORY) return true;
   const lastDate = cached[cached.length - 1]!.date;
-  // 主路径：quote 已前进 → history 落后了，拉
-  if (quoteDate && quoteDate > lastDate) return true;
-  // 兜底：quote 不可用时按 cache 时长判断
+  // 主路径：quote 可用时只看日期比较——cache 与 quote 已对齐或 cache 更近都不该拉，
+  // 只有 quote 更新了才必须拉。这是 2026-10-07 之后漏修的对称：旧逻辑 stale fallback
+  // 没有被 quoteDate 守卫，cache 距今 > 7 天时哪怕 quote === lastDate 也会误判 true。
+  // 单 `>` 也挡掉了"quote === lastDate 已对齐"的不必要刷新。
+  if (quoteDate) return quoteDate > lastDate;
+  // 兜底：quote 不可用时（quote 没拉到 / fetch 失败 / 空串）按 cache 时长判断，
+  // 7 天阈值沿用旧 IndexHistoryModal 的常量。
   const lastDateMs = new Date(lastDate).getTime();
   return now - lastDateMs > STALE_THRESHOLD_MS;
 }
