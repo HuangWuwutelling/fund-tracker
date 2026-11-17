@@ -1,10 +1,23 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import { Card, Collapse, Table, Button, Input, Switch, Space, message, Popconfirm, Typography, Modal, Select } from 'antd';
-import { PlusOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import { useStore } from '../stores';
 import type { Platform } from '../types';
 import type { UsQdiiFilterMode } from '../utils/navPair';
+import * as storage from '../utils/storage';
+import {
+  isAutoBackupSupported,
+  pickBackupTarget,
+  inspectBackupTarget,
+  saveBackupHandle,
+  runAutoBackup,
+  backupNowWithGesture,
+  clearBackupHandle,
+  queryAutoBackupPermission,
+  type AutoBackupPermission,
+} from '../utils/autoBackup';
 
 
 export default function Settings() {
@@ -12,6 +25,87 @@ export default function Settings() {
   const [newPlatformName, setNewPlatformName] = useState('');
   const [resetTarget, setResetTarget] = useState<string | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // --- 备份状态（手动备份时间 + 实验性自动备份权限） ---
+  const [backupMeta, setBackupMeta] = useState(() => storage.getBackupMeta());
+  const [autoPerm, setAutoPerm] = useState<AutoBackupPermission>('unsupported');
+  const [autoBusy, setAutoBusy] = useState(false);
+
+  const refreshBackupState = () => {
+    setBackupMeta(storage.getBackupMeta());
+    void queryAutoBackupPermission().then(setAutoPerm);
+  };
+  useEffect(() => { refreshBackupState(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 选定固定备份文件。先检查既有内容：非本应用备份（foreign-json/invalid）需
+  // 用户确认覆盖后才持久化 handle；确认前不写入任何内容。
+  const handlePickBackupTarget = async () => {
+    setAutoBusy(true);
+    try {
+      const handle = await pickBackupTarget();
+      if (!handle) return;
+
+      const adoptAndBackup = async () => {
+        await saveBackupHandle(handle);
+        // 刚选定的文件 Chrome 已授予 readwrite，静默路径即可完成首次备份
+        const ok = await runAutoBackup();
+        if (ok) {
+          message.success(`已选定备份文件 ${handle.name}，并完成首次备份`);
+        } else {
+          message.info('已选定备份文件；下次会话首次备份前需点击一次授权');
+        }
+        refreshBackupState();
+      };
+
+      const existing = await inspectBackupTarget(handle);
+      if (existing === 'backup' || existing === 'empty') {
+        await adoptAndBackup();
+      } else {
+        Modal.confirm({
+          title: '该文件不是本应用的备份文件',
+          icon: <ExclamationCircleOutlined />,
+          content: (
+            <div>
+              <p>「{handle.name}」已存在且内容不是本应用的备份（{existing === 'invalid' ? '无法解析为 JSON' : '其他 JSON 数据'}）。</p>
+              <p style={{ color: '#cf1322' }}>开启自动备份后，其内容将被本应用的最新数据完全覆盖。</p>
+            </div>
+          ),
+          okText: '仍然使用该文件',
+          cancelText: '取消',
+          onOk: adoptAndBackup,
+        });
+      }
+    } catch (err) {
+      if ((err as DOMException)?.name !== 'AbortError') {
+        console.error('[Settings] pick backup target failed', err);
+        message.error('选择备份文件失败');
+      }
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+  const handleRunAutoBackup = async () => {
+    setAutoBusy(true);
+    try {
+      // 单次分派：granted 直接写 / prompt 尽早请求授权，手势链中间无多余 await
+      const ok = await backupNowWithGesture();
+      if (ok) {
+        message.success('自动备份完成');
+      } else {
+        message.warning('备份未完成：权限不足或未设置备份文件');
+      }
+      refreshBackupState();
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+  const handleDisableAutoBackup = async () => {
+    await clearBackupHandle();
+    message.success('已取消自动备份（已生成的备份文件不受影响）');
+    refreshBackupState();
+  };
 
   const handleReclassify = () => {
     const changed = reclassifyFunds();
@@ -272,13 +366,32 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
                 {
                   value: 'strict',
                   label: '严格（按美股节假日）',
-                  title: '严格：按美股工作日节假日 + 周末剔除（仅 2025-2026 精确，其它年退化为仅周末）。仅对美股跟踪 QDII 生效。',
+                  title: '严格：按美股工作日节假日 + 周末剔除（2025-2027 精确，其它年退化为仅周末）。仅对美股跟踪 QDII 生效。',
                 },
                 {
                   value: 'off',
                   label: '不过滤',
                   title: '不过滤：保留所有原始记录，attribution 跨节假日会被压扁，但 MA250 暖机期最短。**对所有基金生效**（含 A 股），不只是 QDII。',
                 },
+              ]}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div>备份提醒周期</div>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                距上次备份超过该天数时，页面顶部显示备份提醒条；0 = 关闭提醒。数据只存本浏览器，清除浏览数据即丢失——不建议关闭。
+              </Typography.Text>
+            </div>
+            <Select
+              value={settings.backupReminderDays}
+              onChange={(v: number) => updateSettings({ backupReminderDays: v })}
+              style={{ width: 160 }}
+              options={[
+                { value: 7, label: '每 7 天' },
+                { value: 14, label: '每 14 天' },
+                { value: 30, label: '每 30 天' },
+                { value: 0, label: '关闭提醒' },
               ]}
             />
           </div>
@@ -290,6 +403,8 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
           <Typography.Text type="secondary">
             若某只基金的净值历史异常（如基金公司发布净值修正但本地增量同步未识别），
             可在此清除本地缓存，下次刷新净值时会重新拉取全量数据。
+            另外：技术指标按分红复权净值计算——2026-11-17 之前拉取的历史里累计净值是近似值，
+            分过红的基金（债基 / 红利类常见）建议重置后重新拉取，复权才完整生效。
           </Typography.Text>
           <Space wrap>
             <Select
@@ -332,6 +447,9 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
             </Button>
             <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
               下载 JSON 文件，包含所有投资数据
+              {backupMeta.lastBackupAt
+                ? `；上次备份：${dayjs(backupMeta.lastBackupAt).format('YYYY-MM-DD HH:mm')}`
+                : '；本设备尚未备份过'}
             </Typography.Text>
           </div>
           <div>
@@ -353,6 +471,43 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
               从 JSON 备份文件恢复（将覆盖当前数据）
             </Typography.Text>
           </div>
+
+          {isAutoBackupSupported() && (
+            <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
+              <div style={{ marginBottom: 4 }}>
+                <Typography.Text strong>自动备份到本地文件（实验性）</Typography.Text>
+              </div>
+              <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+                选定一个固定备份文件后，应用启动时按备份提醒周期静默把最新数据写入该文件（仅本地写盘，不上传）。
+                浏览器要求每次会话首次写入前重新授权一次，届时页面顶部会出现授权提示。
+              </Typography.Paragraph>
+              <Space wrap>
+                {autoPerm === 'none' || autoPerm === 'denied' ? (
+                  <Button type="primary" icon={<SaveOutlined />} onClick={handlePickBackupTarget} loading={autoBusy}>
+                    选择备份文件
+                  </Button>
+                ) : (
+                  <>
+                    <Button icon={<SaveOutlined />} onClick={handleRunAutoBackup} loading={autoBusy}>
+                      立即自动备份
+                    </Button>
+                    <Popconfirm title="确认取消自动备份？" okText="取消自动备份" cancelText="再想想" onConfirm={handleDisableAutoBackup}>
+                      <Button danger disabled={autoBusy}>取消自动备份</Button>
+                    </Popconfirm>
+                  </>
+                )}
+              </Space>
+              <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+                {autoPerm === 'none'
+                  ? '尚未设置备份文件。'
+                  : autoPerm === 'denied'
+                    ? '文件写入权限被拒绝，请重新选择备份文件。'
+                    : autoPerm === 'prompt'
+                      ? '已设置备份文件，等待授权（下次应用启动时页面顶部会出现授权提示，也可点上方按钮立即备份）。'
+                      : `已设置备份文件，权限正常。${backupMeta.lastAutoBackupAt ? `上次自动备份：${dayjs(backupMeta.lastAutoBackupAt).format('YYYY-MM-DD HH:mm')}` : ''}`}
+              </Typography.Text>
+            </div>
+          )}
         </Space>
       </Card>
 
@@ -433,11 +588,13 @@ MACD 柱 = (DIF − DEA) × 2
                 <Typography.Paragraph>
                   <strong>公式：</strong>
                 </Typography.Paragraph>
-                <pre style={formulaPreStyle}>{`回撤(t) = (NAV(t) − max(NAV(0..t))) / max(NAV(0..t)) × 100%
-百分位(t) = #{ i : 回撤(i) ≥ 回撤(t) } / #{ 有效回撤数 } × 100
+                <pre style={formulaPreStyle}>{`回撤(t) = (复权净值(t) − max(复权净值(0..t))) / max(复权净值(0..t)) × 100%
+百分位(t) = ( #{ i : 回撤(i) > 回撤(t) } + 0.5 × #{ i : 回撤(i) = 回撤(t) } )
+            / #{ 有效回撤数 } × 100          （mid-rank 平局处理）
 
-百分位越高 → 当前净值越接近历史最低点（越便宜）
-百分位越低 → 当前净值越接近历史最高点（越贵）`}</pre>
+百分位越高 → 当前比历史上越多时刻便宜（越便宜）
+百分位越低 → 当前越接近历史最高点（越贵）
+与历史完全持平（如一路创新高）→ 50% 中性`}</pre>
                 <Typography.Paragraph>
                   <strong>怎么读：</strong>
                 </Typography.Paragraph>
@@ -448,6 +605,8 @@ MACD 柱 = (DIF − DEA) × 2
                 </ul>
                 <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
                   ⚠ 历史回撤百分位不预测未来，仅反映当前在历史分布里的位置。新成立基金（&lt; 30 个交易日）数据不足，百分位会显示 — 。
+                  <br />
+                  ⚠ 三项指标均基于分红复权净值（分红除息不再产生虚假跳变）。2026-11-17 之前拉取的净值历史里累计净值是近似值（= 单位净值），分过红的基金建议在上方「重置净值历史」后重新拉取，复权才完整生效。
                 </Typography.Paragraph>
               </div>
             ),

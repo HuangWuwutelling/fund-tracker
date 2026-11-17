@@ -8,5 +8,12 @@ CLAUDE.md
 .mcp.json
 # Claude Code 工作目录（本地会话/agent/状态文件）
 .claude/
+# ZCode CLI 会话目录（本地任务/计划/状态文件）
+.zcode/
+# Superpowers SDD 过程产物（QA 清单/review diff/进度；工具自带内部 ignore，此处兜底）
+.superpowers/
 # 导出/备份文件（含个人持仓数据）
 fund-tracker-backup-*.json
+# Windows 资源管理器垃圾文件
+Thumbs.db
+desktop.ini

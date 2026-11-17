@@ -13,6 +13,7 @@ import {
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useStore } from '../stores';
+import BackupReminder from './BackupReminder';
 
 const { Header, Sider, Content, Footer } = Layout;
 const { Title, Paragraph, Text } = Typography;
@@ -128,6 +129,7 @@ export default function AppLayout() {
           </Space>
         </Header>
         <Content style={{ margin: 24 }}>
+          <BackupReminder />
           <Outlet />
         </Content>
         <Footer style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: '16px 24px', background: 'transparent' }}>

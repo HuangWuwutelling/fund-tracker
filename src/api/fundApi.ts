@@ -1,4 +1,4 @@
-import type { NavRecord, Fund } from '../types';
+import type { NavRecord, Fund, FundFetchFailureReason } from '../types';
 import dayjs from 'dayjs';
 
 // --- Fund search: load full fund list once for code/name search ---
@@ -107,7 +107,7 @@ export function getFundTypeFromName(name: string): Fund['type'] | null {
 //   fS_name, fS_code, Data_netWorthTrend, etc.
 // We load the script and read the globals.
 
-interface FundEstimate {
+export interface FundEstimate {
   name: string;
   code: string;
   nav: number;
@@ -116,14 +116,38 @@ interface FundEstimate {
   navDate: string;
 }
 
+/** pingzhongdata 脚本加载超时（15s）——与普通加载失败区分，供失败原因分类 */
+class PingzhongTimeoutError extends Error {
+  constructor() {
+    super('Pingzhongdata script load timeout');
+    this.name = 'PingzhongTimeoutError';
+  }
+}
+
+/** pingzhongdata 脚本加载失败（网络/被拦/404 等） */
+class PingzhongLoadError extends Error {
+  constructor(fundCode: string) {
+    super(`Pingzhongdata script load failed: ${fundCode}`);
+    this.name = 'PingzhongLoadError';
+  }
+}
+
 const PINGZHONG_GLOBALS = [
-  'fS_name', 'fS_code', 'Data_netWorthTrend',
+  'fS_name', 'fS_code', 'Data_netWorthTrend', 'Data_ACWorthTrend',
 ] as const;
 
 /** 检测 pingzhongdata API 新格式：部分基金返回 { y: 小整数, sc: "..." }，
  *  sc 字段编码规则官方未公开且与基金类型相关，无法通用解码。
  *  检测到任一记录含 sc 字段时，整只基金放弃更新（避免写入错 NAV）。
- *  TODO 长期方案：换数据源或加 Cloudflare Worker 代理 api.fund.eastmoney.com/f10/lsjz（那个端点有 CORS）
+ *
+ *  长期方案验证结论（2026-11-17 curl 实测）：
+ *  api.fund.eastmoney.com/f10/lsjz 返回 200 且数据形状符合预期
+ *  （FSRQ/DWJZ/LJJZ/JZZZL），但**不带任何 Access-Control-Allow-Origin 头**
+ *  （带 fund.eastmoney.com Referer、带 GitHub Pages Origin、裸请求三种场景均无）
+ *  ——原 TODO"该端点有 CORS"的说法不成立，浏览器直连 fetch 会被 CORS 拦截，
+ *  且 lsjz 返回纯 JSON 无法走 <script> 注入。
+ *  可行路径只剩：Cloudflare Worker 代理（Worker 端加 CORS + 转发 Referer），
+ *  或继续守着 pingzhongdata 的 isNewFormat 防御检测（当前未触发，见上）。
  */
 function isNewFormat(trend: Array<{ x: number; y: number; sc?: unknown }>): boolean {
   return trend.some((item) => typeof item.sc === 'string');
@@ -134,7 +158,7 @@ function loadPingzhongScript(fundCode: string): Promise<Record<string, unknown>>
     const script = document.createElement('script');
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error('Script load timeout'));
+      reject(new PingzhongTimeoutError());
     }, 15000);
 
     const cleanup = () => {
@@ -173,7 +197,7 @@ function loadPingzhongScript(fundCode: string): Promise<Record<string, unknown>>
     script.onerror = (e) => {
       console.error('[fundApi] Script load error for', fundCode, e);
       cleanup();
-      reject(new Error(`Script load failed: ${fundCode}`));
+      reject(new PingzhongLoadError(fundCode));
     };
 
     script.src = `https://fund.eastmoney.com/pingzhongdata/${fundCode}.js`;
@@ -218,6 +242,37 @@ export async function fetchFundEstimate(fundCode: string): Promise<FundEstimate 
 }
 
 // --- Historical NAV from pingzhongdata ---
+
+/**
+ * 把单位净值走势与累计净值走势按日期配对，产出 NavRecord[]。
+ *
+ * pingzhongdata 的 Data_netWorthTrend 只有单位净值；Data_ACWorthTrend 是
+ * [[timestamp, 累计净值], ...] 的二维数组（2026-11 实测 016452：934 条与
+ * trend 逐日等长）。分红基金的累计净值 ≠ 单位净值——此前 accNav 恒等 nav
+ * 是口径错误，这里修正。
+ *
+ * 某日缺累计值 / 非法值时回退为单位净值（与旧行为一致，保证 navPair 的
+ * QDII 占位判定"nav+accNav 双同值"依旧成立）。
+ */
+export function pairNavWithAcc(
+  trend: Array<{ x: number; y: number }> | undefined,
+  accTrend: Array<[number, number]> | undefined,
+): NavRecord[] {
+  const accByDate = new Map<string, number>();
+  for (const pair of accTrend ?? []) {
+    if (!Array.isArray(pair) || pair.length < 2) continue;
+    const [x, val] = pair as [unknown, unknown];
+    if (typeof x !== 'number' || typeof val !== 'number') continue;
+    if (!Number.isFinite(val) || val <= 0) continue;
+    accByDate.set(dayjs(x).format('YYYY-MM-DD'), val);
+  }
+  return (trend ?? []).map((item) => {
+    const date = dayjs(item.x).format('YYYY-MM-DD');
+    const acc = accByDate.get(date);
+    return { date, nav: item.y, accNav: acc !== undefined ? acc : item.y };
+  });
+}
+
 export async function fetchNavHistory(
   fundCode: string,
   startDate: string,
@@ -228,11 +283,8 @@ export async function fetchNavHistory(
     const trend = data['Data_netWorthTrend'] as Array<{ x: number; y: number }> | undefined;
     if (!trend || trend.length === 0) return [];
 
-    const records: NavRecord[] = trend.map((item) => ({
-      date: dayjs(item.x).format('YYYY-MM-DD'),
-      nav: item.y,
-      accNav: item.y, // pingzhongdata only provides unit NAV, not accumulated
-    }));
+    const accTrend = data['Data_ACWorthTrend'] as Array<[number, number]> | undefined;
+    const records: NavRecord[] = pairNavWithAcc(trend, accTrend);
 
     // Filter by date range
     return records.filter((r) => r.date >= startDate && r.date <= endDate);
@@ -243,46 +295,56 @@ export async function fetchNavHistory(
 }
 
 // --- Fetch fund info + full NAV history in one call ---
-export async function fetchFundWithHistory(fundCode: string): Promise<{
-  estimate: FundEstimate;
-  navHistory: NavRecord[];
-} | null> {
+
+/** 判别联合返回：失败必带 reason，调用方按原因分档提示，不再"一律怪网络" */
+export type FetchFundResult =
+  | { ok: true; estimate: FundEstimate; navHistory: NavRecord[] }
+  | { ok: false; reason: FundFetchFailureReason; detail?: string };
+
+export async function fetchFundWithHistory(fundCode: string): Promise<FetchFundResult> {
+  let data: Record<string, unknown>;
   try {
-    const data = await loadPingzhongScript(fundCode);
-    const name = data['fS_name'] as string;
-    const code = data['fS_code'] as string;
-    if (!name || !code) return null;
-
-    const trend = data['Data_netWorthTrend'] as Array<{ x: number; y: number; sc?: unknown }> | undefined;
-    // 新格式检测：任何记录含 sc 字段则放弃更新整只基金
-    if (trend && isNewFormat(trend)) {
-      console.warn(
-        '[fundApi] pingzhongdata returned new NAV format (sc field) for',
-        code, '— skipping update to avoid writing incorrect NAV'
-      );
-      return null;
-    }
-    const navHistory: NavRecord[] = (trend ?? []).map((item) => ({
-      date: dayjs(item.x).format('YYYY-MM-DD'),
-      nav: item.y,
-      accNav: item.y,
-    }));
-
-    const latest = trend?.[trend.length - 1];
-    const prev = trend && trend.length > 1 ? trend[trend.length - 2] : latest;
-    const lastNav = latest?.y ?? 0;
-    const prevNav = prev?.y ?? lastNav;
-    const navDate = latest ? dayjs(latest.x).format('YYYY-MM-DD') : '';
-    const changePercent = prevNav > 0 ? ((lastNav - prevNav) / prevNav) * 100 : 0;
-
-    return {
-      estimate: { name, code, nav: lastNav, lastNav, changePercent, navDate },
-      navHistory,
-    };
+    data = await loadPingzhongScript(fundCode);
   } catch (err) {
     console.error('[fundApi] fetchFundWithHistory failed for', fundCode, err);
-    return null;
+    return {
+      ok: false,
+      reason: err instanceof PingzhongTimeoutError ? 'timeout' : 'network',
+      detail: err instanceof Error ? err.message : String(err),
+    };
   }
+
+  const name = data['fS_name'] as string;
+  const code = data['fS_code'] as string;
+  if (!name || !code) {
+    return { ok: false, reason: 'not-found', detail: 'fS_name/fS_code missing' };
+  }
+
+  const trend = data['Data_netWorthTrend'] as Array<{ x: number; y: number; sc?: unknown }> | undefined;
+  // 新格式检测：任何记录含 sc 字段则放弃更新整只基金
+  if (trend && isNewFormat(trend)) {
+    console.warn(
+      '[fundApi] pingzhongdata returned new NAV format (sc field) for',
+      code, '— skipping update to avoid writing incorrect NAV'
+    );
+    return { ok: false, reason: 'new-format', detail: 'Data_netWorthTrend 含 sc 字段' };
+  }
+
+  const accTrend = data['Data_ACWorthTrend'] as Array<[number, number]> | undefined;
+  const navHistory = pairNavWithAcc(trend, accTrend);
+
+  const latest = trend?.[trend.length - 1];
+  const prev = trend && trend.length > 1 ? trend[trend.length - 2] : latest;
+  const lastNav = latest?.y ?? 0;
+  const prevNav = prev?.y ?? lastNav;
+  const navDate = latest ? dayjs(latest.x).format('YYYY-MM-DD') : '';
+  const changePercent = prevNav > 0 ? ((lastNav - prevNav) / prevNav) * 100 : 0;
+
+  return {
+    ok: true,
+    estimate: { name, code, nav: lastNav, lastNav, changePercent, navDate },
+    navHistory,
+  };
 }
 
 // --- Batch fetch with rate limiting ---

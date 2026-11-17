@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote, IndexHistoryRecord } from '../types';
+import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote, IndexHistoryRecord, FundRefreshIssue } from '../types';
 import * as storage from '../utils/storage';
 import { generateSnapshot } from '../utils/snapshot';
 import { getPlanDueDates } from '../utils/calculator';
@@ -80,6 +80,13 @@ interface FundTrackerState {
   // Actions - Refresh trigger (App.tsx subscribes to bump to re-run refreshAll)
   refreshTrigger: number;
   requestRefresh: () => void;
+
+  // Actions - Refresh issues（刷新失败上报；非持久化，见 types 的 FundRefreshIssue）
+  refreshIssues: Record<string, FundRefreshIssue>;
+  /** 整体替换本轮刷新的失败上报（空对象 = 全部成功） */
+  setRefreshIssues: (issues: Record<string, FundRefreshIssue>) => void;
+  /** 单只基金手动刷新成功后清除其上报 */
+  clearRefreshIssue: (fundId: string) => void;
 
   // Actions - Init & Bulk
   loadFromStorage: () => void;
@@ -323,6 +330,22 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     set((s) => ({ refreshTrigger: s.refreshTrigger + 1 }));
   },
 
+  // --- Refresh issues ---
+  refreshIssues: {},
+
+  setRefreshIssues: (issues) => {
+    set({ refreshIssues: issues });
+  },
+
+  clearRefreshIssue: (fundId) => {
+    set((s) => {
+      if (!s.refreshIssues[fundId]) return s;
+      const next = { ...s.refreshIssues };
+      delete next[fundId];
+      return { refreshIssues: next };
+    });
+  },
+
   // --- Nav freshness ---
   recordNavFreshness: () => {
     const { funds, getNavHistory, settings } = get();
@@ -364,6 +387,9 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     a.download = `fund-tracker-backup-${date}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    // 记录备份时间（设备本地 backup-meta，不参与导出）——备份提醒条据此判断超期
+    const meta = storage.getBackupMeta();
+    storage.saveBackupMeta({ ...meta, lastBackupAt: new Date().toISOString() });
   },
 
   importData: (data) => {
@@ -387,6 +413,10 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     // 导入后基金集合已变，旧观测基线作废——重置为空，让下一次刷新重新建立
     set({ freshNavFundIds: new Set<string>(), navRefreshedAt: null });
     // 导入后立刻补定投记录（页面 mount 的自动记录早已跑过，导入不会重跑它）
-    return get().settings.dcaAutoRecord ? get().autoRecordDcaPlans() : 0;
+    const autoCreated = get().settings.dcaAutoRecord ? get().autoRecordDcaPlans() : 0;
+    // 导入成功 = 用户手上有有效备份文件，视为一次备份动作（刷新提醒条计时）
+    const meta = storage.getBackupMeta();
+    storage.saveBackupMeta({ ...meta, lastBackupAt: new Date().toISOString() });
+    return autoCreated;
   },
 }));

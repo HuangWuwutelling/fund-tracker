@@ -7,23 +7,12 @@ import { usableNavSeries, type UsQdiiFilterMode, DEFAULT_US_QDII_FILTER_MODE } f
  *  纯函数，testable。所有函数假设上游已用 usableNavSeries 过滤
  *  —— 调用方传入的 navHistory 应为已过滤后的 NavRecord[]。
  *  Mirror calculator.ts: typeof x !== 'number' || !Number.isFinite(x) 防御式
- * ============================================================ */
-
-/**
- * 把任意输入清洗成 `number[]`。把 null / 非数 / NaN 都当作"hole"，但其他保留。
  *
- * 这里直接过滤掉非法值，保证 EMA / SMA / 回撤的数学运算不被污染。FundDetail
- * 用 `filteredNav` 时这部分通常为空过滤，但接口上保留宽容以测试边界。
- */
-function toDenseNumbers(values: readonly (number | null | undefined)[]): number[] {
-  const out: number[] = [];
-  for (const v of values) {
-    if (v === null || v === undefined) continue;
-    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
-    out.push(v);
-  }
-  return out;
-}
+ *  口径（2026-11 审计修正）：三项指标全部基于**后复权（分红再投资）序列**
+ *  buildAdjustedSeries()，而非单位净值——分红除息日单位净值跳水会让
+ *  MA250 系统性偏低、MACD 误判死叉、回撤虚深（行业惯例：基金技术指标
+ *  应使用复权净值，见雪球/知乎量化投研等资料）。
+ * ============================================================ */
 
 /* ------------------------------- SMA ------------------------------- */
 
@@ -257,14 +246,21 @@ export function drawdownSeries(values: readonly (number | null | undefined)[]): 
 }
 
 /**
- * 当前回撤百分位：在历史回撤序列里，**比当前回撤更深的（数值更小的）** 历史占多少。
+ * 当前回撤百分位（0~100）：历史中**比当前更贵**（回撤更浅）的时点占比，
+ * 与当前持平的时点各按半票计（mid-rank，统计标准的平局处理）。
  *
- * 语义：当前净值回撤百分位 ∈ [0, 100]
- * - 100% = 当前是历史最深回撤（最便宜）
- * - 0%   = 当前没有任何历史比它更便宜（最贵）
+ * 语义：
+ * - 100% ≈ 当前比历史上任何时刻都便宜（当前是历史最深回撤）
+ * - 0%   = 当前比历史上任何时刻都贵（通常 = 处于历史最高点附近）
+ * - 全部持平（如一路创新高的基金）→ 50% 中性
  *
- * 公式：`#{i : dd[i] >= dd[last]} / N × 100`。所有回撤相等时（全部 0），返回 100%
- * 作为退化结果（"无法区分优劣"自然取上界）。
+ * 为什么用 mid-rank 而不是 `#{v >= last}/N`：后者把"与当前持平"的历史
+ * 全部计为"比当前贵"。基金创新高的日子（当前 dd=0）若历史上 x% 的时间
+ * 也在高点，读数会被虚高 x/2 个百分点——单边长牛基金会在历史最高点
+ * 显示虚假的"接近最便宜"。mid-rank 是分位数统计的标准平局处理。
+ *
+ * 公式：`(#{v > last} + 0.5 × #{v == last}) / N × 100`。
+ * 理论上界 (N-1)/N+0.5/N（唯一最深），N 为真实历史长度（数百期以上）时 ≈ 100%。
  *
  * 少于 1 个有效点返回 null。
  */
@@ -277,11 +273,75 @@ export function drawdownPercentile(ddSeries: readonly (number | null | undefined
   }
   if (valid.length === 0) return null;
   const last = valid[valid.length - 1]!;
-  let countAtLeast = 0;
+  let shallower = 0; // 回撤更浅 = 更贵
+  let equal = 0;
   for (const v of valid) {
-    if (v >= last) countAtLeast += 1;
+    if (v > last) shallower += 1;
+    else if (v === last) equal += 1;
   }
-  return (countAtLeast / valid.length) * 100;
+  return ((shallower + 0.5 * equal) / valid.length) * 100;
+}
+
+/* ------------------------------- 复权序列 ------------------------------- */
+
+export interface AdjustedSeries {
+  /** 后复权（分红再投资）净值序列，与输入等长 */
+  values: number[];
+  /** 检测到的分红事件数（accNav − nav 差值跳变次数） */
+  dividendEvents: number;
+}
+
+/**
+ * 把可用净值序列重建为**后复权（分红再投资）净值**序列。
+ *
+ * 背景：MA250 / MACD / 回撤若直接用单位净值，分红除息日会产生虚假的净值悬崖
+ * （单位净值跳水但投资者并未亏损；行业惯例基金技术指标应用复权净值，
+ * 见雪球 / 知乎量化投研等资料）。标准构造：
+ *   adj(t) = adj(t-1) × (nav(t) + div(t)) / nav(t-1)
+ * 其中 div(t) 为 t 日每份分红。pingzhongdata 不提供分红事件列表，但（修复
+ * accNav 口径后）提供真实累计净值：非分红日 accNav − nav 的差值恒定，
+ * 分红日该差值跳增的量 ≈ 每份分红（accNav 除息日不变、nav 跳水）。
+ * 因此用差值跳变检测分红：
+ *   div(t) = (acc(t) − nav(t)) − (acc(t-1) − nav(t-1))，> 0.001 视为分红
+ * （nav / acc 均为 4 位小数，独立舍入噪声 ≤ 0.0004，阈值留 2.5 倍余量）。
+ *
+ * 注意：
+ * - 旧版数据 accNav ≡ nav（旧代码写死的假累计净值）→ 检测不到分红，
+ *   复权序列退化为单位净值原样（与修复前行为一致）。分过红的基金要获得
+ *   完整复权，请在 Settings 里重置该基金净值历史后重新拉取。
+ * - 序列整体是乘性缩放的相对量——MA250 偏离度 / MACD / 回撤都是
+ *   within-fund 的比率型指标，缩放不影响其含义。
+ * - 负跳变（数据异常）clamp 为 0，防止复权因子反向爆炸；gap ≤ 0
+ *   （acc < nav，数据损坏）时同样不识别为分红，双重防御。
+ */
+export function buildAdjustedSeries(usable: NavRecord[]): AdjustedSeries {
+  const values: number[] = [];
+  let adj = 0;
+  let prevGap = 0;
+  let dividendEvents = 0;
+  for (let i = 0; i < usable.length; i++) {
+    const r = usable[i]!;
+    if (i === 0) {
+      adj = r.nav;
+      prevGap = r.accNav - r.nav;
+      values.push(adj);
+      continue;
+    }
+    const gap = r.accNav - r.nav;
+    const div = gap - prevGap;
+    prevGap = gap;
+    const prevNav = usable[i - 1]!.nav;
+    // nav 异常（≤0 / 非有限）时保持前值，防复权因子爆炸
+    if (!(prevNav > 0) || !(r.nav > 0) || !Number.isFinite(r.nav)) {
+      values.push(adj);
+      continue;
+    }
+    const safeDiv = Number.isFinite(div) && div > 0.001 && gap > 0 ? div : 0;
+    if (safeDiv > 0) dividendEvents += 1;
+    adj = (adj * (r.nav + safeDiv)) / prevNav;
+    values.push(adj);
+  }
+  return { values, dividendEvents };
 }
 
 /* ------------------------------- Top-level wrapper ------------------------------- */
@@ -297,24 +357,28 @@ function calcDeviationPct(
 }
 
 export interface FundIndicators {
-  /** (curr − MA250) / MA250 × 100 */
+  /** (curr − MA250) / MA250 × 100，基于复权序列 */
   ma250Deviation: number | null;
-  /** 当前 MACD 状态判定 */
+  /** 当前 MACD 状态判定（复权序列） */
   macdState: { state: MacdState; daysSinceCross: number | null; lastHist: number | null };
-  /** 当前回撤百分位（0~100） */
+  /** 当前回撤百分位（0~100，复权序列 + mid-rank 平局） */
   drawdownPercentile: number | null;
   /** usable 数据长度 ≥ 250（MA250 完全有效） */
   hasEnoughHistory: boolean;
-  /** 经过 usableNavSeries 过滤后的净值序列（脱敏后的数据，调用方无需再过滤） */
-  usableNavs: number[];
-  /** usable 的日期序列（与 usableNavs 一一对应） */
+  /** 检测到的分红事件数；0 = 无分红或 accNav 尚为旧版假数据（≈ 单位净值） */
+  dividendEvents: number;
+  /** 复权后的净值序列（脱敏后的数据，调用方无需再过滤） */
+  adjustedNavs: number[];
+  /** usable 的日期序列（与 adjustedNavs 一一对应） */
   usableDates: string[];
 }
 
 /**
  * 一站式计算单只基金的三指标。
  *
- * 自动调用 `usableNavSeries` 过滤美股跟踪 QDII 的节假日复制 NAV。
+ * 自动调用 `usableNavSeries` 过滤美股跟踪 QDII 的节假日复制 NAV，
+ * 再经 `buildAdjustedSeries` 重建分红复权序列——三项指标全部基于
+ * **后复权（分红再投资）口径**，分红除息不再产生虚假信号。
  *
  * 注意：MA250 全序列、MACD 全序列、回撤全序列在内部计算后**不返回**——
  * UI 只关心三个标量（deviation / macdState / drawdownPercentile）+ 数据完整度。
@@ -326,25 +390,26 @@ export function computeFundIndicators(
   mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE
 ): FundIndicators {
   const usable = usableNavSeries(fund, navHistory, mode);
-  const rawNavs = usable.map((r) => r.nav);
+  const { values: adjustedNavs, dividendEvents } = buildAdjustedSeries(usable);
 
   // MA250 偏离度：只取最后一个有效值
-  const ma250Arr = sma(rawNavs, 250);
+  const ma250Arr = sma(adjustedNavs, 250);
   const lastMa = ma250Arr[ma250Arr.length - 1] ?? null;
-  const dev = calcDeviationPct(rawNavs[rawNavs.length - 1], lastMa);
+  const dev = calcDeviationPct(adjustedNavs[adjustedNavs.length - 1], lastMa);
 
   // MACD：内部完整计算只为拿 macdState
-  const macdState = macdLatestState(macd(rawNavs));
+  const macdState = macdLatestState(macd(adjustedNavs));
 
   // 回撤百分位：内部完整计算只为拿百分位
-  const ddPct = drawdownPercentile(drawdownSeries(rawNavs));
+  const ddPct = drawdownPercentile(drawdownSeries(adjustedNavs));
 
   return {
     ma250Deviation: dev,
     macdState,
     drawdownPercentile: ddPct,
-    hasEnoughHistory: rawNavs.length >= 250,
-    usableNavs: toDenseNumbers(rawNavs),
+    hasEnoughHistory: adjustedNavs.length >= 250,
+    dividendEvents,
+    adjustedNavs,
     usableDates: usable.map((r) => r.date),
   };
 }
@@ -357,15 +422,17 @@ export function computeFundIndicators(
  */
 export const INDICATOR_TOOLTIPS = {
   ma250:
-    '过去 250 个交易日净值的简单移动均线。偏离度 = (现价 − MA250) / MA250 × 100%。' +
-    '深度负偏离通常意味着低估机会，但需结合基本面与其他指标判断。' +
+    '过去 250 个交易日**分红复权净值**的简单移动均线（分红除息不再产生虚假跳变）。' +
+    '偏离度 = (现值 − MA250) / MA250 × 100%。深度负偏离通常意味着低估机会，' +
+    '但需结合基本面与其他指标判断；对债券等低波动基金，±5% 档位内的偏离意义有限。' +
     '完整公式与解读见「设置 → 技术指标说明」。',
   macd:
     '12 日 EMA 减 26 日 EMA = DIF；DIF 的 9 日 EMA = DEA；柱 = (DIF − DEA) × 2。' +
-    'DIF 上穿 DEA 为金叉（看多信号），下穿为死叉（看空信号）。' +
+    '基于分红复权净值计算。DIF 上穿 DEA 为金叉（看多信号），下穿为死叉（看空信号）。' +
     '完整公式与解读见「设置 → 技术指标说明」。',
   drawdown:
-    '从历史最高点回撤的幅度百分位：100% 表示当前净值与历史最便宜时相当（深度低估），' +
-    '0% 表示当前净值高于历史上的任何时刻（估值偏贵）。百分位高通常对应较好的买入时机。' +
+    '分红复权净值从历史最高点回撤的幅度百分位：100% 表示当前比历史上任何时刻都便宜' +
+    '（深度低估），0% 表示当前与历史最高点相当（估值偏贵）；与历史持平的时点各计半票' +
+    '（mid-rank 平局处理）。百分位高通常对应较好的买入时机。' +
     '完整公式与解读见「设置 → 技术指标说明」。',
 };

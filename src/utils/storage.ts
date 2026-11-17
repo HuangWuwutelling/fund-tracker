@@ -17,8 +17,21 @@ function getItem<T>(name: string, fallback: T): T {
   }
 }
 
+/** localStorage 写失败事件名。storage 层不依赖 UI：QuotaExceeded 等写失败时
+ *  广播此事件，App 监听后弹 toast 提醒用户导出备份（数据安全必须让用户看到）。 */
+export const STORAGE_ERROR_EVENT = 'fund-tracker:storage-error';
+
 function setItem<T>(name: string, value: T): void {
-  localStorage.setItem(key(name), JSON.stringify(value));
+  try {
+    localStorage.setItem(key(name), JSON.stringify(value));
+  } catch (err) {
+    // QuotaExceededError（5MB 写满）/ 隐私模式禁用写入等。不向上抛——所有 save*
+    // 调用点都没有异常处理，抛出会打断 store action；改为广播事件让 UI 提示。
+    console.error(`[storage] write failed for "${name}"`, err);
+    try {
+      window.dispatchEvent(new CustomEvent(STORAGE_ERROR_EVENT, { detail: { key: name } }));
+    } catch { /* 事件派发失败时只剩 console */ }
+  }
 }
 
 // --- Version ---
@@ -88,6 +101,7 @@ export const DEFAULT_SETTINGS: Settings = {
   reportFrequency: 'both',
   dcaAutoRecord: true,
   usQdiiFilterMode: 'auto',
+  backupReminderDays: 7,
 };
 
 export function getSettings(): Settings {
@@ -131,6 +145,24 @@ export function getSeenNavMap(): Record<string, string> {
 
 export function saveSeenNavMap(map: Record<string, string>): void {
   setItem('seen-nav', map);
+}
+
+// --- Backup meta (备份追踪) ---
+// 设备本地状态，语义同 seen-nav：**不参与** exportAllData / importAllData。
+// 放进 settings 会跟着备份一起走（换设备后"上次备份时间"语义错乱），故单独存 key。
+export interface BackupMeta {
+  /** 最近一次手动导出 / 导入备份的时间（ISO）；null = 本设备从未备份 */
+  lastBackupAt: string | null;
+  /** 最近一次自动备份（File System Access，实验性）成功写入的时间（ISO） */
+  lastAutoBackupAt: string | null;
+}
+
+export function getBackupMeta(): BackupMeta {
+  return getItem<BackupMeta>('backup-meta', { lastBackupAt: null, lastAutoBackupAt: null });
+}
+
+export function saveBackupMeta(meta: BackupMeta): void {
+  setItem('backup-meta', meta);
 }
 
 // --- Export / Import ---

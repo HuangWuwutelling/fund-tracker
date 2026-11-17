@@ -33,6 +33,35 @@ export interface Transaction {
   status?: 'pending' | 'confirmed';
 }
 
+/**
+ * `fetchFundWithHistory` 失败原因（数据源层向上层的粗粒度分类）。
+ * 此前该函数失败一律返回 null，调用方只能笼统报"请检查网络"——
+ * `sc` 新格式基金被静默跳过 + 误导文案的根源就在这里。
+ */
+export type FundFetchFailureReason =
+  | 'new-format'  // pingzhongdata 新格式（sc 字段未公开编码，无法安全解码）
+  | 'not-found'   // fS_name/fS_code 缺失（代码无效或返回异常）
+  | 'network'     // 脚本加载失败
+  | 'timeout'     // 脚本加载超时（15s）
+  | 'no-data';    // 加载成功但 Data_netWorthTrend 为空
+
+/** 失败原因 → 用户可读标签（Dashboard / FundDetail / FundList 统一口径） */
+export const FUND_FETCH_FAILURE_LABELS: Record<FundFetchFailureReason, string> = {
+  'new-format': '数据源格式变更',
+  'not-found': '未找到该基金',
+  'network': '网络错误',
+  'timeout': '请求超时',
+  'no-data': '暂无净值数据',
+};
+
+/** 一次净值刷新中某只基金更新失败的上报。**非持久化**（不进 localStorage / 导出），
+ *  仅会话内供 UI 展示醒目警告；下次整体刷新时被 setRefreshIssues 整体替换。 */
+export interface FundRefreshIssue {
+  reason: FundFetchFailureReason;
+  /** 上报时间（ms） */
+  at: number;
+}
+
 export interface DcaPlan {
   id: string;
   fundId: string;
@@ -66,6 +95,11 @@ export interface Settings {
    * `DEFAULT_SETTINGS` 合并兜底为 'auto'，调用方无需 `?? 'auto'`。
    */
   usQdiiFilterMode: 'auto' | 'strict' | 'off';
+  /**
+   * 备份提醒周期（天）：距上次备份超过 N 天时，Layout 顶部显示备份提醒条。
+   * 0 = 关闭提醒。老备份导入时由 DEFAULT_SETTINGS 合并兜底为 7。
+   */
+  backupReminderDays: number;
 }
 
 /**

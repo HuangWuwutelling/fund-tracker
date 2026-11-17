@@ -4,17 +4,18 @@ import { PlusOutlined, SearchOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../stores';
 import { fetchFundWithHistory, loadFundSearchList, searchFunds, getFundTypeFromSearch } from '../api/fundApi';
+import { mergeNavTail } from '../utils/navHistoryMerge';
 import { formatDate } from '../utils/formatter';
 import InitialPositionModal from '../components/InitialPositionModal';
 import NavLink from '../components/NavLink';
-import { FUND_TYPE_LABELS, FUND_TYPE_COLORS } from '../types';
+import { FUND_TYPE_LABELS, FUND_TYPE_COLORS, FUND_FETCH_FAILURE_LABELS } from '../types';
 import type { Fund } from '../types';
 import type { FundSearchItem } from '../api/fundApi';
 
 const { Text } = Typography;
 
 export default function FundList() {
-  const { funds, platforms, addFund, removeFund, updateNavHistory, updateFund, getNavHistory } = useStore();
+  const { funds, platforms, addFund, removeFund, updateNavHistory, updateFund, getNavHistory, clearRefreshIssue } = useStore();
   const navigate = useNavigate();
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
@@ -66,21 +67,30 @@ export default function FundList() {
     setRefreshing(fundId);
     try {
       const result = await fetchFundWithHistory(fundId);
-      if (!result) {
-        message.error('刷新失败，请检查网络');
+      if (!result.ok) {
+        // 按真实原因提示——此前一律"请检查网络"，sc 新格式基金会被误导
+        message.error(`刷新失败：${FUND_FETCH_FAILURE_LABELS[result.reason]}`);
         return;
       }
-      const records = result.navHistory;
-      if (records.length > 0) {
-        updateNavHistory(fundId, records);
+      if (result.estimate.lastNav <= 0) {
+        message.warning('未获取到净值数据（该基金暂无净值记录）');
+        return;
       }
-      if (result.estimate.lastNav > 0) {
-        updateFund(fundId, {
-          currentNav: result.estimate.lastNav,
-          navDate: result.estimate.navDate,
-        });
+      // 增量合并（与 App 启动刷新共用 mergeNavTail），不再全量覆盖本地历史
+      const local = getNavHistory(fundId);
+      const merged = mergeNavTail(local, result.navHistory);
+      if (merged) {
+        updateNavHistory(fundId, merged);
+        message.success(`已更新净值（新增 ${merged.length - local.length} 条）`);
+      } else {
+        message.success('净值已是最新');
       }
-      message.success(`已加载 ${records.length} 条历史净值`);
+      updateFund(fundId, {
+        currentNav: result.estimate.lastNav,
+        navDate: result.estimate.navDate,
+      });
+      // 手动刷新成功 → 清掉该基金的刷新失败上报（Dashboard/FundDetail 的警告随之消失）
+      clearRefreshIssue(fundId);
     } catch {
       message.error('刷新失败');
     } finally {
@@ -109,10 +119,16 @@ export default function FundList() {
         return;
       }
 
-      // API 返回 null 通常表示代码无效或暂时无法访问——拒绝添加，
-      // 避免后续所有"净值缺失"症状都被静默累积（持仓、市值、最新净值日盈亏全为空）
-      if (!result) {
-        message.error('未找到该基金，请确认代码后重试');
+      // 拒绝添加失败基金，避免后续所有"净值缺失"症状被静默累积
+      // （持仓、市值、最新净值日盈亏全为空）；按 reason 给准确文案
+      if (!result.ok) {
+        if (result.reason === 'new-format') {
+          message.error('该基金的数据源已切换新格式，暂无法读取净值，请稍后再试');
+        } else if (result.reason === 'not-found') {
+          message.error('未找到该基金，请确认代码后重试');
+        } else {
+          message.error(`获取基金数据失败：${FUND_FETCH_FAILURE_LABELS[result.reason]}`);
+        }
         setLoading(false);
         return;
       }
@@ -120,11 +136,11 @@ export default function FundList() {
       const estimate = result.estimate;
       const fund: Fund = {
         id: code,
-        name: estimate?.name ?? values.name,
+        name: estimate.name || values.name,
         platformId: values.platformId as string,
         type: selectedType ?? 'mixed',
-        currentNav: estimate?.lastNav ?? 0,
-        navDate: estimate?.navDate ?? '',
+        currentNav: estimate.lastNav,
+        navDate: estimate.navDate,
       };
 
       addFund(fund);

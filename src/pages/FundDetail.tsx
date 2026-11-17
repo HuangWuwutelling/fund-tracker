@@ -20,6 +20,7 @@ import FundReturnCalendar from '../components/FundReturnCalendar';
 import {
   FUND_TYPE_LABELS,
   FUND_TYPE_COLORS,
+  FUND_FETCH_FAILURE_LABELS,
   TRANSACTION_TYPE_LABELS,
   TX_TYPE_COLORS,
   FREQUENCY_LABELS,
@@ -47,7 +48,7 @@ echarts.use([
 export default function FundDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { platforms, transactions, getNavHistory, addTransaction, updateTransaction, removeTransaction, getFundById, dcaPlans, addDcaPlan, updateDcaPlan, removeDcaPlan, toggleDcaPlan, settings } = useStore();
+  const { platforms, transactions, getNavHistory, addTransaction, updateTransaction, removeTransaction, getFundById, dcaPlans, addDcaPlan, updateDcaPlan, removeDcaPlan, toggleDcaPlan, settings, refreshIssues } = useStore();
   const usQdiiFilterMode = settings.usQdiiFilterMode;
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [editingTxId, setEditingTxId] = useState<string | null>(null);
@@ -514,6 +515,17 @@ export default function FundDetail() {
         返回
       </Button>
 
+      {refreshIssues[fundRef.id] && (
+        <Alert
+          type="warning"
+          showIcon
+          message={`该基金净值更新失败（${FUND_FETCH_FAILURE_LABELS[refreshIssues[fundRef.id]!.reason]}，发现于 ${dayjs(refreshIssues[fundRef.id]!.at).format('HH:mm')}）`}
+          description={`刷新时被跳过，不会写入错误数据；净值/盈亏停留在最后有效日期（${fundRef.navDate || '未知'}）。可在「基金列表」手动重试。`}
+          style={{ marginBottom: 16 }}
+          closable
+        />
+      )}
+
       <Card>
         <Descriptions column={{ xs: 1, sm: 2, md: 4 }} bordered size="small">
           <Descriptions.Item label="基金代码">{fundRef.id}</Descriptions.Item>
@@ -629,7 +641,7 @@ export default function FundDetail() {
                 </>
               ) : (
                 <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
-                  需 {Math.max(0, 250 - indicators.usableNavs.length)} 个交易日历史
+                  需 {Math.max(0, 250 - indicators.adjustedNavs.length)} 个交易日历史
                 </div>
               )}
             </Card>

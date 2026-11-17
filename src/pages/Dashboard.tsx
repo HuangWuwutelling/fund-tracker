@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { Card, Row, Col, Statistic, Table, Tag, Alert, Button, Tooltip, Space } from 'antd';
 import { ArrowUpOutlined, ArrowDownOutlined, FundOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import dayjs from 'dayjs';
 import { useStore } from '../stores';
 import { calcFundSummary, calcXIRR, calcDividendTotal, calcTodayInvested } from '../utils/calculator';
 import { today } from '../utils/formatter';
@@ -20,6 +21,7 @@ import {
   FUND_TYPE_LABELS,
   FUND_TYPE_COLORS,
   FUND_TYPE_STRIPE_COLORS,
+  FUND_FETCH_FAILURE_LABELS,
   LATEST_NAV_PNL_LABEL,
   TEMPERATURE_COLORS,
   classifyTemperature,
@@ -29,10 +31,19 @@ import {
 
 
 export default function Dashboard() {
-  const { funds, transactions, platforms, dcaPlans, getNavHistory, settings, freshNavFundIds, navRefreshedAt } = useStore();
+  const { funds, transactions, platforms, dcaPlans, getNavHistory, settings, freshNavFundIds, navRefreshedAt, refreshIssues } = useStore();
   const navigate = useNavigate();
   const isDark = settings.theme === 'dark';
   const usQdiiFilterMode = settings.usQdiiFilterMode;
+
+  // 净值刷新失败上报（App.refreshAll 写入）：基金名/停留日期/发现时间在此解析，
+  // reason 标签统一走 FUND_FETCH_FAILURE_LABELS
+  const refreshIssueList = useMemo(() => {
+    return Object.entries(refreshIssues).map(([fundId, issue]) => {
+      const fund = funds.find((f) => f.id === fundId);
+      return { fundId, name: fund?.name ?? fundId, navDate: fund?.navDate ?? '', reason: issue.reason, at: issue.at };
+    });
+  }, [refreshIssues, funds]);
 
   // todayStr 用于 ⚡ 卡片的休市态与「下次开盘自动刷新」提示（日历的 today 高亮
   // 由 ReturnCalendar 自己算）。它**不在** summaries 的 deps 里——
@@ -109,7 +120,7 @@ export default function Dashboard() {
    *  - 高估桶：MA250 偏离度 > +15%
    *  - 桶内按"偏离度极端程度"排序（低估最深的在顶，高估最贵的在顶）
    *  - 仅统计 hasEnoughHistory 的基金（≥ 250 个交易日）
-   *  - 额外统计今日 MACD 金叉/死叉计数，首页底部展示
+   *  - 额外统计近 5 日 MACD 金叉/死叉计数，首页底部展示
    * ============================================================ */
   const portfolioSignals = useMemo(() => {
     const undervalued: Array<{ fund: Fund; deviation: number }> = [];
@@ -264,6 +275,28 @@ export default function Dashboard() {
 
   return (
     <div>
+      {refreshIssueList.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          message={`有 ${refreshIssueList.length} 只基金净值更新失败`}
+          description={
+            <div style={{ fontSize: 12 }}>
+              {refreshIssueList.map((it) => (
+                <div key={it.fundId}>
+                  {it.name}（{FUND_FETCH_FAILURE_LABELS[it.reason]}，发现于 {dayjs(it.at).format('HH:mm')}）— 数据停留在 {it.navDate || '未知日期'}
+                </div>
+              ))}
+              <div style={{ marginTop: 4, opacity: 0.75 }}>
+                可在「基金列表」对单只基金手动刷新；失败期间不会写入错误数据，但净值/盈亏会停留在最后有效日期。
+              </div>
+            </div>
+          }
+          style={{ marginBottom: 16 }}
+          closable
+        />
+      )}
+
       {pendingCount > 0 && (
         <Alert
           type="warning"
@@ -572,15 +605,18 @@ export default function Dashboard() {
           </Col>
         </Row>
 
-        {/* 底部副信息：今日 MACD 信号统计 + 历史就绪度 */}
+        {/* 底部副信息：近 5 日 MACD 信号统计 + 历史就绪度 + 口径说明 */}
         <div style={{ marginTop: 12, color: '#999', fontSize: 12, textAlign: 'center' }}>
           <span>
-            今日 MACD：<span style={{ color: '#cf1322', fontWeight: 600 }}>金叉 {portfolioSignals.goldenCrossCount}</span>
+            近 5 日 MACD：<span style={{ color: '#cf1322', fontWeight: 600 }}>金叉 {portfolioSignals.goldenCrossCount}</span>
             {' '}｜{' '}
             <span style={{ color: '#3f8600', fontWeight: 600 }}>死叉 {portfolioSignals.deathCrossCount}</span>
           </span>
           <span style={{ marginLeft: 12 }}>
             ｜ 历史就绪 {portfolioSignals.historyReadyCount} / {funds.length} 只
+          </span>
+          <span style={{ marginLeft: 12 }}>
+            ｜ 指标按分红复权净值计算；±15% 为固定阈值，对债券等低波动基金基本无分辨力
           </span>
           <Button type="link" size="small" onClick={() => navigate('/settings')}>
             指标说明

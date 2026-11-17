@@ -11,13 +11,15 @@ dayjs.locale('zh-cn');
 // 周日作为一周第一天
 dayjs.updateLocale('zh-cn', { weekStart: 0 });
 import { useStore } from './stores';
-import type { IndexQuote } from './types';
+import type { IndexQuote, FundRefreshIssue } from './types';
 import { fetchFundWithHistory } from './api/fundApi';
 import { fetchMarketIndices, INDEX_LIST } from './api/indexApi';
 import { shouldUpdateIndexQuote } from './utils/indexQuote';
+import { mergeNavTail } from './utils/navHistoryMerge';
 import { generateSnapshot } from './utils/snapshot';
 import { lookupNavForDate } from './utils/navLookup';
 import { calcSharesFromAmount } from './utils/calculator';
+import { STORAGE_ERROR_EVENT } from './utils/storage';
 import AppLayout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import FundList from './pages/FundList';
@@ -26,6 +28,28 @@ import Transactions from './pages/Transactions';
 import DcaPlans from './pages/DcaPlans';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
+
+/** 按刷新结果分档提示：全部成功 success / 部分失败 warning / 全部失败 error。
+ *  此前无条件 message.success('净值已更新')，sc 新格式基金被跳过时用户毫无感知。 */
+function reportRefreshOutcome(issues: Record<string, FundRefreshIssue>, total: number) {
+  const failedIds = Object.keys(issues);
+  if (failedIds.length === 0) {
+    message.success('净值已更新');
+    return;
+  }
+  const fundsNow = useStore.getState().funds;
+  const nameOf = (id: string) => fundsNow.find((f) => f.id === id)?.name ?? id;
+  const shown = failedIds.slice(0, 2).map(nameOf).join('、');
+  const names = failedIds.length > 2 ? `${shown} 等 ${failedIds.length} 只` : shown;
+  const detail = failedIds.length === total
+    ? `净值刷新失败：${names}，数据可能陈旧`
+    : `${failedIds.length}/${total} 只基金更新失败：${names}（其余已更新）`;
+  if (failedIds.length === total) {
+    message.error(detail, 6);
+  } else {
+    message.warning(detail, 6);
+  }
+}
 
 export default function App() {
   const { settings, funds, refreshTrigger, loadFromStorage, updateFund, updateNavHistory, updateTransaction, addSnapshot, updateIndex } = useStore();
@@ -42,6 +66,19 @@ export default function App() {
       }
     }
   }, [loadFromStorage]);
+
+  // localStorage 写失败（QuotaExceededError 写满 5MB / 隐私模式禁写等）→ storage 层
+  // 广播 STORAGE_ERROR_EVENT → 这里弹提示。30s 冷却防每次写入重复弹。
+  useEffect(() => {
+    let lastWarnedAt = 0;
+    const handler = () => {
+      if (Date.now() - lastWarnedAt < 30000) return;
+      lastWarnedAt = Date.now();
+      message.error('浏览器存储空间不足，最近的数据可能没有保存！请立即导出备份，并清理不再持有的基金', 8);
+    };
+    window.addEventListener(STORAGE_ERROR_EVENT, handler);
+    return () => window.removeEventListener(STORAGE_ERROR_EVENT, handler);
+  }, []);
 
   // Generation counter to bail out stale refreshAll calls when a newer one starts.
   // refreshAll's deps include `transactions`, so adding a tx fires a new refresh —
@@ -91,55 +128,50 @@ export default function App() {
     const myGen = ++refreshGenerationRef.current;
     if (funds.length === 0) return;
 
+    // per-fund 失败上报：本轮结束后整体写入 store，UI（Dashboard/FundDetail Alert）
+    // 据此展示醒目警告。跳过更新不写错数据的既有语义不变，只是不再静默。
+    const issues: Record<string, FundRefreshIssue> = {};
+
     for (let i = 0; i < funds.length; i++) {
       if (refreshGenerationRef.current !== myGen) return; // superseded
       const fund = funds[i]!;
       try {
         const result = await fetchFundWithHistory(fund.id);
         if (refreshGenerationRef.current !== myGen) return;
-        if (result && result.estimate.lastNav > 0) {
+        if (!result.ok) {
+          // new-format / not-found / network / timeout：跳过更新（防写错 NAV），上报原因
+          issues[fund.id] = { reason: result.reason, at: Date.now() };
+        } else if (result.estimate.lastNav > 0) {
           updateFund(fund.id, {
             currentNav: result.estimate.lastNav,
             navDate: result.estimate.navDate,
           });
 
-          // 增量合并净值历史：避免每次刷新都 JSON.stringify + 写 localStorage 全量历史
-          // - API 强制返回全量（pingzhongdata 无增量接口），但本地写入可以只追加尾部
-          // - 边界日期（localLatest）保留本地值，不覆盖——若 API 修正历史净值，
-          //   用户可在 Settings 里点"重置净值历史"强制全量刷新
-          if (result.navHistory.length > 0) {
-            const localHistory = useStore.getState().getNavHistory(fund.id);
-            const localLatest = localHistory[localHistory.length - 1]?.date;
-            const remoteLatest = result.navHistory[result.navHistory.length - 1]?.date;
-            if (remoteLatest === undefined) continue;
-
-            if (!localLatest) {
-              // 本地无历史（首次添加 / import 后被清空）→ 全量写
-              updateNavHistory(fund.id, result.navHistory);
-            } else if (localLatest === remoteLatest) {
-              // 尾部日期一致 → 跳过 navHistory 写入，只更新 Fund 字段（已上面完成）
-            } else if (localLatest < remoteLatest) {
-              // 远程有更新 → 只追加严格晚于 localLatest 的尾部
-              const tail = result.navHistory.filter((r) => r.date > localLatest);
-              if (tail.length > 0) {
-                updateNavHistory(fund.id, [...localHistory, ...tail]);
-              }
-            } else {
-              // localLatest > remoteLatest：API 缓存陈旧 → 信任本地，跳过 navHistory 写入
-              console.debug('[App] nav history remote is older than local for', fund.id, {
-                local: localLatest,
-                remote: remoteLatest,
-              });
-            }
+          // 增量合并净值历史：mergeNavTail 与 FundList 手动刷新共用同一语义
+          // （边界日期保留本地值；API 修正历史净值请走 Settings 的"重置净值历史"）
+          const merged = mergeNavTail(
+            useStore.getState().getNavHistory(fund.id),
+            result.navHistory,
+          );
+          if (merged) {
+            updateNavHistory(fund.id, merged);
           }
+        } else {
+          // 加载成功但 trend 为空——此前静默跳过，现在上报让用户看到
+          issues[fund.id] = { reason: 'no-data', at: Date.now() };
         }
       } catch (err) {
         console.error('[App] refreshAll failed for', fund.id, err);
+        issues[fund.id] = { reason: 'network', at: Date.now() };
       }
       if (i < funds.length - 1) {
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
+
+    // 上报整体替换（成功基金不保留旧失败标记）
+    if (refreshGenerationRef.current !== myGen) return;
+    useStore.getState().setRefreshIssues(issues);
 
     // --- Index 批量拉取 ---
     // 腾讯 qt.gtimg.cn 支持 `q=a,b,c` 一次拿 3 条，所以这里只发 1 个 HTTP。
@@ -194,7 +226,7 @@ export default function App() {
     const myGen = refreshGenerationRef.current + 1;
     refreshAll().then(() => {
       if (refreshGenerationRef.current !== myGen) return; // a newer refresh is in flight
-      message.success('净值已更新');
+      reportRefreshOutcome(useStore.getState().refreshIssues, useStore.getState().funds.length);
     }).catch((err) => {
       if (refreshGenerationRef.current !== myGen) return;
       console.error('[App] refreshAll error:', err);
@@ -211,7 +243,7 @@ export default function App() {
     const myGen = refreshGenerationRef.current + 1;
     refreshAll().then(() => {
       if (refreshGenerationRef.current !== myGen) return;
-      message.success('净值已更新');
+      reportRefreshOutcome(useStore.getState().refreshIssues, useStore.getState().funds.length);
     }).catch((err) => {
       if (refreshGenerationRef.current !== myGen) return;
       console.error('[App] refreshAll error:', err);
@@ -223,13 +255,36 @@ export default function App() {
   // 让 app 持续打开的用户无需手动操作即可看到最新净值日盈亏。
   // 不绑死时间点：纯靠 hasStale 闸门——任一基金 navDate < today 才发起请求，
   // 数据跟齐后所有 tick 早 return，无 API 配额消耗。
+  // 退避：同一批 stale 基金连续 tick 无变化 → 隔次跳过。失效基金（如 sc 新格式
+  // 永久跳过）原本每 30 分钟空轮询一次；跳 3 次后强制跑一次，给数据源自愈留窗口，
+  // 等效把空轮询降到 2 小时一次。集合一有变化（有基金更新/新增/删除）立即恢复正常。
+  const lastStaleIdsRef = useRef<Set<string> | null>(null);
+  const skippedTicksRef = useRef(0);
+
   useEffect(() => {
     if (!settings.navAutoRefresh || funds.length === 0) return;
 
+    const sameSet = (a: Set<string>, b: Set<string>) =>
+      a.size === b.size && Array.from(a).every((id) => b.has(id));
+
     const tick = () => {
       const today = dayjs().format('YYYY-MM-DD');
-      const hasStale = useStore.getState().funds.some((f) => f.navDate < today);
-      if (!hasStale) return;
+      const staleIds = new Set(
+        useStore.getState().funds.filter((f) => f.navDate < today).map((f) => f.id),
+      );
+      if (staleIds.size === 0) {
+        lastStaleIdsRef.current = null;
+        skippedTicksRef.current = 0;
+        return;
+      }
+      const unchanged = lastStaleIdsRef.current !== null && sameSet(lastStaleIdsRef.current, staleIds);
+      lastStaleIdsRef.current = staleIds;
+      if (unchanged && skippedTicksRef.current < 3) {
+        skippedTicksRef.current++;
+        console.debug('[App] periodic refresh: stale set unchanged, backing off (skipped', skippedTicksRef.current, 'ticks)');
+        return;
+      }
+      skippedTicksRef.current = 0;
       console.debug('[App] periodic refresh: stale NAV detected, fetching');
       refreshAll().catch((err) => {
         console.error('[App] periodic refresh error:', err);

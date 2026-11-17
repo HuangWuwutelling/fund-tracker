@@ -7,6 +7,7 @@ import {
   drawdownSeries,
   drawdownPercentile,
   computeFundIndicators,
+  buildAdjustedSeries,
 } from './indicators';
 import type { Fund, NavRecord } from '../types';
 
@@ -16,6 +17,11 @@ function fund(name: string, type: Fund['type'] = 'qdii'): Fund {
 
 function nav(date: string, value: number): NavRecord {
   return { date, nav: value, accNav: value };
+}
+
+/** 带真实累计净值的记录（accNav 可 ≠ nav，用于分红复权测试） */
+function navAcc(date: string, value: number, acc: number): NavRecord {
+  return { date, nav: value, accNav: acc };
 }
 
 function range(start: number, count: number, valueAt: (i: number) => number): number[] {
@@ -338,41 +344,119 @@ describe('drawdownSeries', () => {
 /* ============================================================
  *  drawdownPercentile
  * ============================================================ */
-describe('drawdownPercentile', () => {
+describe('drawdownPercentile（mid-rank 平局处理）', () => {
   it('空 / 全 null → null', () => {
     expect(drawdownPercentile([])).toBeNull();
     expect(drawdownPercentile([null, null, null])).toBeNull();
   });
 
-  it('当前是历史最深 → 100%（#{>= last} = N）', () => {
-    // dd 历史：-10, -20, -30, -30, -10（最新 = -30 是历史最深之一）
-    // 用单独控制：让 last = 全局最小的那个
-    const arr = [-10, -20, -30, -30, -40]; // -40 是最深
-    expect(drawdownPercentile(arr)).toBeCloseTo(100, 6);
+  it('当前是唯一历史最深 → (N-0.5)/N，真实历史长度（数百期）下 ≈ 100%', () => {
+    // 自包含 mid-rank：当前点自身也按半票计入持平
+    const arr = [-10, -20, -30, -30, -40]; // -40 是唯一最深
+    expect(drawdownPercentile(arr)).toBeCloseTo((4.5 / 5) * 100, 6);
   });
 
-  it('当前是历史最浅（最贵）→ 当前唯一 >= 自己的 → 1/N × 100', () => {
-    // dd 历史：-30, -20, -10, -5, 0  → last=0 是最深上界
+  it('当前是历史最浅（唯一最贵，如创新高日）→ 0.5/N，大样本下 ≈ 0%', () => {
     const arr = [-30, -20, -10, -5, 0];
-    // >= 0 → 1 (只有 last 自己是 0)
-    expect(drawdownPercentile(arr)).toBeCloseTo((1 / 5) * 100, 6);
+    expect(drawdownPercentile(arr)).toBeCloseTo((0.5 / 5) * 100, 6);
   });
 
-  it('单点历史 → 100% (1/1)', () => {
-    expect(drawdownPercentile([-5])).toBeCloseTo(100, 6);
+  it('单点历史 → 50%（无可比对象，中性）', () => {
+    expect(drawdownPercentile([-5])).toBeCloseTo(50, 6);
   });
 
-  it('全部 0 → 100% (退化结果)', () => {
-    expect(drawdownPercentile([0, 0, 0, 0])).toBeCloseTo(100, 6);
+  it('全部持平（一路创新高的基金）→ 50% 中性（修正前是 100% 虚假"最便宜"）', () => {
+    expect(drawdownPercentile([0, 0, 0, 0])).toBeCloseTo(50, 6);
   });
 
-  it('中位数附近 → 接近 50%', () => {
-    // [-30, -20, -10] last = -10
-    // >= -10 → 1 (only itself) → 1/3 × 100 ≈ 33%
-    // 但 histogram 上 1/3 是非 50%；我们只验证范围合理
-    const v = drawdownPercentile([-30, -20, -10]);
-    expect(v).toBeGreaterThan(0);
-    expect(v).toBeLessThan(100);
+  it('创新高日 + 历史 60% 时间也在高点 → 30%，不再被平局推成"偏便宜"', () => {
+    // dd 序列（末位是"当前"）：1 个 -10，1 个 -20，3 个 0（当前=创新高）
+    const arr = [-10, -20, 0, 0, 0];
+    // 更贵 = 0，持平 = 3（含当前自身）→ (0 + 0.5×3)/5 = 30%
+    expect(drawdownPercentile(arr)).toBeCloseTo(30, 6);
+  });
+
+  it('当前处于分布中部 → 严格按"更贵占比 + 半票持平"计算', () => {
+    // [-30, -20, -10]，当前 = -10：更贵 = 0，持平 = 1（自身）→ 0.5/3
+    expect(drawdownPercentile([-30, -20, -10])).toBeCloseTo((0.5 / 3) * 100, 6);
+  });
+
+  it('当前是唯一最深（大样本）→ 接近 100%', () => {
+    const arr: number[] = [];
+    for (let i = 0; i < 299; i++) arr.push(-1);
+    arr.push(-30);
+    expect(drawdownPercentile(arr)).toBeCloseTo((299.5 / 300) * 100, 6);
+  });
+});
+
+/* ============================================================
+ *  buildAdjustedSeries — 分红复权序列
+ * ============================================================ */
+describe('buildAdjustedSeries（后复权 / 分红再投资）', () => {
+  it('无分红（acc ≡ nav，旧版数据）→ 与单位净值逐点一致，事件数 0', () => {
+    const usable = [nav('2026-01-01', 1.0), nav('2026-01-02', 1.02), nav('2026-01-03', 0.99)];
+    const { values, dividendEvents } = buildAdjustedSeries(usable);
+    expect(values).toEqual([1.0, 1.02, 0.99]);
+    expect(dividendEvents).toBe(0);
+  });
+
+  it('分红除息日：nav 跳水 0.2、acc 不变 → 复权序列无悬崖，事件数 1', () => {
+    // 除息日 acc = nav + 累计分红，acc 本身不变 → gap 跳增 0.2 = 每份分红
+    const usable = [
+      navAcc('2026-01-01', 2.0, 2.0),
+      navAcc('2026-01-02', 1.8, 2.0), // 除息日：nav -0.2，acc 不动
+      navAcc('2026-01-03', 1.81, 2.01),
+    ];
+    const { values, dividendEvents } = buildAdjustedSeries(usable);
+    expect(dividendEvents).toBe(1);
+    // adj(1) = 2.0 × (1.8 + 0.2) / 2.0 = 2.0（无悬崖，除息日真实回报 = 0）
+    expect(values[1]).toBeCloseTo(2.0, 6);
+    // adj(2) = 2.0 × 1.81 / 1.8（分红后正常涨）
+    expect(values[2]).toBeCloseTo((2.0 * 1.81) / 1.8, 6);
+  });
+
+  it('多次分红逐笔复利', () => {
+    const usable = [
+      navAcc('2026-01-01', 1.0, 1.0),
+      navAcc('2026-01-02', 0.95, 1.0), // 分红 0.05
+      navAcc('2026-01-03', 0.96, 1.01),
+      navAcc('2026-01-04', 0.86, 1.01), // 再分红 0.10
+    ];
+    const { values, dividendEvents } = buildAdjustedSeries(usable);
+    expect(dividendEvents).toBe(2);
+    // adj(2) = 1.0 × 0.96 / 0.95（无分红日的正常涨幅）
+    expect(values[2]).toBeCloseTo((1.0 * 0.96) / 0.95, 6);
+    // adj(3) = adj(2) × (0.86 + 0.10) / 0.96（除息日真实回报 = 0，与 adj(2) 持平）
+    expect(values[3]).toBeCloseTo(values[2]!, 6);
+  });
+
+  it('舍入噪声（gap 跳变 ≤ 0.0004）不误判为分红', () => {
+    const usable = [
+      navAcc('2026-01-01', 1.0000, 1.0000),
+      navAcc('2026-01-02', 1.0001, 1.0001), // gap 不变
+      navAcc('2026-01-03', 1.0002, 1.0003), // gap 跳 0.0001 < 0.001 阈值
+    ];
+    const { dividendEvents } = buildAdjustedSeries(usable);
+    expect(dividendEvents).toBe(0);
+  });
+
+  it('旧版假 acc（acc = nav）下真实分红悬崖无法检测 → 保持原样（退化行为）', () => {
+    // 文档化已知限制：不重置净值历史就检测不到分红
+    const usable = [nav('2026-01-01', 1.0), nav('2026-01-02', 0.95)];
+    const { values, dividendEvents } = buildAdjustedSeries(usable);
+    expect(dividendEvents).toBe(0);
+    expect(values).toEqual([1.0, 0.95]); // 悬崖保留（与修复前一致）
+  });
+
+  it('nav 异常（≤ 0）→ 复权值保持前值，不爆炸', () => {
+    const usable = [
+      navAcc('2026-01-01', 1.0, 1.0),
+      navAcc('2026-01-02', 0, 1.0), // 损坏数据
+      navAcc('2026-01-03', 0.99, 0.99), // prevNav=0 仍被守护
+    ];
+    const { values } = buildAdjustedSeries(usable);
+    expect(values[1]).toBeCloseTo(1.0, 6);
+    expect(values[2]).toBeCloseTo(1.0, 6);
   });
 });
 
@@ -451,9 +535,8 @@ describe('computeFundIndicators', () => {
     const r = computeFundIndicators(fund('基金A', 'mixed'), records);
     expect(r.hasEnoughHistory).toBe(false);
     expect(r.ma250Deviation).toBeNull();
-    // 回撤：因为单调递增，应该都接近 0
-    // dd 全 0 → drawdownPercentile 退化返回 100%
-    expect(r.drawdownPercentile).toBe(100);
+    // 回撤：因为单调递增，dd 全 0 → mid-rank 平局 → 50% 中性
+    expect(r.drawdownPercentile).toBe(50);
   });
 
   it('数据 < 250 → hasEnoughHistory = false', () => {
@@ -466,12 +549,32 @@ describe('computeFundIndicators', () => {
     expect(r.ma250Deviation).toBeNull();
   });
 
-  it('可用数组长度对齐 → usableNavs.length === usableDates.length', () => {
+  it('可用数组长度对齐 → adjustedNavs.length === usableDates.length', () => {
     const records: NavRecord[] = [];
     for (let i = 0; i < 260; i++) {
       records.push(nav(`2025-01-${String((i % 30) + 1).padStart(2, '0')}`, 1.5));
     }
     const r = computeFundIndicators(fund('基金B', 'mixed'), records);
-    expect(r.usableNavs.length).toBe(r.usableDates.length);
+    expect(r.adjustedNavs.length).toBe(r.usableDates.length);
+  });
+
+  it('分红除息悬崖：nav 基会制造假死叉/假低偏离，复权基不受影响', () => {
+    // 前 250 期 nav=2.0，第 251 期分红 0.2（nav 2.0→1.8，acc 不变），
+    // 之后 nav=1.8 平稳。复权序列应全程 ≈ 2.0 平稳。
+    const records: NavRecord[] = [];
+    for (let i = 0; i < 250; i++) {
+      records.push(navAcc(`2025-01-${String((i % 28) + 1).padStart(2, '0')}`, 2.0, 2.0));
+    }
+    records.push(navAcc('2025-02-01', 1.8, 2.0)); // 除息日
+    for (let i = 0; i < 49; i++) {
+      records.push(navAcc(`2025-02-${String((i % 27) + 2).padStart(2, '0')}`, 1.8, 2.0));
+    }
+    const r = computeFundIndicators(fund('广发中债7-10年国开债指数A', 'bond'), records);
+    expect(r.dividendEvents).toBe(1);
+    // 复权后序列平稳 → MA250 偏离度 ≈ 0（单位净值口径会是 -10% 左右的假低估）
+    expect(r.ma250Deviation).not.toBeNull();
+    expect(Math.abs(r.ma250Deviation!)).toBeLessThan(0.01);
+    // MACD 不应把除息悬崖判成死叉
+    expect(r.macdState.state).not.toBe('death_cross');
   });
 });
