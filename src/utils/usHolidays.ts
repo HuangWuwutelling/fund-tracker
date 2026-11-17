@@ -1,12 +1,14 @@
 /**
  * 美国 NYSE / NASDAQ 全天休市日判定。
  *
- * 数据维护窗口：2025-2026。下一年度安排由 NYSE / NASDAQ 在前一年底公布。
+ * 数据维护窗口：2025-2027。下一年度安排由 NYSE / NASDAQ 在前一年底公布。
  * 每年底前需补全年数据后，QDII 跨节假日的归属才能精确到下一个真实交易日。
  *
  * 数据源：
  * - NYSE 2025 Holiday Calendar
  * - NYSE 2026 Holiday Calendar
+ * - NYSE 2027 Holiday Calendar（按 NYSE 固定规则推算并复核星期：固定日期假日
+ *   落周六→提前至周五、落周日→顺延至周一；浮动假日按第 N 个周几推算）
  *
  * 判定规则：
  *   非交易日 = 周末 ∪ 工作日法定节假日
@@ -17,7 +19,7 @@
  * 范围：仅覆盖 NYSE/NASDAQ 共识的 10 个全天休市日；
  * 半天休市（如 7/3 中午收市）对 QDII NAV 发布无实质影响，未纳入。
  *
- * 超过 2026 年的数据暂未公布——isUsHoliday 对未知年份退化为「仅按周末判定」。
+ * 超过 2027 年的数据暂未公布——isUsHoliday 对未知年份退化为「仅按周末判定」。
  */
 
 /** 工作日法定节假日（仅列周一至周五；周末部分由 getDay() 推断） */
@@ -47,15 +49,31 @@ const WEEKDAY_HOLIDAYS_2026: Set<string> = new Set([
   '2026-12-25', // Christmas (Fri)
 ]);
 
+// 2027：NYSE 固定规则推算。观测规则：Juneteenth(6/19 Sat)→6/18 Fri、
+// Independence(7/4 Sun)→7/5 Mon、Christmas(12/25 Sat)→12/24 Fri。
+const WEEKDAY_HOLIDAYS_2027: Set<string> = new Set([
+  '2027-01-01', // New Year's Day (Fri)
+  '2027-01-18', // MLK Jr. Day (Mon)
+  '2027-02-15', // Presidents Day (Mon)
+  '2027-03-26', // Good Friday (Fri)
+  '2027-05-31', // Memorial Day (Mon)
+  '2027-06-18', // Juneteenth observed (6/19 Sat → 6/18 Fri)
+  '2027-07-05', // Independence Day observed (7/4 Sun → 7/5 Mon)
+  '2027-09-06', // Labor Day (Mon)
+  '2027-11-25', // Thanksgiving (Thu)
+  '2027-12-24', // Christmas observed (12/25 Sat → 12/24 Fri)
+]);
+
 const WEEKDAY_HOLIDAYS_BY_YEAR = new Map<number, Set<string>>([
   [2025, WEEKDAY_HOLIDAYS_2025],
   [2026, WEEKDAY_HOLIDAYS_2026],
+  [2027, WEEKDAY_HOLIDAYS_2027],
 ]);
 
 /**
  * 判断指定日期（YYYY-MM-DD）是否为 NYSE / NASDAQ 全天休市日。
  *
- * - 已收录年份（2025、2026）：精确判定（周末 ∪ 工作日法定节假日）
+ * - 已收录年份（2025-2027）：精确判定（周末 ∪ 工作日法定节假日）
  * - 未收录年份：退化为「仅按周末判定」——与未引入本工具前一致
  *
  * 仅供 QDII attribution map 构建使用；
