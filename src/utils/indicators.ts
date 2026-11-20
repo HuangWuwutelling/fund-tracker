@@ -344,6 +344,31 @@ export function buildAdjustedSeries(usable: NavRecord[]): AdjustedSeries {
   return { values, dividendEvents };
 }
 
+/**
+ * 把复权序列映射回**单位净值刻度**的缩放系数 k = nav末 / adj末。
+ *
+ * 背景：FundDetail 的 NAV 图主折线画的是「单位净值」，而 MA250 指标卡算的是
+ * **分红复权**序列——两个口径直接混用会让同一屏出现"图上 MA250 明显偏低、
+ * 卡片偏离度却接近 0%"的自相矛盾（分红基金的复权因子是乘性缩放，不是平移）。
+ *
+ * 用末点的比值 k 把复权 MA 线缩回净值刻度：缩放后末点恰好等于单位净值末点，
+ * 因此图上 MA250 与卡片偏离度**同口径**（无分红基金 adj ≡ nav → k = 1，
+ * 图形与旧版逐点一致，零视觉变化）。
+ *
+ * 退化：序列为空 / 长度不一致 / 末点非正或非有限 → 返回 1（不缩放，退回原行为）。
+ */
+export function navScaleFactor(
+  adjusted: readonly number[],
+  navs: readonly number[],
+): number {
+  if (adjusted.length === 0 || adjusted.length !== navs.length) return 1;
+  const adjLast = adjusted[adjusted.length - 1]!;
+  const navLast = navs[navs.length - 1]!;
+  if (!Number.isFinite(adjLast) || !Number.isFinite(navLast)) return 1;
+  if (!(adjLast > 0) || !(navLast > 0)) return 1;
+  return navLast / adjLast;
+}
+
 /* ------------------------------- Top-level wrapper ------------------------------- */
 
 /** MA250 偏离度（百分比）的内联计算。lastMa ≤ 0 / 缺数据 → null */

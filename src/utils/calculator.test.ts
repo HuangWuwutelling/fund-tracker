@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calcLatestNavPnl, getPlanDueDates, isDcaPlanDueToday } from './calculator';
+import { calcLatestNavPnl, getPlanDueDates, isDcaPlanDueToday, calcAmountFromShares, calcSharesBeforeTx } from './calculator';
 import type { DcaPlan, Fund, NavRecord, Transaction } from '../types';
 
 function fund(name: string): Fund {
@@ -124,5 +124,76 @@ describe('isDcaPlanDueToday - 法定节假日', () => {
   it('monthly dayOfMonth=1 在普通 1 号工作日返回 true', () => {
     const plan: DcaPlan = { ...basePlan, frequency: 'monthly', dayOfMonth: 1 };
     expect(isDcaPlanDueToday(plan, noon('2026-09-01'))).toBe(true);
+  });
+});
+
+/* ============================================================
+ *  calcAmountFromShares —— 卖出/红利再投资的成交额
+ * ============================================================ */
+
+describe('calcAmountFromShares', () => {
+  it('成交额 = 份额 × 净值', () => {
+    expect(calcAmountFromShares(12498.5567, 1.1294)).toBeCloseTo(14115.87, 2);
+  });
+
+  it('净值 0 → 0（不产生 NaN / Infinity）', () => {
+    expect(calcAmountFromShares(1000, 0)).toBe(0);
+  });
+
+  it('份额 0 → 0', () => {
+    expect(calcAmountFromShares(0, 1.2345)).toBe(0);
+  });
+});
+
+/* ============================================================
+ *  calcSharesBeforeTx —— 某笔交易「之前」的持仓份额
+ * ============================================================ */
+
+describe('calcSharesBeforeTx', () => {
+  const t = (over: Partial<Transaction> & { id: string; date: string }): Transaction => ({
+    fundId: 'f1', type: 'buy', amount: 0, fee: 0, shares: 0, nav: 1, ...over,
+  });
+
+  it('累计到该笔交易之前的份额（卖出前的持仓）', () => {
+    const txs = [
+      t({ id: 'b1', date: '2026-08-26', type: 'buy', shares: 1516.4645 }),
+      t({ id: 'b2', date: '2026-09-11', type: 'buy', shares: 9575.7924 }),
+      t({ id: 'd1', date: '2026-11-06', type: 'dividend', shares: 57.61 }),
+      t({ id: 's1', date: '2026-11-19', type: 'sell', shares: 12488.7817 }),
+    ];
+    const sell = txs[3]!;
+    expect(calcSharesBeforeTx(txs, sell)).toBeCloseTo(1516.4645 + 9575.7924 + 57.61, 6);
+  });
+
+  it('排除自身（编辑一笔已记录的交易时不会把自己算进去）', () => {
+    const txs = [
+      t({ id: 'b1', date: '2026-08-26', type: 'buy', shares: 1000 }),
+      t({ id: 's1', date: '2026-09-01', type: 'sell', shares: 400 }),
+    ];
+    expect(calcSharesBeforeTx(txs, txs[1]!)).toBeCloseTo(1000, 6);
+  });
+
+  it('不计入该笔交易之后的交易', () => {
+    const txs = [
+      t({ id: 's1', date: '2026-09-01', type: 'sell', shares: 400 }),
+      t({ id: 'b2', date: '2026-09-10', type: 'buy', shares: 500 }),
+    ];
+    expect(calcSharesBeforeTx(txs, txs[0]!)).toBe(0);
+  });
+
+  it('同日交易计入（同一天先买后卖也算在持仓里）', () => {
+    const txs = [
+      t({ id: 'b1', date: '2026-09-01', type: 'buy', shares: 800 }),
+      t({ id: 's1', date: '2026-09-01', type: 'sell', shares: 300 }),
+    ];
+    expect(calcSharesBeforeTx(txs, txs[1]!)).toBeCloseTo(800, 6);
+  });
+
+  it('待确认交易不计入持仓', () => {
+    const txs = [
+      t({ id: 'b1', date: '2026-08-26', type: 'buy', shares: 1000 }),
+      t({ id: 's1', date: '2026-09-01', type: 'sell', shares: 400, status: 'pending' }),
+    ];
+    expect(calcSharesBeforeTx(txs, txs[1]!)).toBeCloseTo(1000, 6);
   });
 });

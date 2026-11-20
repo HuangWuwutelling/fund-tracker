@@ -10,11 +10,12 @@ import { CanvasRenderer } from 'echarts/renderers';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
-import { calcFundSummary, calcSharesFromAmount, calcShares, calcCost, onlyConfirmed } from '../utils/calculator';
+import { calcFundSummary, calcAmountFromShares, calcSharesBeforeTx, calcShares, calcCost, onlyConfirmed } from '../utils/calculator';
+import { resolveTxValues } from '../utils/txValues';
 import { pnlColor, formatDate, formatMoney, formatPercent } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
 import { usableNavSeries } from '../utils/navPair';
-import { sma, computeFundIndicators, INDICATOR_TOOLTIPS } from '../utils/indicators';
+import { sma, computeFundIndicators, buildAdjustedSeries, navScaleFactor, INDICATOR_TOOLTIPS } from '../utils/indicators';
 import InitialPositionModal from '../components/InitialPositionModal';
 import FundReturnCalendar from '../components/FundReturnCalendar';
 import {
@@ -55,6 +56,12 @@ export default function FundDetail() {
   const [txForm] = Form.useForm();
   const txTypeWatch = Form.useWatch('type', txForm);
   const pendingWatch = Form.useWatch('pending', txForm);
+  // 卖出预览用：份额为准反算成交额（买入仍是金额为准）
+  const sharesWatch = Form.useWatch('shares', txForm) as number | undefined;
+  const amountWatch = Form.useWatch('amount', txForm) as number | undefined;
+  const feeWatch = Form.useWatch('fee', txForm) as number | undefined;
+  // 编辑时成交净值来自表单字段（手动输入），新增时来自历史净值预览
+  const navFieldWatch = Form.useWatch('nav', txForm) as number | undefined;
   const [initModalOpen, setInitModalOpen] = useState(false);
   const [navRange, setNavRange] = useState<'1m' | '3m' | '6m' | '1y' | 'all'>('6m');
   const [navPreview, setNavPreview] = useState<{ nav: number; navDate: string } | null>(null);
@@ -187,13 +194,18 @@ export default function FundDetail() {
     // markLine 需要 series.data 里 yAxis 数值字段
     const costLineData = avgCost > 0 ? [{ yAxis: avgCost, name: `成本均价 ${avgCost.toFixed(4)}` }] : [];
 
-    // MA250：必须基于 usableNavSeries（QDII 美股节假日过滤）上的**全量**净值计算，
+    // MA250：必须基于 usableNavSeries（QDII 美股节假日过滤）上的**分红复权**序列计算，
+    // 与下方 MA250 偏离度指标卡**同口径**（否则分红基金会"图上 MA250 偏低、卡片偏离度≈0%"）。
+    // 复权序列是乘性缩放，直接叠加在"单位净值"折线上会量纲不符 → 用末点比值
+    // navScale 缩回单位净值刻度（无分红基金 adj ≡ nav → 系数 1，图形与旧版逐点一致）。
     // 然后按日期对齐回 filteredNav。前 249 个交易日为 null（暖机期）。
     const usable = fund ? usableNavSeries(fund, navHistory, usQdiiFilterMode) : [];
     const usableDates = usable.map((r) => r.date);
     const usableDateIndex = new Map<string, number>();
     for (let i = 0; i < usableDates.length; i++) usableDateIndex.set(usableDates[i]!, i);
-    const usableMa = sma(usable.map((r) => r.nav), 250);
+    const adjustedNavs = buildAdjustedSeries(usable).values;
+    const navScale = navScaleFactor(adjustedNavs, usable.map((r) => r.nav));
+    const usableMa = sma(adjustedNavs, 250).map((v) => (v == null ? null : v * navScale));
     const maAligned: (number | null)[] = dates.map((d) => {
       const idx = usableDateIndex.get(d);
       return idx === undefined ? null : (usableMa[idx] ?? null);
@@ -303,8 +315,6 @@ export default function FundDetail() {
     try {
       const values = await txForm.validateFields();
       const txType = values.type as Transaction['type'];
-      const amount = values.amount as number;
-      const fee = (values.fee as number) ?? 0;
       const pending = (values.pending as boolean) ?? false;
       // 新增时用自动查到的净值；编辑时用表单里用户确认的值
       const nav = pending
@@ -316,37 +326,28 @@ export default function FundDetail() {
         message.error('无法保存：未找到该日期的成交净值，请检查历史净值或切换为待确认');
         return;
       }
-      // 分红：根据 dividendType 决定 amount 和 shares 的语义
-      // - 现金分红: amount = 现金金额, shares = 0
-      // - 红利再投资: shares = 获得的份额, amount = shares × nav（自动折算）
-      let finalAmount: number;
-      let finalShares: number;
-      let finalFee: number;
-      if (txType === 'dividend') {
-        const dt = (values.dividendType as 'cash' | 'reinvest') ?? 'cash';
-        if (dt === 'cash') {
-          finalAmount = (values.amount as number) ?? 0;
-          finalShares = 0;
-          finalFee = 0;
-        } else {
-          finalShares = (values.shares as number) ?? 0;
-          finalAmount = finalShares * nav;
-          finalFee = 0;
-        }
-      } else {
-        finalAmount = amount;
-        finalFee = fee;
-        finalShares = pending ? 0 : calcSharesFromAmount(amount, fee, nav);
-      }
+      // 统一口径解析：买入按金额、卖出按份额、分红分现金/再投资。
+      // 详见 utils/txValues.ts —— 两个页面的表单与「确认净值」都走这一个函数。
+      const resolved = resolveTxValues({
+        type: txType,
+        dividendType: (values.dividendType as 'cash' | 'reinvest') ?? 'cash',
+        amount: (values.amount as number) ?? 0,
+        fee: (values.fee as number) ?? 0,
+        shares: (values.shares as number) ?? 0,
+        nav,
+        pending,
+      });
+      const finalAmount = resolved.amount;
+      const finalShares = resolved.shares;
+      const finalFee = resolved.fee;
 
       // 卖出校验：截至当前交易日期的持仓必须 >= 卖出份额
       // 编辑时排除自身，避免重复计算
       if (txType === 'sell' && !pending && finalShares > 0) {
         const txDate = (values.date as dayjs.Dayjs).format('YYYY-MM-DD');
-        const priorShares = calcShares(
-          onlyConfirmed(transactions).filter(
-            (t) => t.fundId === fundRef.id && t.id !== editingTxId && t.date <= txDate
-          )
+        const priorShares = calcSharesBeforeTx(
+          transactions.filter((t) => t.fundId === fundRef.id),
+          { id: editingTxId ?? '', date: txDate },
         );
         if (finalShares > priorShares + 0.0001) {
           message.error(
@@ -385,6 +386,28 @@ export default function FundDetail() {
     } catch {
       // validation failed
     }
+  };
+
+  // 卖出预览（份额为准）：成交额 = 份额 × 净值；到手 = 成交额 − 手续费
+  const sellSharesVal = sharesWatch ?? 0;
+  const sellFeeVal = feeWatch ?? 0;
+  const sellNavVal = navFieldWatch ?? navPreview?.nav ?? 0;
+  const sellAmountVal = calcAmountFromShares(sellSharesVal, sellNavVal);
+
+  /**
+   * 「全部卖出」：填入可卖出的全部份额。
+   * - 新建 → 当前持仓
+   * - 编辑某笔卖出 → **该笔交易之前**的持仓（当前持仓已经是卖出后的余额，
+   *   直接用会把「卖光」算成「卖剩下的」）
+   */
+  const handleFillAllShares = () => {
+    const fundTxs = transactions.filter((t) => t.fundId === fundRef.id);
+    const editing = editingTxId ? fundTxs.find((t) => t.id === editingTxId) : undefined;
+    const shares = editing
+      ? calcSharesBeforeTx(fundTxs, editing)
+      : calcShares(onlyConfirmed(fundTxs));
+    txForm.setFieldsValue({ shares: Math.round(shares * 10000) / 10000 });
+    message.success(`已填入 ${shares.toFixed(4)} 份`);
   };
 
   const handleEditTx = (tx: Transaction) => {
@@ -460,13 +483,23 @@ export default function FundDetail() {
       message.error(`未找到 ${tx.date} 之前的净值，请稍后重试`);
       return;
     }
-    const shares = calcSharesFromAmount(tx.amount, tx.fee, result.nav);
+    // 买入按金额 → 确认净值后补份额；卖出按份额 → 确认净值后补成交额，份额不变
+    const resolved = resolveTxValues({
+      type: tx.type,
+      dividendType: 'cash',
+      amount: tx.amount,
+      fee: tx.fee,
+      shares: tx.shares,
+      nav: result.nav,
+      pending: false,
+    });
     updateTransaction(tx.id, {
       status: 'confirmed',
       nav: result.nav,
-      shares: Math.round(shares * 10000) / 10000,
+      amount: resolved.amount,
+      shares: Math.round(resolved.shares * 10000) / 10000,
     });
-    message.success(`已确认：${shares.toFixed(4)} 份 @ ${result.nav.toFixed(4)}`);
+    message.success(`已确认：${resolved.shares.toFixed(4)} 份 @ ${result.nav.toFixed(4)}`);
   };
 
   const txColumns = [
@@ -877,13 +910,32 @@ export default function FundDetail() {
           <Form.Item label="交易日期" name="date" rules={[{ required: true }]}>
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
-          {txTypeWatch !== 'dividend' && (
+          {txTypeWatch !== 'sell' && txTypeWatch !== 'dividend' && (
             <>
               <Form.Item label="金额（元）" name="amount" rules={[{ required: true, message: '请输入金额' }]}>
                 <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="交易金额" />
               </Form.Item>
               <Form.Item label="手续费（元）" name="fee">
                 <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="0" />
+              </Form.Item>
+            </>
+          )}
+          {txTypeWatch === 'sell' && (
+            <>
+              <Form.Item
+                label="卖出份额（份）"
+                name="shares"
+                rules={[{ required: true, message: '请输入卖出份额' }]}
+                extra={
+                  <Button size="small" type="link" onClick={handleFillAllShares} style={{ paddingLeft: 0 }}>
+                    {editingTxId ? '按该笔交易前持仓填入' : '全部卖出'}
+                  </Button>
+                }
+              >
+                <InputNumber style={{ width: '100%' }} min={0} precision={4} placeholder="本次赎回的份额" />
+              </Form.Item>
+              <Form.Item label="手续费（元）" name="fee">
+                <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="0（赎回费，从成交额中扣除）" />
               </Form.Item>
             </>
           )}
@@ -922,12 +974,28 @@ export default function FundDetail() {
               showIcon
               message={`成交净值：${navPreview.nav.toFixed(4)}（${navPreview.navDate}${navPreview.navDate !== (txForm.getFieldValue('date') as dayjs.Dayjs | null)?.format('YYYY-MM-DD') ? '，最近交易日' : ''}）`}
               description={(() => {
-                const amt = (txForm.getFieldValue('amount') as number) ?? 0;
-                const fe = (txForm.getFieldValue('fee') as number) ?? 0;
-                const s = txTypeWatch !== 'dividend' && amt ? calcSharesFromAmount(amt, fe, navPreview.nav) : null;
+                if (txTypeWatch === 'sell') return '卖出以份额为准，成交金额与实际到手见下方';
+                if (txTypeWatch === 'dividend') return '请按分红方式填写金额或份额';
+                const amt = amountWatch ?? 0;
+                const fe = feeWatch ?? 0;
+                const s = amt ? (amt - fe) / navPreview.nav : null;
                 return s !== null ? <>预计份额：<strong>{s.toFixed(4)}</strong> 份<br />（{amt} - {fe}）÷ {navPreview.nav.toFixed(4)}</> : '请输入金额后查看预计份额';
               })()}
               action={<Button size="small" onClick={handleRefreshNav}>刷新净值</Button>}
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          {/* 卖出预览：成交额 = 份额 × 净值；实际到手 = 成交额 − 手续费 */}
+          {txTypeWatch === 'sell' && !pendingWatch && (
+            <Alert
+              type="info"
+              showIcon
+              message={`成交金额 ${sellAmountVal.toFixed(2)} 元　实际到手 ${(sellAmountVal - sellFeeVal).toFixed(2)} 元`}
+              description={
+                sellNavVal > 0
+                  ? `${sellSharesVal} 份 × ${sellNavVal} − 手续费 ${sellFeeVal}（手续费从成交额中扣除，不减少卖出份额）`
+                  : '尚未查到成交净值，成交金额待净值确定后计算'
+              }
               style={{ marginBottom: 16 }}
             />
           )}

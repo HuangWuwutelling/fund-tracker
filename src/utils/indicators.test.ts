@@ -8,6 +8,7 @@ import {
   drawdownPercentile,
   computeFundIndicators,
   buildAdjustedSeries,
+  navScaleFactor,
 } from './indicators';
 import type { Fund, NavRecord } from '../types';
 
@@ -576,5 +577,43 @@ describe('computeFundIndicators', () => {
     expect(Math.abs(r.ma250Deviation!)).toBeLessThan(0.01);
     // MACD 不应把除息悬崖判成死叉
     expect(r.macdState.state).not.toBe('death_cross');
+  });
+});
+
+/* ============================================================
+ *  navScaleFactor —— 把复权序列缩放回单位净值刻度
+ * ============================================================ */
+
+describe('navScaleFactor（复权序列 → 单位净值刻度的缩放系数）', () => {
+  it('无分红（adj ≡ nav）→ 系数为 1，缩放后与原序列逐点一致（与旧图行为完全相同）', () => {
+    const navs = [1, 1.1, 1.2];
+    expect(navScaleFactor(navs, navs)).toBe(1);
+  });
+
+  it('分红基金 → 系数把复权序列末点映射回单位净值刻度', () => {
+    // nav 2.00 → 除息 0.50（nav 1.50、acc 保持 2.00）→ 1.60（acc 2.10）
+    // 复权序列 2.00 / 2.00 / 2.1333；系数 k = nav末 / adj末 = 1.60 / 2.1333 = 0.75
+    const usable = [
+      navAcc('2026-01-01', 2.0, 2.0),
+      navAcc('2026-01-02', 1.5, 2.0),
+      navAcc('2026-01-03', 1.6, 2.1),
+    ];
+    const adj = buildAdjustedSeries(usable).values;
+    const k = navScaleFactor(adj, [2.0, 1.5, 1.6]);
+    expect(k).toBeCloseTo(0.75, 10);
+    // 缩放后的复权序列末点 == 单位净值末点 → 图表 MA250 与指标卡偏离度同口径
+    expect(adj[adj.length - 1]! * k).toBeCloseTo(1.6, 10);
+  });
+
+  it('数据不足 / 末点非法 → 系数为 1（不缩放，退回原行为）', () => {
+    expect(navScaleFactor([], [])).toBe(1);
+    expect(navScaleFactor([0], [1])).toBe(1);
+    expect(navScaleFactor([1], [0])).toBe(1);
+    expect(navScaleFactor([Number.NaN], [1])).toBe(1);
+    expect(navScaleFactor([1], [Number.POSITIVE_INFINITY])).toBe(1);
+  });
+
+  it('两序列长度不一致 → 系数为 1（不猜对应关系）', () => {
+    expect(navScaleFactor([1, 2], [1])).toBe(1);
   });
 });

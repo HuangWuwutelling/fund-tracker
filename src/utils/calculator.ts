@@ -274,10 +274,50 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
   return r * 100;
 }
 
-/** 根据金额和净值计算份额（含手续费） */
+/**
+ * 根据金额和净值计算份额（**买入专用**）。
+ *
+ * 口径：amount = 用户总付出，fee 从中内扣 → 净买入 = amount − fee → shares = 净买入 / nav。
+ *
+ * ⚠️ 卖出**不能**用这个公式——卖出的手续费从赎回款里扣，不减少卖出的份额。
+ * 卖出请用 `calcAmountFromShares`（以份额为准反算成交额）。详见 utils/txValues.ts。
+ */
 export function calcSharesFromAmount(amount: number, fee: number, nav: number): number {
   if (nav === 0) return 0;
   return (amount - fee) / nav;
+}
+
+/**
+ * 成交额 = 份额 × 净值（**卖出 / 红利再投资**用，与 calcSharesFromAmount 互为逆运算）。
+ *
+ * 卖出以份额为准反算成交额：手续费从成交额里扣，不动份额。
+ * 不做四舍五入——保留原始精度，界面显示时再按分格式化。
+ */
+export function calcAmountFromShares(shares: number, nav: number): number {
+  if (!Number.isFinite(shares) || !Number.isFinite(nav)) return 0;
+  if (nav === 0) return 0;
+  return shares * nav;
+}
+
+/**
+ * 某笔交易**之前**的持仓份额。
+ *
+ * 用途：编辑一笔卖出记录时，给「全部卖出」按钮提供正确的份额基数——
+ * 当前持仓已经是卖出后的余额，直接用它会把「卖光」算成「卖剩下的」。
+ *
+ * 规则：
+ * - 排除该笔交易自身
+ * - 只统计日期 ≤ 该笔交易日期的交易（同日交易计入；应用内不记录日内顺序）
+ * - 待确认交易不计入（pending 不进持仓，见 onlyConfirmed）
+ */
+export function calcSharesBeforeTx(
+  transactions: Transaction[],
+  tx: Pick<Transaction, 'id' | 'date'>,
+): number {
+  const relevant = onlyConfirmed(transactions).filter(
+    (t) => t.id !== tx.id && t.date <= tx.date,
+  );
+  return calcShares(relevant);
 }
 
 /**
