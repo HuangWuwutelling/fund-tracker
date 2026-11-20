@@ -19,7 +19,7 @@ import { decideTickAction } from './utils/refreshPolicy';
 import { mergeNavTail } from './utils/navHistoryMerge';
 import { generateSnapshot } from './utils/snapshot';
 import { lookupNavForDate } from './utils/navLookup';
-import { calcSharesFromAmount } from './utils/calculator';
+import { resolveTxValues } from './utils/txValues';
 import { hasStorageWriteFailure } from './utils/storage';
 import AppLayout from './components/Layout';
 import Dashboard from './pages/Dashboard';
@@ -149,11 +149,23 @@ export default function App() {
       // 被错误应用到 8/27、8/28 交易）。A 股基金 T+1 NAV 在 D+1 晚间更新到历史，
       // 等用户下次打开 app 时 navDate === txDate，会正常自动确认。
       if (result.navDate !== tx.date) continue;
-      const shares = calcSharesFromAmount(tx.amount, tx.fee, result.nav);
+      // 买入按金额 → 补份额；卖出按份额 → 补成交额（份额不变）。
+      // 必须走 resolveTxValues：待确认卖出的 amount 恒为 0（净值未知），
+      // 用旧的 calcSharesFromAmount 会把份额算成 (0−fee)/nav 的负数。
+      const resolved = resolveTxValues({
+        type: tx.type,
+        dividendType: 'cash',
+        amount: tx.amount,
+        fee: tx.fee,
+        shares: tx.shares,
+        nav: result.nav,
+        pending: false,
+      });
       updateTransaction(tx.id, {
         status: 'confirmed',
         nav: result.nav,
-        shares: Math.round(shares * 10000) / 10000,
+        amount: resolved.amount,
+        shares: Math.round(resolved.shares * 10000) / 10000,
       });
       confirmed++;
     }

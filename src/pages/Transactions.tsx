@@ -7,6 +7,7 @@ import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { calcAmountFromShares, calcSharesFromAmount, calcSharesBeforeTx, calcShares, onlyConfirmed } from '../utils/calculator';
 import { resolveTxValues } from '../utils/txValues';
+import { decideNavEntry } from '../utils/navEntry';
 import { formatMoney, formatDate, pnlColor } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
 import InitialPositionModal from '../components/InitialPositionModal';
@@ -25,6 +26,7 @@ export default function Transactions() {
   // 卖出预览用：份额为准反算成交额（买入仍是金额为准）
   const sharesWatch = Form.useWatch('shares', form) as number | undefined;
   const feeWatch = Form.useWatch('fee', form) as number | undefined;
+  const dateWatch = Form.useWatch('date', form) as dayjs.Dayjs | undefined;
   const [filterFund, setFilterFund] = useState<string>('');
   const [filterType, setFilterType] = useState<string>('');
   const [searchParams, setSearchParams] = useSearchParams();
@@ -39,6 +41,17 @@ export default function Transactions() {
     navDate: null,
   });
   const [initModalOpen, setInitModalOpen] = useState(false);
+
+  // 净值是否可用来推算份额：只有**交易当日**的净值才行，"最近交易日"兜底会算错
+  const navDecision = useMemo(
+    () =>
+      decideNavEntry({
+        txDate: dateWatch ? dateWatch.format('YYYY-MM-DD') : '',
+        lookedUp: preview.nav !== null ? { nav: preview.nav, navDate: preview.navDate ?? '' } : null,
+        manualNav: 0,
+      }),
+    [dateWatch, preview.nav, preview.navDate],
+  );
 
   const filteredTxs = useMemo(() => {
     let list = [...transactions];
@@ -66,12 +79,22 @@ export default function Transactions() {
       const txType = values.type as Transaction['type'];
       const fee = (values.fee as number) ?? 0;
       const pending = (values.pending as boolean) ?? false;
-      const nav = preview.nav;
+      const txDate = (values.date as dayjs.Dayjs).format('YYYY-MM-DD');
 
-      // Block save when NAV is missing for non-dividend, non-pending types
-      if (!pending && txType !== 'dividend' && (nav === null || nav <= 0)) {
-        message.error('无法保存：未找到该日期的成交净值，请先加载该基金的历史净值');
-        return;
+      // 净值可用性：只有**交易当日**的净值才能用来推算份额；"最近交易日"兜底
+      // 会静默算错份额（实测多算 13.6 份）。拿不到当日净值 → 按待确认记录，
+      // 净值发布后由 autoConfirmPending 自动补齐。详见 utils/navEntry.ts。
+      const decision = decideNavEntry({
+        txDate,
+        lookedUp: preview.nav !== null ? { nav: preview.nav, navDate: preview.navDate ?? '' } : null,
+        manualNav: editingId ? 0 : ((values.nav as number) ?? 0),
+      });
+      const status: 'confirmed' | 'pending' = editingId
+        ? (pending ? 'pending' : 'confirmed')
+        : (pending ? 'pending' : decision.status);
+      const nav = editingId ? ((values.nav as number) ?? 0) : (status === 'confirmed' ? decision.nav : 0);
+      if (status === 'pending' && !pending && decision.warning) {
+        message.warning(decision.warning, 8);
       }
 
       // 统一口径解析：买入按金额、卖出按份额、分红分现金/再投资。
@@ -82,8 +105,8 @@ export default function Transactions() {
         amount: (values.amount as number) ?? 0,
         fee,
         shares: (values.shares as number) ?? 0,
-        nav: nav ?? 0,
-        pending,
+        nav,
+        pending: status === 'pending',
       });
       const finalAmount = resolved.amount;
       const finalShares = resolved.shares;
@@ -91,7 +114,6 @@ export default function Transactions() {
 
       // 卖出校验：截至当前交易日期的持仓必须 >= 卖出份额
       if (txType === 'sell' && !pending && finalShares > 0) {
-        const txDate = (values.date as dayjs.Dayjs).format('YYYY-MM-DD');
         const fundIdVal = values.fundId as string;
         const priorShares = calcSharesBeforeTx(
           transactions.filter((t) => t.fundId === fundIdVal),
@@ -109,13 +131,13 @@ export default function Transactions() {
         id: editingId ?? uuid(),
         fundId: values.fundId as string,
         type: txType,
-        date: (values.date as dayjs.Dayjs).format('YYYY-MM-DD'),
+        date: txDate,
         amount: finalAmount,
         fee: finalFee,
         shares: Math.round(finalShares * 10000) / 10000,
-        nav: pending ? 0 : (nav ?? 0),
+        nav,
         note: values.note as string | undefined,
-        status: pending ? 'pending' : 'confirmed',
+        status,
       };
 
       if (editingId) {
@@ -123,7 +145,9 @@ export default function Transactions() {
         message.success('已更新');
       } else {
         addTransaction(txData);
-        message.success('已添加');
+        message.success(
+          status === 'pending' ? '已按待确认记录（净值发布后自动补齐份额）' : '已添加',
+        );
       }
 
       setModalOpen(false);
@@ -196,7 +220,10 @@ export default function Transactions() {
     setEditingId(tx.id);
     // 推断分红方式：amount > 0 → 现金分红；shares > 0 → 红利再投资
     const dividendType: 'cash' | 'reinvest' | undefined =
-      tx.type === 'dividend' ? (tx.amount > 0 ? 'cash' : 'reinvest') : undefined;
+      // 红利再投资既有 amount（= 份额 × 净值）也有 shares，用 amount>0 判会把
+      // 再投资误判成现金分红 → 编辑保存时把 shares 清零，份额凭空消失。
+      // 判据只能是 shares：现金分红的份额恒为 0。
+      tx.type === 'dividend' ? (tx.shares > 0 ? 'reinvest' : 'cash') : undefined;
     // 同步 pending 表单字段，否则编辑 pending 交易时 checkbox 默认未勾选，
     // 会触发 nav 缺失校验导致无法保存（T+1 净值未发布的 pending 交易 nav=0）
     form.setFieldsValue({
@@ -514,11 +541,11 @@ export default function Transactions() {
             <Checkbox>待确认（净值待发布：先记账不进入持仓）</Checkbox>
           </Form.Item>
           {/* NAV is hidden - auto-filled from history, shown in preview below */}
-          {!pendingWatch && preview.nav !== null && (
+          {!pendingWatch && preview.nav !== null && navDecision.isExact && (
             <Alert
               type="success"
               showIcon
-              message={`成交净值：${preview.nav.toFixed(4)}（${preview.navDate}${preview.navDate !== (form.getFieldValue('date') as dayjs.Dayjs | null)?.format('YYYY-MM-DD') ? '，最近交易日' : ''}）`}
+              message={`成交净值：${preview.nav.toFixed(4)}（${preview.navDate}）`}
               description={
                 txTypeWatch === 'sell' ? (
                   <>
@@ -542,6 +569,27 @@ export default function Transactions() {
               description="该日期之前无历史净值数据，请检查该基金是否已加载历史，或换个日期"
               style={{ marginBottom: 16 }}
             />
+          )}
+          {/* 净值不是交易当日的 → 警告（用它推算份额会算错），并允许手填当日净值 */}
+          {!pendingWatch && preview.nav !== null && !navDecision.isExact && (
+            <Alert
+              type="warning"
+              showIcon
+              message={`该日期的净值尚未收录（本地最近 ${preview.navDate}）`}
+              description={navDecision.warning}
+              action={<Button size="small" onClick={handleRefreshNav}>刷新净值</Button>}
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          {/* 手动录入成交净值：自动净值不可信时，让用户填平台确认的当日净值 */}
+          {!pendingWatch && (preview.nav === null || !navDecision.isExact) && form.getFieldValue('fundId') && dateWatch && (
+            <Form.Item
+              label="成交净值（手动录入：平台确认的当日净值）"
+              name="nav"
+              extra="留空则按「待确认」记录，净值发布后自动补齐份额"
+            >
+              <InputNumber style={{ width: '100%' }} min={0} step={0.0001} precision={4} />
+            </Form.Item>
           )}
           <Form.Item label="备注" name="note">
             <Input placeholder="可选" />
