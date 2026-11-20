@@ -15,11 +15,12 @@ import type { IndexQuote, FundRefreshIssue } from './types';
 import { fetchFundWithHistory } from './api/fundApi';
 import { fetchMarketIndices, INDEX_LIST } from './api/indexApi';
 import { shouldUpdateIndexQuote } from './utils/indexQuote';
+import { decideTickAction } from './utils/refreshPolicy';
 import { mergeNavTail } from './utils/navHistoryMerge';
 import { generateSnapshot } from './utils/snapshot';
 import { lookupNavForDate } from './utils/navLookup';
 import { calcSharesFromAmount } from './utils/calculator';
-import { STORAGE_ERROR_EVENT } from './utils/storage';
+import { hasStorageWriteFailure } from './utils/storage';
 import AppLayout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import FundList from './pages/FundList';
@@ -29,10 +30,49 @@ import DcaPlans from './pages/DcaPlans';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 
+/**
+ * 指数行情批量刷新（独立于基金净值刷新链路）。
+ *
+ * 腾讯 qt.gtimg.cn 支持 `q=a,b,c` 一次拿 3 条，所以这里只发 1 个 HTTP。
+ * 设计决策：index 不接 `hasStale` 闸门（那个闸门判断的是"基金 NAV 是否过时"），
+ * 也不接 chineseHolidays（A股休市时美股正常交易，反之亦然）——每个 index 自己判断。
+ *
+ * ⚠️ 必须是独立函数：曾经这段逻辑内联在 refreshAll 里，而定时 tick 的"基金净值
+ * 退避"会整条跳过 refreshAll —— 于是指数点位跟着被降到 ~2 小时一次，Dashboard
+ * 上的指数长时间不更新。指数与基金净值没有依赖关系，不该被那个闸门牵连。
+ *
+ * 写入用 shouldUpdateIndexQuote 兜底（只接受比 cache 更新的日期），所以不需要
+ * refreshAll 那套 generation 中断机制——过期的响应写不进去。
+ */
+async function refreshMarketIndices(): Promise<void> {
+  try {
+    const allData = await fetchMarketIndices();
+    for (const spec of INDEX_LIST) {
+      const raw = allData[spec.code];
+      if (!raw) continue;
+      const cached = useStore.getState().indices[spec.code];
+      const newQuote: IndexQuote = {
+        name: spec.name,
+        market: spec.market,
+        value: raw.value,
+        change: raw.change,
+        changePercent: raw.changePercent,
+        date: raw.date,
+        time: raw.rawTime,
+        fetchedAt: Date.now(),
+      };
+      if (shouldUpdateIndexQuote(cached, newQuote)) {
+        useStore.getState().updateIndex(spec.code, newQuote);
+      }
+    }
+  } catch (err) {
+    console.error('[App] index batch failed:', err);
+  }
+}
+
 /** 按刷新结果分档提示：全部成功 success / 部分失败 warning / 全部失败 error。
  *  此前无条件 message.success('净值已更新')，sc 新格式基金被跳过时用户毫无感知。 */
-function reportRefreshOutcome(issues: Record<string, FundRefreshIssue>, total: number) {
-  const failedIds = Object.keys(issues);
+function reportRefreshOutcome(issues: Record<string, FundRefreshIssue>, total: number) {  const failedIds = Object.keys(issues);
   if (failedIds.length === 0) {
     message.success('净值已更新');
     return;
@@ -68,16 +108,13 @@ export default function App() {
   }, [loadFromStorage]);
 
   // localStorage 写失败（QuotaExceededError 写满 5MB / 隐私模式禁写等）→ storage 层
-  // 广播 STORAGE_ERROR_EVENT → 这里弹提示。30s 冷却防每次写入重复弹。
+  // 广播 STORAGE_ERROR_EVENT → 由 components/StorageErrorBanner.tsx 常驻展示
+  // （必须常驻：写入失败时数据只在内存里，刷新即丢，toast 会被错过）。
   useEffect(() => {
-    let lastWarnedAt = 0;
-    const handler = () => {
-      if (Date.now() - lastWarnedAt < 30000) return;
-      lastWarnedAt = Date.now();
-      message.error('浏览器存储空间不足，最近的数据可能没有保存！请立即导出备份，并清理不再持有的基金', 8);
-    };
-    window.addEventListener(STORAGE_ERROR_EVENT, handler);
-    return () => window.removeEventListener(STORAGE_ERROR_EVENT, handler);
+    // 挂载时若已处于失败状态，提示一次（Banner 组件自己也会检查）
+    if (hasStorageWriteFailure()) {
+      message.error('浏览器存储空间不足，最近的数据可能没有保存！请立即导出备份', 8);
+    }
   }, []);
 
   // Generation counter to bail out stale refreshAll calls when a newer one starts.
@@ -174,34 +211,8 @@ export default function App() {
     useStore.getState().setRefreshIssues(issues);
 
     // --- Index 批量拉取 ---
-    // 腾讯 qt.gtimg.cn 支持 `q=a,b,c` 一次拿 3 条，所以这里只发 1 个 HTTP。
-    // 设计决策：index 不接 `hasStale` 闸门（那个闸门判断的是"基金 NAV 是否过时"），
-    // 也不接 chineseHolidays（A股休市时美股正常交易，反之亦然）——每个 index 自己判断。
-    try {
-      const allData = await fetchMarketIndices();
-      if (refreshGenerationRef.current !== myGen) return;
-      for (const spec of INDEX_LIST) {
-        if (refreshGenerationRef.current !== myGen) return;
-        const raw = allData[spec.code];
-        if (!raw) continue;
-        const cached = useStore.getState().indices[spec.code];
-        const newQuote: IndexQuote = {
-          name: spec.name,
-          market: spec.market,
-          value: raw.value,
-          change: raw.change,
-          changePercent: raw.changePercent,
-          date: raw.date,
-          time: raw.rawTime,
-          fetchedAt: Date.now(),
-        };
-        if (shouldUpdateIndexQuote(cached, newQuote)) {
-          updateIndex(spec.code, newQuote);
-        }
-      }
-    } catch (err) {
-      console.error('[App] refreshAll index batch failed:', err);
-    }
+    // 独立函数：指数行情与基金净值无关，**不能**被 tick 的基金净值退避牵连。
+    await refreshMarketIndices();
 
     if (refreshGenerationRef.current !== myGen) return;
     // NAV history is now fresh — try to auto-confirm pending transactions whose NAV is available
@@ -255,33 +266,35 @@ export default function App() {
   // 让 app 持续打开的用户无需手动操作即可看到最新净值日盈亏。
   // 不绑死时间点：纯靠 hasStale 闸门——任一基金 navDate < today 才发起请求，
   // 数据跟齐后所有 tick 早 return，无 API 配额消耗。
-  // 退避：同一批 stale 基金连续 tick 无变化 → 隔次跳过。失效基金（如 sc 新格式
-  // 永久跳过）原本每 30 分钟空轮询一次；跳 3 次后强制跑一次，给数据源自愈留窗口，
-  // 等效把空轮询降到 2 小时一次。集合一有变化（有基金更新/新增/删除）立即恢复正常。
+  // 退避：同一批 stale 基金连续 tick 无变化 → 基金净值部分隔次跳过。失效基金
+  // （如 sc 新格式永久跳过）原本每 30 分钟空轮询一次；跳 3 次后强制跑一次，
+  // 给数据源自愈留窗口，等效把空轮询降到 2 小时一次。集合一有变化立即恢复正常。
+  //
+  // ⚠️ 指数行情不受这个退避影响——指数与基金净值没有依赖关系，退避时照刷。
+  // 决策抽到 utils/refreshPolicy.ts（纯函数、可单测），避免"退避"被误实现成
+  // "整条链路都不动"。
   const lastStaleIdsRef = useRef<Set<string> | null>(null);
   const skippedTicksRef = useRef(0);
 
   useEffect(() => {
     if (!settings.navAutoRefresh || funds.length === 0) return;
 
-    const sameSet = (a: Set<string>, b: Set<string>) =>
-      a.size === b.size && Array.from(a).every((id) => b.has(id));
-
     const tick = () => {
       const today = dayjs().format('YYYY-MM-DD');
       const staleIds = new Set(
         useStore.getState().funds.filter((f) => f.navDate < today).map((f) => f.id),
       );
-      if (staleIds.size === 0) {
-        lastStaleIdsRef.current = null;
+      const action = decideTickAction(staleIds, lastStaleIdsRef.current, skippedTicksRef.current);
+      lastStaleIdsRef.current = staleIds;
+
+      if (action === 'idle') {
         skippedTicksRef.current = 0;
         return;
       }
-      const unchanged = lastStaleIdsRef.current !== null && sameSet(lastStaleIdsRef.current, staleIds);
-      lastStaleIdsRef.current = staleIds;
-      if (unchanged && skippedTicksRef.current < 3) {
+      if (action === 'indices-only') {
         skippedTicksRef.current++;
-        console.debug('[App] periodic refresh: stale set unchanged, backing off (skipped', skippedTicksRef.current, 'ticks)');
+        console.debug('[App] periodic refresh: stale set unchanged, backing off (skipped', skippedTicksRef.current, 'ticks) — 指数行情照常刷新');
+        void refreshMarketIndices();
         return;
       }
       skippedTicksRef.current = 0;

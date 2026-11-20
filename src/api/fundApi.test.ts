@@ -35,12 +35,22 @@ describe('pairNavWithAcc（单位/累计净值按日期配对）', () => {
     ]);
   });
 
-  it('acc 缺失的日期回退为 nav（旧行为兜底）', () => {
+  it('acc 未覆盖全部日期 → 整只退回旧口径（acc≡nav），不制造假分红', () => {
+    // 逐日回退会在除息日把 gap 打到 0、次日又跳回 → 被 buildAdjustedSeries
+    // 误判成一次"分红"，污染 MA250/MACD/回撤。宁可整只不给复权信号。
     const trend = [{ x: t0, y: 1.5 }, { x: t0 + DAY, y: 1.4 }];
     const accTrend: Array<[number, number]> = [[t0, 1.6]];
     const out = pairNavWithAcc(trend, accTrend);
-    expect(out[0]).toEqual({ date: d0, nav: 1.5, accNav: 1.6 });
+    expect(out[0]).toEqual({ date: d0, nav: 1.5, accNav: 1.5 });
     expect(out[1]).toEqual({ date: d1, nav: 1.4, accNav: 1.4 });
+  });
+
+  it('acc 覆盖全部日期但含非法条目 → 覆盖不完整，整只退回旧口径', () => {
+    const trend = [{ x: t0, y: 1.5 }, { x: t0 + DAY, y: 1.4 }];
+    const accTrend = [[t0, 1.6], [t0 + DAY, 0]] as Array<[number, number]>; // ≤0 非法
+    const out = pairNavWithAcc(trend, accTrend);
+    expect(out[0]!.accNav).toBe(1.5);
+    expect(out[1]!.accNav).toBe(1.4);
   });
 
   it('acc 无数据 / undefined → 全部回退为 nav（与旧口径一致）', () => {

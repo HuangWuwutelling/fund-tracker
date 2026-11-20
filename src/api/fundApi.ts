@@ -251,8 +251,11 @@ export async function fetchFundEstimate(fundCode: string): Promise<FundEstimate 
  * trend 逐日等长）。分红基金的累计净值 ≠ 单位净值——此前 accNav 恒等 nav
  * 是口径错误，这里修正。
  *
- * 某日缺累计值 / 非法值时回退为单位净值（与旧行为一致，保证 navPair 的
- * QDII 占位判定"nav+accNav 双同值"依旧成立）。
+ * 覆盖率是**全有或全无**（2026-11-20 修正）：真实累计净值必须覆盖 trend 的
+ * 全部日期，否则整只退回旧口径（acc ≡ nav）。
+ * 逐日回退会在除息日把 gap 打到 0、次日又跳回 → 被 buildAdjustedSeries 误判成
+ * 一次"分红"，静默污染 MA250 / MACD / 回撤百分位。宁可整只不给复权信号，
+ * 也不要错误信号——用户可到 Settings → 重置净值历史 重拉一次。
  */
 export function pairNavWithAcc(
   trend: Array<{ x: number; y: number }> | undefined,
@@ -266,9 +269,13 @@ export function pairNavWithAcc(
     if (!Number.isFinite(val) || val <= 0) continue;
     accByDate.set(dayjs(x).format('YYYY-MM-DD'), val);
   }
-  return (trend ?? []).map((item) => {
+  const rows = trend ?? [];
+  const covered =
+    rows.length > 0 &&
+    rows.every((item) => accByDate.has(dayjs(item.x).format('YYYY-MM-DD')));
+  return rows.map((item) => {
     const date = dayjs(item.x).format('YYYY-MM-DD');
-    const acc = accByDate.get(date);
+    const acc = covered ? accByDate.get(date) : undefined;
     return { date, nav: item.y, accNav: acc !== undefined ? acc : item.y };
   });
 }
