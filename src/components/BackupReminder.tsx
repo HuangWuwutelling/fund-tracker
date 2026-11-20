@@ -45,10 +45,12 @@ export default function BackupReminder() {
   const refresh = useCallback(() => {
     const meta = storage.getBackupMeta();
     setBackupDays(daysSince(meta.lastBackupAt));
-    setAutoDue(isAutoBackupDue(settings.backupReminderDays));
+    // 自动备份的到期周期用 settings.autoBackupDays（自己的开关），
+    // 与手动提醒条周期 backupReminderDays 无关——关提醒 ≠ 关自动备份
+    setAutoDue(isAutoBackupDue(settings.autoBackupDays, meta));
     void queryAutoBackupPermission().then(setAutoPerm);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.backupReminderDays]);
+  }, [settings.autoBackupDays, settings.backupReminderDays]);
 
   useEffect(() => { refresh(); }, [refresh]);
 

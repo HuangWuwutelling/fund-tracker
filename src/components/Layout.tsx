@@ -14,6 +14,7 @@ import {
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useStore } from '../stores';
 import BackupReminder from './BackupReminder';
+import StorageErrorBanner from './StorageErrorBanner';
 
 const { Header, Sider, Content, Footer } = Layout;
 const { Title, Paragraph, Text } = Typography;
@@ -129,6 +130,7 @@ export default function AppLayout() {
           </Space>
         </Header>
         <Content style={{ margin: 24 }}>
+          <StorageErrorBanner />
           <BackupReminder />
           <Outlet />
         </Content>

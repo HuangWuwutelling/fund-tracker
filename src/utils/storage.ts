@@ -18,19 +18,44 @@ function getItem<T>(name: string, fallback: T): T {
 }
 
 /** localStorage 写失败事件名。storage 层不依赖 UI：QuotaExceeded 等写失败时
- *  广播此事件，App 监听后弹 toast 提醒用户导出备份（数据安全必须让用户看到）。 */
+ *  广播此事件，App 监听后弹提示提醒用户导出备份（数据安全必须让用户看到）。 */
 export const STORAGE_ERROR_EVENT = 'fund-tracker:storage-error';
+/** 写入恢复事件名：失败后的第一次成功写入会广播，UI 据此收起常驻警告。 */
+export const STORAGE_RECOVERED_EVENT = 'fund-tracker:storage-recovered';
+
+/**
+ * 是否有写入失败尚未恢复。
+ *
+ * 写失败时 store 仍然会更新内存状态（数据还在内存里，用户还能导出），
+ * 但 localStorage 里没有——刷新页面就会丢。所以失败必须**持续可见**，
+ * 而不是弹一次 toast 就消失（30s 冷却 + toast 的做法会让用户完全错过）。
+ */
+let writeFailed = false;
+
+/** 当前是否存在"写入失败尚未恢复"的状态。 */
+export function hasStorageWriteFailure(): boolean {
+  return writeFailed;
+}
 
 function setItem<T>(name: string, value: T): void {
   try {
     localStorage.setItem(key(name), JSON.stringify(value));
+    if (writeFailed) {
+      writeFailed = false;
+      try {
+        window.dispatchEvent(new CustomEvent(STORAGE_RECOVERED_EVENT));
+      } catch { /* 事件派发失败时只剩状态位 */ }
+    }
   } catch (err) {
     // QuotaExceededError（5MB 写满）/ 隐私模式禁用写入等。不向上抛——所有 save*
     // 调用点都没有异常处理，抛出会打断 store action；改为广播事件让 UI 提示。
     console.error(`[storage] write failed for "${name}"`, err);
-    try {
-      window.dispatchEvent(new CustomEvent(STORAGE_ERROR_EVENT, { detail: { key: name } }));
-    } catch { /* 事件派发失败时只剩 console */ }
+    if (!writeFailed) {
+      writeFailed = true;
+      try {
+        window.dispatchEvent(new CustomEvent(STORAGE_ERROR_EVENT, { detail: { key: name } }));
+      } catch { /* 事件派发失败时只剩 console */ }
+    }
   }
 }
 
@@ -102,6 +127,7 @@ export const DEFAULT_SETTINGS: Settings = {
   dcaAutoRecord: true,
   usQdiiFilterMode: 'auto',
   backupReminderDays: 7,
+  autoBackupDays: 7,
 };
 
 export function getSettings(): Settings {

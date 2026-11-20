@@ -1,0 +1,28 @@
+name: CI
+
+# PR 门禁：deploy.yml 只在 push 到 main 时跑（且带部署权限），PR 阶段没有
+# 任何测试把关——PR 可以带着红灯单测合进 main，再由 deploy.yml 拦下。
+# 这个 workflow 给 PR 补上门禁：单测 + 类型检查 + 生产构建。
+#
+# 与 deploy.yml 的分工：
+# - ci.yml     → pull_request：npm ci / npm test / npm run build（不部署）
+# - deploy.yml → push 到 main：npm ci / npm test / npm run build + 部署
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

@@ -478,9 +478,30 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
                 <Typography.Text strong>自动备份到本地文件（实验性）</Typography.Text>
               </div>
               <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
-                选定一个固定备份文件后，应用启动时按备份提醒周期静默把最新数据写入该文件（仅本地写盘，不上传）。
+                选定一个固定备份文件后，应用启动时按自动备份周期静默把最新数据写入该文件（仅本地写盘，不上传）。
                 浏览器要求每次会话首次写入前重新授权一次，届时页面顶部会出现授权提示。
               </Typography.Paragraph>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <div>自动备份周期</div>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    距上次自动备份超过该天数时静默写盘；0 = 关闭自动备份。与上面的「备份提醒周期」相互独立。
+                  </Typography.Text>
+                </div>
+                <Select
+                  value={settings.autoBackupDays}
+                  onChange={(v: number) => updateSettings({ autoBackupDays: v })}
+                  style={{ width: 120 }}
+                  options={[
+                    { value: 1, label: '每天' },
+                    { value: 3, label: '每 3 天' },
+                    { value: 7, label: '每 7 天' },
+                    { value: 14, label: '每 14 天' },
+                    { value: 30, label: '每 30 天' },
+                    { value: 0, label: '关闭' },
+                  ]}
+                />
+              </div>
               <Space wrap>
                 {autoPerm === 'none' || autoPerm === 'denied' ? (
                   <Button type="primary" icon={<SaveOutlined />} onClick={handlePickBackupTarget} loading={autoBusy}>

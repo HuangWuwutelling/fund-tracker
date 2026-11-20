@@ -197,32 +197,44 @@ describe('WC ↔ Reports 对账（程序化确定性场景）', () => {
 
 describe('WC ↔ Reports 对账（可选：本地真实备份）', () => {
   // 真实备份是全历史数据（~2 万条净值），generateDailyReturns 全日历跑数轮，
-  // 本地实测 >5s；vitest 默认 5s 会超时，显式放宽。CI 无备份文件，天然跳过。
-  it('仓库根存在 fund-tracker-backup-*.json 时附加对账（CI 跳过）', () => {
-    // @ts-expect-error 同上
-    const dir = process.cwd();
-    let path: string | null = null;
-    try {
-      const backup = readdirSync(dir).find((f: string) => /^fund-tracker-backup-\d{4}-\d{2}-\d{2}\.json$/.test(f));
-      if (backup) path = resolve(dir, backup);
-    } catch {
-      return;
-    }
-    if (!path || !existsSync(path)) return;
+  // 本地实测 >5s；vitest 默认 5s 会超时，显式放宽。
+  //
+  // 必须**显式开启**（RUN_REPORT_RECONCILE=1）而不是"仓库根有备份文件就跑"：
+  // 后者会让本地 npm test 的成败取决于个人持仓数据——个人数据一旦触发断言失败，
+  // 本地红而 CI 绿，两边反馈不一致，CI 门禁也就失去了意义。
+  // 默认跳过时显示为 skipped（不是"通过"），不掩盖它的存在。
+  it.skipIf(
+    // @ts-expect-error node 环境未装 @types/node（与下方 process.cwd() 同理）
+    process.env.RUN_REPORT_RECONCILE !== '1',
+  )(
+    'RUN_REPORT_RECONCILE=1 时用仓库根的真实备份附加对账',
+    () => {
+      // @ts-expect-error 同上
+      const dir = process.cwd();
+      let path: string | null = null;
+      try {
+        const backup = readdirSync(dir).find((f: string) => /^fund-tracker-backup-\d{4}-\d{2}-\d{2}\.json$/.test(f));
+        if (backup) path = resolve(dir, backup);
+      } catch {
+        return;
+      }
+      if (!path || !existsSync(path)) return;
 
-    const json = JSON.parse(readFileSync(path, 'utf-8')) as {
-      funds: Fund[];
-      transactions: Transaction[];
-      navHistories: Record<string, NavRecord[]>;
-      platforms: Platform[];
-    };
-    const histories: Record<string, NavRecord[]> = {};
-    for (const [code, records] of Object.entries(json.navHistories ?? {})) {
-      histories[code] = records.map((r) => ({ date: r.date, nav: r.nav, accNav: r.accNav }));
-    }
-    loadNavs(histories);
-    const { augWC, sepWC, weekWC, weekRep } = assertReconciliation(json.funds, json.transactions, json.platforms ?? PLATFORMS);
-    const fileName = path.replace(/\\/g, '/').split('/').pop();
-    console.log(`[真实备份 ${fileName}] Aug: ${augWC.toFixed(2)}, Sep: ${sepWC.toFixed(2)}, 周 9/7-9/13: 报表 ${weekRep.totalReturn.toFixed(2)} vs 日历 ${weekWC.toFixed(2)}`);
-  }, 60000);
+      const json = JSON.parse(readFileSync(path, 'utf-8')) as {
+        funds: Fund[];
+        transactions: Transaction[];
+        navHistories: Record<string, NavRecord[]>;
+        platforms: Platform[];
+      };
+      const histories: Record<string, NavRecord[]> = {};
+      for (const [code, records] of Object.entries(json.navHistories ?? {})) {
+        histories[code] = records.map((r) => ({ date: r.date, nav: r.nav, accNav: r.accNav }));
+      }
+      loadNavs(histories);
+      const { augWC, sepWC, weekWC, weekRep } = assertReconciliation(json.funds, json.transactions, json.platforms ?? PLATFORMS);
+      const fileName = path.replace(/\\/g, '/').split('/').pop();
+      console.log(`[真实备份 ${fileName}] Aug: ${augWC.toFixed(2)}, Sep: ${sepWC.toFixed(2)}, 周 9/7-9/13: 报表 ${weekRep.totalReturn.toFixed(2)} vs 日历 ${weekWC.toFixed(2)}`);
+    },
+    60000,
+  );
 });

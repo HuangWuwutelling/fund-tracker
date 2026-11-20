@@ -100,6 +100,12 @@ export interface Settings {
    * 0 = 关闭提醒。老备份导入时由 DEFAULT_SETTINGS 合并兜底为 7。
    */
   backupReminderDays: number;
+  /**
+   * 自动备份周期（天）：距上次**自动**备份超过 N 天时静默写盘。
+   * 0 = 关闭自动备份。与 backupReminderDays **相互独立**——关掉提醒条
+   * 不应该顺带关掉唯一的数据兜底。
+   */
+  autoBackupDays: number;
 }
 
 /**

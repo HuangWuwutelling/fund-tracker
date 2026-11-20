@@ -1,4 +1,5 @@
 import * as storage from './storage';
+import type { BackupMeta } from './storage';
 
 /**
  * File System Access API 自动备份（实验性）。
@@ -161,8 +162,9 @@ async function writeBackupToHandle(handle: AutoBackupFileHandle): Promise<void> 
   const writable = await handle.createWritable();
   await writable.write(JSON.stringify(storage.exportAllData(), null, 2));
   await writable.close();
+  // 写盘成功 = 一次真实备份 → 同时刷新"上次备份"与"上次自动备份"时间
   const meta = storage.getBackupMeta();
-  storage.saveBackupMeta({ ...meta, lastAutoBackupAt: new Date().toISOString() });
+  storage.saveBackupMeta(backupMetaAfterWrite(meta, new Date().toISOString()));
 }
 
 /**
@@ -211,10 +213,33 @@ export async function backupNowWithGesture(): Promise<boolean> {
   }
 }
 
-/** 距上次自动备份是否已到周期（days <= 0 = 功能视为关闭；从未备份过 = 立即到期） */
-export function isAutoBackupDue(days: number): boolean {
+/**
+ * 距上次自动备份是否已到周期。
+ *
+ * `days` 是**自动备份自己的周期**（settings.autoBackupDays），与手动备份提醒
+ * 周期（settings.backupReminderDays）相互独立——关掉提醒不该顺带关掉自动备份。
+ * days <= 0 = 自动备份关闭。
+ *
+ * `meta` / `now` 显式传入而非内部读取 storage：让纯判定逻辑可在 node 环境单测
+ * （storage 依赖 localStorage，node 下不可用）。
+ */
+export function isAutoBackupDue(
+  days: number,
+  meta: BackupMeta,
+  now: number = Date.now(),
+): boolean {
   if (days <= 0) return false;
-  const meta = storage.getBackupMeta();
   if (!meta.lastAutoBackupAt) return true;
-  return Date.now() - new Date(meta.lastAutoBackupAt).getTime() >= days * 86400000;
+  return now - new Date(meta.lastAutoBackupAt).getTime() >= days * 86400000;
+}
+
+/**
+ * 自动备份写盘成功后的备份元数据。
+ *
+ * 自动备份**也是一次备份**——写盘成功即刷新 lastBackupAt，否则手动提醒条只读
+ * lastBackupAt，会在自动备份正常运行的用户面前永远显示"已 N 天未备份"。
+ * lastAutoBackupAt 单独记录"最近一次自动备份"，用于到期调度。
+ */
+export function backupMetaAfterWrite(meta: BackupMeta, at: string): BackupMeta {
+  return { ...meta, lastBackupAt: at, lastAutoBackupAt: at };
 }
