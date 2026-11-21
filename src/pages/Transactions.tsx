@@ -8,6 +8,7 @@ import { useStore } from '../stores';
 import { calcAmountFromShares, calcSharesFromAmount, calcSharesBeforeTx, calcShares, onlyConfirmed } from '../utils/calculator';
 import { resolveTxValues } from '../utils/txValues';
 import { decideNavEntry } from '../utils/navEntry';
+import { initialPositionDate } from '../utils/txNormalize';
 import { formatMoney, formatDate, pnlColor } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
 import InitialPositionModal from '../components/InitialPositionModal';
@@ -27,6 +28,7 @@ export default function Transactions() {
   const sharesWatch = Form.useWatch('shares', form) as number | undefined;
   const feeWatch = Form.useWatch('fee', form) as number | undefined;
   const dateWatch = Form.useWatch('date', form) as dayjs.Dayjs | undefined;
+  const manualNavWatch = Form.useWatch('nav', form) as number | undefined;
   const [filterFund, setFilterFund] = useState<string>('');
   const [filterType, setFilterType] = useState<string>('');
   const [searchParams, setSearchParams] = useSearchParams();
@@ -52,6 +54,18 @@ export default function Transactions() {
       }),
     [dateWatch, preview.nav, preview.navDate],
   );
+
+  // 重复计算预警：买入日期早于该基金的初始持仓日期（初始持仓已包含更早的持仓）
+  const selectedFundId = form.getFieldValue('fundId') as string;
+  const doubleCountRisk = useMemo(() => {
+    if (txTypeWatch !== 'buy' || !dateWatch || !selectedFundId) return null;
+    const initDate = initialPositionDate(transactions, selectedFundId);
+    if (!initDate) return null;
+    const txDate = dateWatch.format('YYYY-MM-DD');
+    if (txDate >= initDate) return null;
+    return `该基金在 ${initDate} 有一条「初始持仓」记录（已包含该日之前的全部持仓）。` +
+      `再记 ${txDate} 的买入会与它重复计算——请把初始持仓的份额调减，或把买入日期设在 ${initDate} 之后。`;
+  }, [txTypeWatch, dateWatch, selectedFundId, transactions]);
 
   const filteredTxs = useMemo(() => {
     let list = [...transactions];
@@ -92,7 +106,11 @@ export default function Transactions() {
       const status: 'confirmed' | 'pending' = editingId
         ? (pending ? 'pending' : 'confirmed')
         : (pending ? 'pending' : decision.status);
-      const nav = editingId ? ((values.nav as number) ?? 0) : (status === 'confirmed' ? decision.nav : 0);
+      // 编辑模式：这个页面没有「成交净值」输入框，净值取预览里的值
+      // （handleEdit 打开时填的就是记录里的净值）——不能用 values.nav（不存在）
+      const nav = editingId
+        ? (preview.nav ?? 0)
+        : (status === 'confirmed' ? decision.nav : 0);
       if (status === 'pending' && !pending && decision.warning) {
         message.warning(decision.warning, 8);
       }
@@ -192,7 +210,8 @@ export default function Transactions() {
   // 卖出预览（份额为准）：成交额 = 份额 × 净值；到手 = 成交额 − 手续费
   const sellSharesVal = sharesWatch ?? 0;
   const sellFeeVal = feeWatch ?? 0;
-  const sellNavVal = preview.nav ?? 0;
+  // 手动录入的成交净值优先（用户从平台抄来的当日净值才是权威）
+  const sellNavVal = (manualNavWatch && manualNavWatch > 0 ? manualNavWatch : preview.nav) ?? 0;
   const sellAmountVal = calcAmountFromShares(sellSharesVal, sellNavVal);
 
   /**
@@ -264,10 +283,12 @@ export default function Transactions() {
       }
     }
 
-    // Compute shares preview
+    // Compute shares preview（手动录入的成交净值优先）
+    const manualNav = (form.getFieldValue('nav') as number) ?? 0;
+    const effNav = manualNav > 0 ? manualNav : nav;
     let shares: number | null = null;
-    if (txType !== 'dividend' && nav && amount) {
-      shares = calcSharesFromAmount(amount, fee, nav);
+    if (txType !== 'dividend' && effNav && amount) {
+      shares = calcSharesFromAmount(amount, fee, effNav);
     }
 
     setPreview({ shares, nav, navDate });
@@ -328,7 +349,7 @@ export default function Transactions() {
     { title: '金额', dataIndex: 'amount', key: 'amount', width: 120, align: 'right' as const, render: (v: number) => formatMoney(v) },
     { title: '手续费', dataIndex: 'fee', key: 'fee', width: 90, align: 'right' as const, render: (v: number) => formatMoney(v) },
     { title: '份额', dataIndex: 'shares', key: 'shares', width: 110, align: 'right' as const, render: (v: number) => v.toFixed(4) },
-    { title: '净值', dataIndex: 'nav', key: 'nav', width: 100, align: 'right' as const, render: (v: number) => v.toFixed(4) },
+    { title: '净值', dataIndex: 'nav', key: 'nav', width: 100, align: 'right' as const, render: (v: number) => (v > 0 ? v.toFixed(4) : '—') },
     {
       title: '备注',
       dataIndex: 'note',
@@ -578,6 +599,16 @@ export default function Transactions() {
               message={`该日期的净值尚未收录（本地最近 ${preview.navDate}）`}
               description={navDecision.warning}
               action={<Button size="small" onClick={handleRefreshNav}>刷新净值</Button>}
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          {/* 重复计算预警：买入日期早于该基金的初始持仓日期 */}
+          {doubleCountRisk && (
+            <Alert
+              type="warning"
+              showIcon
+              message="可能与初始持仓重复计算"
+              description={doubleCountRisk}
               style={{ marginBottom: 16 }}
             />
           )}

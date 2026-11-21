@@ -13,6 +13,7 @@ import { useStore } from '../stores';
 import { calcFundSummary, calcAmountFromShares, calcSharesBeforeTx, calcShares, calcCost, onlyConfirmed } from '../utils/calculator';
 import { resolveTxValues } from '../utils/txValues';
 import { decideNavEntry } from '../utils/navEntry';
+import { initialPositionDate } from '../utils/txNormalize';
 import { pnlColor, formatDate, formatMoney, formatPercent } from '../utils/formatter';
 import { lookupNavForDate } from '../utils/navLookup';
 import { usableNavSeries } from '../utils/navPair';
@@ -62,6 +63,7 @@ export default function FundDetail() {
   const amountWatch = Form.useWatch('amount', txForm) as number | undefined;
   const feeWatch = Form.useWatch('fee', txForm) as number | undefined;
   const dateWatch = Form.useWatch('date', txForm) as dayjs.Dayjs | undefined;
+  const manualNavWatch = Form.useWatch('nav', txForm) as number | undefined;
   // 编辑时成交净值来自表单字段（手动输入），新增时来自历史净值预览
   const navFieldWatch = Form.useWatch('nav', txForm) as number | undefined;
   const [initModalOpen, setInitModalOpen] = useState(false);
@@ -82,6 +84,20 @@ export default function FundDetail() {
       }),
     [dateWatch, navPreview],
   );
+
+  // 重复计算预警：初始持仓是"某时点的持仓快照"，已包含该时点之前的全部持仓。
+  // 在它**之前**日期再记一笔买入 → 持仓凭空多出一份。
+  const initPosDate = useMemo(
+    () => initialPositionDate(transactions, fund?.id ?? ''),
+    [transactions, fund?.id],
+  );
+  const doubleCountRisk = useMemo(() => {
+    if (txTypeWatch !== 'buy' || !dateWatch || !initPosDate) return null;
+    const txDate = dateWatch.format('YYYY-MM-DD');
+    if (txDate >= initPosDate) return null;
+    return `该基金在 ${initPosDate} 有一条「初始持仓」记录（已包含该日之前的全部持仓）。` +
+      `再记 ${txDate} 的买入会与它重复计算——请把初始持仓的份额调减，或把买入日期设在 ${initPosDate} 之后。`;
+  }, [txTypeWatch, dateWatch, initPosDate]);
 
   const handleEditDca = (plan: DcaPlan) => {
     setEditingDcaId(plan.id);
@@ -367,7 +383,6 @@ export default function FundDetail() {
       // 卖出校验：截至当前交易日期的持仓必须 >= 卖出份额
       // 编辑时排除自身，避免重复计算
       if (txType === 'sell' && !pending && finalShares > 0) {
-        const txDate = (values.date as dayjs.Dayjs).format('YYYY-MM-DD');
         const priorShares = calcSharesBeforeTx(
           transactions.filter((t) => t.fundId === fundRef.id),
           { id: editingTxId ?? '', date: txDate },
@@ -552,7 +567,7 @@ export default function FundDetail() {
     { title: '金额', dataIndex: 'amount', key: 'amount', align: 'right' as const, render: (v: number) => formatMoney(v) },
     { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' as const, render: (v: number) => formatMoney(v) },
     { title: '份额', dataIndex: 'shares', key: 'shares', align: 'right' as const, render: (v: number) => v.toFixed(4) },
-    { title: '净值', dataIndex: 'nav', key: 'nav', align: 'right' as const, render: (v: number) => v.toFixed(4) },
+    { title: '净值', dataIndex: 'nav', key: 'nav', align: 'right' as const, render: (v: number) => (v > 0 ? v.toFixed(4) : '—') },
     { title: '备注', dataIndex: 'note', key: 'note', render: (v: string) => v || '—' },
     {
       title: '操作',
@@ -1008,8 +1023,10 @@ export default function FundDetail() {
                 if (txTypeWatch === 'dividend') return '请按分红方式填写金额或份额';
                 const amt = amountWatch ?? 0;
                 const fe = feeWatch ?? 0;
-                const s = amt ? (amt - fe) / navPreview.nav : null;
-                return s !== null ? <>预计份额：<strong>{s.toFixed(4)}</strong> 份<br />（{amt} - {fe}）÷ {navPreview.nav.toFixed(4)}</> : '请输入金额后查看预计份额';
+                // 手动录入的成交净值优先（用户从平台抄来的当日净值才是权威）
+                const eff = manualNavWatch && manualNavWatch > 0 ? manualNavWatch : navPreview.nav;
+                const s = amt ? (amt - fe) / eff : null;
+                return s !== null ? <>预计份额：<strong>{s.toFixed(4)}</strong> 份<br />（{amt} - {fe}）÷ {eff.toFixed(4)}</> : '请输入金额后查看预计份额';
               })()}
               action={<Button size="small" onClick={handleRefreshNav}>刷新净值</Button>}
               style={{ marginBottom: 16 }}
@@ -1023,6 +1040,16 @@ export default function FundDetail() {
               message={`该日期的净值尚未收录（本地最近 ${navPreview.navDate}）`}
               description={navDecision.warning}
               action={<Button size="small" onClick={handleRefreshNav}>刷新净值</Button>}
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          {/* 重复计算预警：买入日期早于该基金的初始持仓日期 */}
+          {doubleCountRisk && (
+            <Alert
+              type="warning"
+              showIcon
+              message="可能与初始持仓重复计算"
+              description={doubleCountRisk}
               style={{ marginBottom: 16 }}
             />
           )}

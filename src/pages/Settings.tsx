@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import { Card, Collapse, Table, Button, Input, Switch, Space, message, Popconfirm, Typography, Modal, Select } from 'antd';
-import { PlusOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
+import { PlusOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, ReloadOutlined, SaveOutlined, AuditOutlined, ImportOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useStore } from '../stores';
 import type { Platform } from '../types';
 import type { UsQdiiFilterMode } from '../utils/navPair';
 import * as storage from '../utils/storage';
+import TransactionAuditModal from '../components/TransactionAuditModal';
+import PlatformImportModal from '../components/PlatformImportModal';
 import {
   isAutoBackupSupported,
   pickBackupTarget,
@@ -30,6 +32,8 @@ export default function Settings() {
   const [backupMeta, setBackupMeta] = useState(() => storage.getBackupMeta());
   const [autoPerm, setAutoPerm] = useState<AutoBackupPermission>('unsupported');
   const [autoBusy, setAutoBusy] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const refreshBackupState = () => {
     setBackupMeta(storage.getBackupMeta());
@@ -471,6 +475,22 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
               从 JSON 备份文件恢复（将覆盖当前数据）
             </Typography.Text>
           </div>
+          <div>
+            <Button icon={<AuditOutlined />} onClick={() => setAuditOpen(true)}>
+              交易自检
+            </Button>
+            <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
+              逐笔核对买卖记录的净值与本地净值历史是否一致，不一致的可一键修正
+            </Typography.Text>
+          </div>
+          <div>
+            <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>
+              导入平台流水
+            </Button>
+            <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
+              粘贴基金平台的交易流水与账本比对，找出漏记的买入 / 卖出并一键补录
+            </Typography.Text>
+          </div>
 
           {isAutoBackupSupported() && (
             <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
@@ -634,6 +654,8 @@ MACD 柱 = (DIF − DEA) × 2
           },
         ]}
       />
+      <TransactionAuditModal open={auditOpen} onClose={() => setAuditOpen(false)} />
+      <PlatformImportModal open={importOpen} onClose={() => setImportOpen(false)} />
     </div>
   );
 }

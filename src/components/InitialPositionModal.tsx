@@ -102,7 +102,6 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
       const shares = values.shares as number;
       const totalCost = values.cost as number;
       const startDate = (values.startDate as dayjs.Dayjs).format('YYYY-MM-DD');
-      const nav = values.price as number;
 
       const tx: Transaction = {
         id: uuid(),
@@ -112,7 +111,10 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
         amount: totalCost,
         fee: 0,
         shares,
-        nav,
+        // nav 存 0：初始持仓的"价格"是**成本单价**（成本÷份额），不是那一天的
+        // 市场净值。两者语义不同，混存会让"净值"列显示错东西，也让任何按 nav
+        // 核对的工具误报。成本单价可由 amount ÷ shares 推导。
+        nav: 0,
         note: '初始持仓',
       };
 

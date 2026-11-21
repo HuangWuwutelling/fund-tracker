@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote, IndexHistoryRecord, FundRefreshIssue } from '../types';
 import * as storage from '../utils/storage';
+import { normalizeInitialPositionNav } from '../utils/txNormalize';
 import { generateSnapshot } from '../utils/snapshot';
 import { getPlanDueDates } from '../utils/calculator';
 import { latestNavPair } from '../utils/navPair';
@@ -41,6 +42,8 @@ interface FundTrackerState {
   addTransaction: (tx: Transaction) => void;
   updateTransaction: (id: string, updates: Partial<Transaction>) => void;
   removeTransaction: (id: string) => void;
+  /** 重算今日快照——交易变动后调用，保证组合趋势与账本一致 */
+  regenerateTodaySnapshot: () => void;
 
   // Actions - DCA Plans
   addDcaPlan: (plan: DcaPlan) => void;
@@ -194,6 +197,16 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     const transactions = get().transactions.filter((t) => t.id !== id);
     storage.saveTransactions(transactions);
     set({ transactions });
+  },
+
+  // --- Snapshot ---
+  regenerateTodaySnapshot: () => {
+    const { funds, transactions } = get();
+    const newSnapshot = generateSnapshot(funds, transactions);
+    const snapshots = get().snapshots.filter((s) => s.date !== today());
+    if (newSnapshot) snapshots.push(newSnapshot);
+    storage.saveSnapshots(snapshots);
+    set({ snapshots });
   },
 
   // --- DCA Plans ---
@@ -364,10 +377,15 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   loadFromStorage: () => {
     navHistoryCache.clear();
     storage.initStorage();
+    // 归一化「初始持仓」记录的 nav（它是成本单价、不是市场净值）——
+    // 存量数据一次性纠正并落盘，之后不再变
+    const rawTxs = storage.getTransactions();
+    const transactions = normalizeInitialPositionNav(rawTxs);
+    if (transactions !== rawTxs) storage.saveTransactions(transactions);
     set({
       platforms: storage.getPlatforms(),
       funds: storage.getFunds(),
-      transactions: storage.getTransactions(),
+      transactions,
       dcaPlans: storage.getDcaPlans(),
       snapshots: storage.getSnapshots(),
       settings: storage.getSettings(),
