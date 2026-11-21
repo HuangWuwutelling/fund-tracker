@@ -87,17 +87,7 @@ export default function FundDetail() {
 
   // 重复计算预警：初始持仓是"某时点的持仓快照"，已包含该时点之前的全部持仓。
   // 在它**之前**日期再记一笔买入 → 持仓凭空多出一份。
-  const initPosDate = useMemo(
-    () => initialPositionDate(transactions, fund?.id ?? ''),
-    [transactions, fund?.id],
-  );
-  const doubleCountRisk = useMemo(() => {
-    if (txTypeWatch !== 'buy' || !dateWatch || !initPosDate) return null;
-    const txDate = dateWatch.format('YYYY-MM-DD');
-    if (txDate >= initPosDate) return null;
-    return `该基金在 ${initPosDate} 有一条「初始持仓」记录（已包含该日之前的全部持仓）。` +
-      `再记 ${txDate} 的买入会与它重复计算——请把初始持仓的份额调减，或把买入日期设在 ${initPosDate} 之后。`;
-  }, [txTypeWatch, dateWatch, initPosDate]);
+  // （放在 fund 声明之后——下面用到 fund.id）
 
   const handleEditDca = (plan: DcaPlan) => {
     setEditingDcaId(plan.id);
@@ -139,6 +129,19 @@ export default function FundDetail() {
   };
 
   const fund = getFundById(id ?? '');
+
+  // 重复计算预警：买入日期早于该基金的初始持仓日期 → 会与快照重复计算
+  const initPosDate = useMemo(
+    () => initialPositionDate(transactions, fund?.id ?? ''),
+    [transactions, fund?.id],
+  );
+  const doubleCountRisk = useMemo(() => {
+    if (txTypeWatch !== 'buy' || !dateWatch || !initPosDate) return null;
+    const txDate = dateWatch.format('YYYY-MM-DD');
+    if (txDate >= initPosDate) return null;
+    return `该基金在 ${initPosDate} 有一条「初始持仓」记录（已包含该日之前的全部持仓）。` +
+      `再记 ${txDate} 的买入会与它重复计算——请把初始持仓的份额调减，或把买入日期设在 ${initPosDate} 之后。`;
+  }, [txTypeWatch, dateWatch, initPosDate]);
 
   const navHistory = useMemo(() => (fund ? getNavHistory(fund.id) : []), [fund, getNavHistory]);
   const fundDcaPlans = useMemo(
