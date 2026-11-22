@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>基金记账</title>
+    <script>
+      /*
+       * GitHub Pages 的 SPA 兜底（深链接 404 修复）。
+       *
+       * 本应用用 BrowserRouter（basename=/fund-tracker），但 GitHub Pages 是静态
+       * 托管：直接访问 /fund-tracker/settings 找不到文件 → 返回 404.html 而不是
+       * index.html，路由根本没机会启动。
+       *
+       * 这里的做法：把用户原本想去的路径（含 query）暂存到 sessionStorage，然后
+       * 跳到应用根路径；src/main.tsx 启动时会读出这个路径并 replaceState 回填，
+       * 于是 React Router 拿到正确的初始路由。
+       *
+       * 注意：base 路径写死为 /fund-tracker/ —— 与 vite.config.ts 的 base 一致。
+       */
+      (function () {
+        try {
+          var p = window.location.pathname + window.location.search + window.location.hash;
+          // 已经是应用根路径 / 本身就是 404.html → 不必兜底（否则会把自己当路由）
+          if (
+            p &&
+            p !== '/fund-tracker/' &&
+            p.indexOf('/fund-tracker/') === 0 &&
+            p.indexOf('404.html') === -1
+          ) {
+            sessionStorage.setItem('gh404-path', p);
+          }
+        } catch (e) {
+          /* 隐私模式下 sessionStorage 可能不可用，忽略即可 */
+        }
+        window.location.replace('/fund-tracker/');
+      })();
+    </script>
+  </head>
+  <body>
+    <p>正在打开…</p>
+  </body>
+</html>
