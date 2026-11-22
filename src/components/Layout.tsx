@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Layout, Menu, Button, Modal, Typography, Switch, Tooltip, Space } from 'antd';
+import { Layout, Menu, Button, Modal, Typography, Switch, Tooltip, Space, message } from 'antd';
 import {
   DashboardOutlined,
   FundOutlined,
@@ -13,6 +13,7 @@ import {
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useStore } from '../stores';
+import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import BackupReminder from './BackupReminder';
 import StorageErrorBanner from './StorageErrorBanner';
 
@@ -116,7 +117,11 @@ export default function AppLayout() {
               <Switch
                 size="small"
                 checked={isDark}
-                onChange={(checked) => updateSettings({ theme: checked ? 'dark' : 'light' })}
+                onChange={(checked) => {
+                  if (!updateSettings({ theme: checked ? 'dark' : 'light' })) {
+                    message.error(STORAGE_WRITE_FAILED_MSG, 8);
+                  }
+                }}
                 checkedChildren={<BulbFilled />}
                 unCheckedChildren={<BulbOutlined />}
               />

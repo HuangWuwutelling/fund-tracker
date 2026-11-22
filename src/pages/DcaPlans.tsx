@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
+import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import { formatMoney, formatDate } from '../utils/formatter';
 import { isInPlanWindow } from '../utils/calculator';
 import { FREQUENCY_LABELS } from '../types';
@@ -85,10 +86,16 @@ export default function DcaPlans() {
       };
 
       if (editingId) {
-        updateDcaPlan(editingId, plan);
+        if (!updateDcaPlan(editingId, plan)) {
+          message.error(STORAGE_WRITE_FAILED_MSG, 8);
+          return;
+        }
         message.success('已更新');
       } else {
-        addDcaPlan(plan);
+        if (!addDcaPlan(plan)) {
+          message.error(STORAGE_WRITE_FAILED_MSG, 8);
+          return;
+        }
         message.success('已创建');
       }
 
@@ -198,7 +205,7 @@ export default function DcaPlans() {
       render: (_: unknown, record: DcaPlan) => (
         <Switch
           checked={record.active}
-          onChange={() => toggleDcaPlan(record.id)}
+          onChange={() => { if (!toggleDcaPlan(record.id)) message.error(STORAGE_WRITE_FAILED_MSG, 8); }}
           checkedChildren="启用"
           unCheckedChildren="停用"
         />
@@ -213,7 +220,10 @@ export default function DcaPlans() {
       render: (_: unknown, record: DcaPlan) => (
         <Space>
           <Button type="link" size="small" onClick={() => handleEdit(record)}>编辑</Button>
-          <Popconfirm title="确定删除？" onConfirm={() => { removeDcaPlan(record.id); message.success('已删除'); }}>
+          <Popconfirm title="确定删除？" onConfirm={() => {
+              if (!removeDcaPlan(record.id)) { message.error(STORAGE_WRITE_FAILED_MSG, 8); return; }
+              message.success('已删除');
+            }}>
             <Button type="link" danger size="small">删除</Button>
           </Popconfirm>
         </Space>

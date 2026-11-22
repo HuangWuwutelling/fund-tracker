@@ -3,6 +3,7 @@ import { Button, Card, Table, Modal, Form, Select, Input, Tag, message, Popconfi
 import { PlusOutlined, SearchOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../stores';
+import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import { fetchFundWithHistory, loadFundSearchList, searchFunds, getFundTypeFromSearch } from '../api/fundApi';
 import { mergeNavTail } from '../utils/navHistoryMerge';
 import { formatDate } from '../utils/formatter';
@@ -85,10 +86,13 @@ export default function FundList() {
       } else {
         message.success('净值已是最新');
       }
-      updateFund(fundId, {
+      if (!updateFund(fundId, {
         currentNav: result.estimate.lastNav,
         navDate: result.estimate.navDate,
-      });
+      })) {
+        message.error(STORAGE_WRITE_FAILED_MSG, 8);
+        return;
+      }
       // 手动刷新成功 → 清掉该基金的刷新失败上报（Dashboard/FundDetail 的警告随之消失）
       clearRefreshIssue(fundId);
     } catch {
@@ -143,7 +147,10 @@ export default function FundList() {
         navDate: estimate.navDate,
       };
 
-      addFund(fund);
+      if (!addFund(fund)) {
+        message.error(STORAGE_WRITE_FAILED_MSG, 8);
+        return;
+      }
 
       const records = result.navHistory ?? [];
       if (records.length > 0) {
@@ -237,7 +244,10 @@ export default function FundList() {
               title="确定删除该基金？"
               description="关联的交易记录和定投计划也会被删除"
               onConfirm={() => {
-                removeFund(record.id);
+                if (!removeFund(record.id)) {
+                  message.error(STORAGE_WRITE_FAILED_MSG, 8);
+                  return;
+                }
                 message.success('已删除');
               }}
             >

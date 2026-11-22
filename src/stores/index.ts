@@ -26,30 +26,35 @@ interface FundTrackerState {
   settings: Settings;
 
   // Actions - Platforms
-  addPlatform: (name: string) => void;
+  /** 写盘失败返回 false（存储空间不足/被禁用）——此时内存状态不变 */
+  addPlatform: (name: string) => boolean;
   removePlatform: (id: string) => boolean;
   getPlatformById: (id: string) => Platform | undefined;
 
   // Actions - Funds
-  addFund: (fund: Fund) => void;
-  updateFund: (id: string, updates: Partial<Fund>) => void;
-  removeFund: (id: string) => void;
+  /** 写盘失败返回 false（存储空间不足/被禁用）——此时内存状态不变 */
+  addFund: (fund: Fund) => boolean;
+  updateFund: (id: string, updates: Partial<Fund>) => boolean;
+  removeFund: (id: string) => boolean;
   getFundById: (id: string) => Fund | undefined;
   /** 按基金名称重新分类所有基金类型（修正早期版本把 QDII/债券指数误判为"指数型"）；返回变化的基金数 */
   reclassifyFunds: () => number;
 
   // Actions - Transactions
-  addTransaction: (tx: Transaction) => void;
-  updateTransaction: (id: string, updates: Partial<Transaction>) => void;
-  removeTransaction: (id: string) => void;
+  /** 写盘失败返回 false（存储空间不足/被禁用）——此时内存状态不变，
+   *  界面不会显示"已保存"而磁盘里没有 */
+  addTransaction: (tx: Transaction) => boolean;
+  updateTransaction: (id: string, updates: Partial<Transaction>) => boolean;
+  removeTransaction: (id: string) => boolean;
   /** 重算今日快照——交易变动后调用，保证组合趋势与账本一致 */
   regenerateTodaySnapshot: () => void;
 
   // Actions - DCA Plans
-  addDcaPlan: (plan: DcaPlan) => void;
-  updateDcaPlan: (id: string, updates: Partial<DcaPlan>) => void;
-  removeDcaPlan: (id: string) => void;
-  toggleDcaPlan: (id: string) => void;
+  /** 写盘失败返回 false（存储空间不足/被禁用）——此时内存状态不变 */
+  addDcaPlan: (plan: DcaPlan) => boolean;
+  updateDcaPlan: (id: string, updates: Partial<DcaPlan>) => boolean;
+  removeDcaPlan: (id: string) => boolean;
+  toggleDcaPlan: (id: string) => boolean;
   /** 把启用的定投计划按日程批量补成"待确认买入"交易记录；返回本次生成的笔数 */
   autoRecordDcaPlans: () => number;
 
@@ -57,7 +62,8 @@ interface FundTrackerState {
   addSnapshot: (snapshot: DailySnapshot) => void;
 
   // Actions - Settings
-  updateSettings: (updates: Partial<Settings>) => void;
+  /** 写盘失败返回 false（存储空间不足/被禁用）——此时内存状态不变 */
+  updateSettings: (updates: Partial<Settings>) => boolean;
 
   // Actions - Indices (市场指数缓存)
   indices: Record<string, IndexQuote>;
@@ -94,7 +100,8 @@ interface FundTrackerState {
   // Actions - Init & Bulk
   loadFromStorage: () => void;
   exportData: () => void;
-  /** 导入并覆盖全部数据；返回按定投计划自动生成的交易笔数 */
+  /** 导入并覆盖全部数据；返回按定投计划自动生成的交易笔数；
+   *  **-1 = 写盘失败**（存储空间不足）——此时内存状态未变，界面仍显示旧数据 */
   importData: (data: ReturnType<typeof storage.exportAllData>) => number;
 }
 
@@ -114,15 +121,17 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   addPlatform: (name) => {
     const platform: Platform = { id: `platform-${Date.now()}`, name };
     const platforms = [...get().platforms, platform];
-    storage.savePlatforms(platforms);
+    // 写盘失败 → 不改内存状态（保持"内存 == 磁盘"）
+    if (!storage.savePlatforms(platforms)) return false;
     set({ platforms });
+    return true;
   },
 
   removePlatform: (id) => {
     const hasFund = get().funds.some((f) => f.platformId === id);
     if (hasFund) return false;
     const platforms = get().platforms.filter((p) => p.id !== id);
-    storage.savePlatforms(platforms);
+    if (!storage.savePlatforms(platforms)) return false;
     set({ platforms });
     return true;
   },
@@ -132,19 +141,22 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   // --- Funds ---
   addFund: (fund) => {
     const funds = [...get().funds, fund];
-    storage.saveFunds(funds);
+    if (!storage.saveFunds(funds)) return false;
     set({ funds });
+    return true;
   },
 
   updateFund: (id, updates) => {
     const funds = get().funds.map((f) => (f.id === id ? { ...f, ...updates } : f));
-    storage.saveFunds(funds);
+    if (!storage.saveFunds(funds)) return false;
     set({ funds });
+    return true;
   },
 
   removeFund: (id) => {
     const funds = get().funds.filter((f) => f.id !== id);
-    storage.saveFunds(funds);
+    // 先写最大的那份：配额不足时它先失败 → 后面几步不执行，状态保持原样
+    if (!storage.saveFunds(funds)) return false;
     // Also remove transactions and nav history for this fund
     const transactions = get().transactions.filter((t) => t.fundId !== id);
     storage.saveTransactions(transactions);
@@ -160,6 +172,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     storage.saveSnapshots(snapshots);
 
     set({ funds, transactions, dcaPlans, snapshots });
+    return true;
   },
 
   getFundById: (id) => get().funds.find((f) => f.id === id),
@@ -183,20 +196,24 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   // --- Transactions ---
   addTransaction: (tx) => {
     const transactions = [...get().transactions, tx];
-    storage.saveTransactions(transactions);
+    // 写盘失败 → 不改内存状态：界面不会显示"已保存"而磁盘里没有
+    if (!storage.saveTransactions(transactions)) return false;
     set({ transactions });
+    return true;
   },
 
   updateTransaction: (id, updates) => {
     const transactions = get().transactions.map((t) => (t.id === id ? { ...t, ...updates } : t));
-    storage.saveTransactions(transactions);
+    if (!storage.saveTransactions(transactions)) return false;
     set({ transactions });
+    return true;
   },
 
   removeTransaction: (id) => {
     const transactions = get().transactions.filter((t) => t.id !== id);
-    storage.saveTransactions(transactions);
+    if (!storage.saveTransactions(transactions)) return false;
     set({ transactions });
+    return true;
   },
 
   // --- Snapshot ---
@@ -212,28 +229,32 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   // --- DCA Plans ---
   addDcaPlan: (plan) => {
     const dcaPlans = [...get().dcaPlans, plan];
-    storage.saveDcaPlans(dcaPlans);
+    if (!storage.saveDcaPlans(dcaPlans)) return false;
     set({ dcaPlans });
+    return true;
   },
 
   updateDcaPlan: (id, updates) => {
     const dcaPlans = get().dcaPlans.map((p) => (p.id === id ? { ...p, ...updates } : p));
-    storage.saveDcaPlans(dcaPlans);
+    if (!storage.saveDcaPlans(dcaPlans)) return false;
     set({ dcaPlans });
+    return true;
   },
 
   removeDcaPlan: (id) => {
     const dcaPlans = get().dcaPlans.filter((p) => p.id !== id);
-    storage.saveDcaPlans(dcaPlans);
+    if (!storage.saveDcaPlans(dcaPlans)) return false;
     set({ dcaPlans });
+    return true;
   },
 
   toggleDcaPlan: (id) => {
     const dcaPlans = get().dcaPlans.map((p) =>
       p.id === id ? { ...p, active: !p.active } : p
     );
-    storage.saveDcaPlans(dcaPlans);
+    if (!storage.saveDcaPlans(dcaPlans)) return false;
     set({ dcaPlans });
+    return true;
   },
 
   // 定投自动记录：为每个启用计划，把 startDate→今天 之间所有应执行日（当天该基金
@@ -276,7 +297,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
     if (newTxs.length === 0) return 0;
     const updatedTransactions = [...get().transactions, ...newTxs];
-    storage.saveTransactions(updatedTransactions);
+    if (!storage.saveTransactions(updatedTransactions)) return 0;
     set({ transactions: updatedTransactions });
     return newTxs.length;
   },
@@ -292,8 +313,9 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   // --- Settings ---
   updateSettings: (updates) => {
     const settings = { ...get().settings, ...updates };
-    storage.saveSettings(settings);
+    if (!storage.saveSettings(settings)) return false;
     set({ settings });
+    return true;
   },
 
   // --- Indices ---
@@ -412,7 +434,8 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
   importData: (data) => {
     navHistoryCache.clear();
-    storage.importAllData(data);
+    // 关键数据写盘失败（存储空间不足）→ 不更新内存状态，界面不会假装导入成功
+    if (!storage.importAllData(data)) return -1;
     // 缺字段时 fallback 到默认值，避免整个 app 崩溃成空白页；
     // 手编 JSON / 旧备份可能缺 platforms|funds|transactions|dcaPlans|navs 之一。
     // settings 用默认值打底再覆盖导入值，兼容缺新字段（如 dcaAutoRecord）的老备份

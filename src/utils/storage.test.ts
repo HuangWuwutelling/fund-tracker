@@ -100,6 +100,14 @@ describe('storage 写入失败处理', () => {
     expect(events.map((e) => e.type)).toEqual([STORAGE_ERROR_EVENT, STORAGE_RECOVERED_EVENT]);
   });
 
+  it('save* 返回是否写成功（调用方据此决定要不要改内存状态）', () => {
+    const fake = globalThis as unknown as { localStorage: FakeStorage };
+    fake.localStorage.failOnWrite = false;
+    expect(saveFunds([fund('a')])).toBe(true);
+    fake.localStorage.failOnWrite = true;
+    expect(saveFunds([fund('b')])).toBe(false);
+  });
+
   it('失败时新数据确实没落盘（内存有、磁盘无的分裂是真实的）', () => {
     const fake = globalThis as unknown as { localStorage: FakeStorage };
     fake.localStorage.failOnWrite = true;

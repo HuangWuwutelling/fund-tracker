@@ -175,6 +175,10 @@ export default function App() {
   // Auto-refresh NAV + generate snapshot when funds are loaded
   const refreshAll = useCallback(async () => {
     const myGen = ++refreshGenerationRef.current;
+    // 指数是**全市场数据**，与账户有没有持仓无关 → 空账户也要拉，
+    // 否则新用户的 Dashboard 指数卡片永远是"—"。放在基金循环之前，
+    // 指数也能比基金净值更早显示。
+    await refreshMarketIndices();
     if (funds.length === 0) return;
 
     // per-fund 失败上报：本轮结束后整体写入 store，UI（Dashboard/FundDetail Alert）
@@ -222,9 +226,7 @@ export default function App() {
     if (refreshGenerationRef.current !== myGen) return;
     useStore.getState().setRefreshIssues(issues);
 
-    // --- Index 批量拉取 ---
-    // 独立函数：指数行情与基金净值无关，**不能**被 tick 的基金净值退避牵连。
-    await refreshMarketIndices();
+    // （指数已在函数开头拉取 —— 全市场数据，与基金净值无关，不受 tick 退避牵连）
 
     if (refreshGenerationRef.current !== myGen) return;
     // NAV history is now fresh — try to auto-confirm pending transactions whose NAV is available

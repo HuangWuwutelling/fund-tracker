@@ -4,6 +4,7 @@ import { WarningTwoTone, CheckCircleTwoTone } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
+import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
 import type { Transaction } from '../types';
 
@@ -118,7 +119,10 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
         note: '初始持仓',
       };
 
-      addTransaction(tx);
+      if (!addTransaction(tx)) {
+        message.error(STORAGE_WRITE_FAILED_MSG, 8);
+        return;
+      }
       message.success(`已设置初始持仓：${shares.toFixed(4)} 份，累计成本 ${formatMoney(totalCost)}`);
       onClose();
     } catch {

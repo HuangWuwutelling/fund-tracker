@@ -7,6 +7,7 @@ import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { calcAmountFromShares, calcSharesFromAmount, calcSharesBeforeTx, calcShares, onlyConfirmed } from '../utils/calculator';
 import { resolveTxValues } from '../utils/txValues';
+import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import { decideNavEntry } from '../utils/navEntry';
 import { initialPositionDate } from '../utils/txNormalize';
 import { formatMoney, formatDate, pnlColor } from '../utils/formatter';
@@ -158,11 +159,18 @@ export default function Transactions() {
         status,
       };
 
+      // 写盘失败 → 内存状态没变 → 保留弹窗与用户已填的内容
       if (editingId) {
-        updateTransaction(editingId, txData);
+        if (!updateTransaction(editingId, txData)) {
+          message.error(STORAGE_WRITE_FAILED_MSG, 8);
+          return;
+        }
         message.success('已更新');
       } else {
-        addTransaction(txData);
+        if (!addTransaction(txData)) {
+          message.error(STORAGE_WRITE_FAILED_MSG, 8);
+          return;
+        }
         message.success(
           status === 'pending' ? '已按待确认记录（净值发布后自动补齐份额）' : '已添加',
         );
@@ -372,7 +380,10 @@ export default function Transactions() {
             <Button type="link" size="small" onClick={() => handleConfirm(record)}>确认</Button>
           )}
           <Button type="link" size="small" onClick={() => handleEdit(record)}>编辑</Button>
-          <Popconfirm title="确定删除？" onConfirm={() => { removeTransaction(record.id); message.success('已删除'); }}>
+          <Popconfirm title="确定删除？" onConfirm={() => {
+              if (!removeTransaction(record.id)) { message.error(STORAGE_WRITE_FAILED_MSG, 8); return; }
+              message.success('已删除');
+            }}>
             <Button type="link" danger size="small">删除</Button>
           </Popconfirm>
         </Space>

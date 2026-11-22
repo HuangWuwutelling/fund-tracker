@@ -4,6 +4,7 @@ import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { parsePlatformRows, diffPlatformRows, type PlatformRow } from '../utils/platformImport';
 import { PLATFORM_IMPORT_NOTE } from '../utils/txNormalize';
+import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import type { Transaction } from '../types';
 
 interface Props {
@@ -75,6 +76,7 @@ export default function PlatformImportModal({ open, onClose }: Props) {
       cancelText: '取消',
       onOk: () => {
         setBusy(true);
+        let failed = 0;
         for (const row of result.missing) {
           const tx: Transaction = {
             id: uuid(),
@@ -88,11 +90,15 @@ export default function PlatformImportModal({ open, onClose }: Props) {
             note: PLATFORM_IMPORT_NOTE,
             status: 'confirmed',
           };
-          addTransaction(tx);
+          if (!addTransaction(tx)) failed++;
         }
         regenerateTodaySnapshot();
         setBusy(false);
-        message.success(`已补录 ${result.missing.length} 笔`);
+        if (failed > 0) {
+          message.error(`${failed} 笔补录失败：${STORAGE_WRITE_FAILED_MSG}`, 8);
+        } else {
+          message.success(`已补录 ${result.missing.length} 笔`);
+        }
         handleCompare();
       },
     });

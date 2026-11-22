@@ -12,6 +12,7 @@ import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { calcFundSummary, calcAmountFromShares, calcSharesBeforeTx, calcShares, calcCost, onlyConfirmed } from '../utils/calculator';
 import { resolveTxValues } from '../utils/txValues';
+import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import { decideNavEntry } from '../utils/navEntry';
 import { initialPositionDate } from '../utils/txNormalize';
 import { pnlColor, formatDate, formatMoney, formatPercent } from '../utils/formatter';
@@ -409,15 +410,23 @@ export default function FundDetail() {
         status,
       };
 
+      // 写盘失败 → 内存状态没变 → 保留弹窗与用户已填的内容，不要当成成功
       if (editingTxId) {
-        updateTransaction(editingTxId, txData);
+        if (!updateTransaction(editingTxId, txData)) {
+          message.error(STORAGE_WRITE_FAILED_MSG, 8);
+          return;
+        }
         message.success('已更新');
       } else {
-        addTransaction({
+        const ok = addTransaction({
           ...txData,
           id: uuid(),
           fundId: fundRef.id,
         } as Transaction);
+        if (!ok) {
+          message.error(STORAGE_WRITE_FAILED_MSG, 8);
+          return;
+        }
         message.success(
           status === 'pending'
             ? '已记录为待确认交易（净值发布后自动补齐份额）'
@@ -582,7 +591,10 @@ export default function FundDetail() {
             <Button type="link" size="small" onClick={() => handleConfirmTx(record)}>确认</Button>
           )}
           <Button type="link" size="small" onClick={() => handleEditTx(record)}>编辑</Button>
-          <Popconfirm title="确定删除？" onConfirm={() => { removeTransaction(record.id); message.success('已删除'); }}>
+          <Popconfirm title="确定删除？" onConfirm={() => {
+            if (!removeTransaction(record.id)) { message.error(STORAGE_WRITE_FAILED_MSG, 8); return; }
+            message.success('已删除');
+          }}>
             <Button type="link" danger size="small">删除</Button>
           </Popconfirm>
         </Space>
@@ -915,7 +927,7 @@ export default function FundDetail() {
                 <Button
                   type="link"
                   size="small"
-                  onClick={() => toggleDcaPlan(r.id)}
+                  onClick={() => { if (!toggleDcaPlan(r.id)) message.error(STORAGE_WRITE_FAILED_MSG, 8); }}
                   style={{ padding: 0 }}
                 >
                   {r.active ? <Tag color="green">启用中</Tag> : <Tag>已停用</Tag>}
@@ -929,7 +941,10 @@ export default function FundDetail() {
               render: (_: unknown, r: DcaPlan) => (
                 <Space>
                   <Button type="link" size="small" onClick={() => handleEditDca(r)}>编辑</Button>
-                  <Popconfirm title="确定删除该定投计划？" onConfirm={() => { removeDcaPlan(r.id); message.success('已删除'); }}>
+                  <Popconfirm title="确定删除该定投计划？" onConfirm={() => {
+                  if (!removeDcaPlan(r.id)) { message.error(STORAGE_WRITE_FAILED_MSG, 8); return; }
+                  message.success('已删除');
+                }}>
                     <Button type="link" danger size="small">删除</Button>
                   </Popconfirm>
                 </Space>

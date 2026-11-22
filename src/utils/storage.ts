@@ -24,11 +24,26 @@ export const STORAGE_ERROR_EVENT = 'fund-tracker:storage-error';
 export const STORAGE_RECOVERED_EVENT = 'fund-tracker:storage-recovered';
 
 /**
+ * 写盘失败时给用户看的统一提示。
+ *
+ * 配合 store 的"写盘失败 → 不改内存状态"，这条提示的含义是明确的：
+ * **本次操作没有被保存**（不是"可能没保存"）。UI 必须据此保留用户已填的表单内容，
+ * 而不是像成功时那样关掉弹窗。
+ */
+export const STORAGE_WRITE_FAILED_MSG =
+  '存储空间不足或被浏览器禁用，本次操作未保存——请先导出备份，并清理不再持有的基金腾出空间';
+
+/**
  * 是否有写入失败尚未恢复。
  *
- * 写失败时 store 仍然会更新内存状态（数据还在内存里，用户还能导出），
- * 但 localStorage 里没有——刷新页面就会丢。所以失败必须**持续可见**，
- * 而不是弹一次 toast 就消失（30s 冷却 + toast 的做法会让用户完全错过）。
+ * 写失败时，**财务关键数据**（基金 / 交易 / 定投 / 设置）的写盘函数会返回
+ * false，store 据此**不更新内存状态**——保持"内存 == 磁盘"的不变式，
+ * 不会出现"界面显示已保存、刷新就没了"的分裂。
+ *
+ * 派生数据（快照 / 指数 / 净值历史 / 备份时间戳）写失败只是缓存没更新，
+ * 下次刷新会补上，不影响账本正确性。
+ *
+ * 失败必须**持续可见**（常驻警告条），而不是弹一次 toast 就消失。
  */
 let writeFailed = false;
 
@@ -37,7 +52,13 @@ export function hasStorageWriteFailure(): boolean {
   return writeFailed;
 }
 
-function setItem<T>(name: string, value: T): void {
+/**
+ * 写一个 key。返回是否写成功。
+ *
+ * 不向上抛——所有 save* 调用点都没有异常处理，抛出会打断 store action；
+ * 改为返回 false + 广播事件让调用方决定"要不要放弃这次内存变更"。
+ */
+function setItem<T>(name: string, value: T): boolean {
   try {
     localStorage.setItem(key(name), JSON.stringify(value));
     if (writeFailed) {
@@ -46,9 +67,9 @@ function setItem<T>(name: string, value: T): void {
         window.dispatchEvent(new CustomEvent(STORAGE_RECOVERED_EVENT));
       } catch { /* 事件派发失败时只剩状态位 */ }
     }
+    return true;
   } catch (err) {
-    // QuotaExceededError（5MB 写满）/ 隐私模式禁用写入等。不向上抛——所有 save*
-    // 调用点都没有异常处理，抛出会打断 store action；改为广播事件让 UI 提示。
+    // QuotaExceededError（5MB 写满）/ 隐私模式禁用写入等。
     console.error(`[storage] write failed for "${name}"`, err);
     if (!writeFailed) {
       writeFailed = true;
@@ -56,6 +77,7 @@ function setItem<T>(name: string, value: T): void {
         window.dispatchEvent(new CustomEvent(STORAGE_ERROR_EVENT, { detail: { key: name } }));
       } catch { /* 事件派发失败时只剩 console */ }
     }
+    return false;
   }
 }
 
@@ -64,8 +86,8 @@ export function getVersion(): number {
   return getItem<number>('version', 0);
 }
 
-export function setVersion(v: number): void {
-  setItem('version', v);
+export function setVersion(v: number): boolean {
+  return setItem('version', v);
 }
 
 // --- Platforms ---
@@ -79,8 +101,9 @@ export function getPlatforms(): Platform[] {
   return getItem<Platform[]>('platforms', DEFAULT_PLATFORMS);
 }
 
-export function savePlatforms(platforms: Platform[]): void {
-  setItem('platforms', platforms);
+/** @returns 是否写盘成功（false = 存储空间不足/被禁用） */
+export function savePlatforms(platforms: Platform[]): boolean {
+  return setItem('platforms', platforms);
 }
 
 // --- Funds ---
@@ -88,8 +111,9 @@ export function getFunds(): Fund[] {
   return getItem<Fund[]>('funds', []);
 }
 
-export function saveFunds(funds: Fund[]): void {
-  setItem('funds', funds);
+/** @returns 是否写盘成功（false = 存储空间不足/被禁用） */
+export function saveFunds(funds: Fund[]): boolean {
+  return setItem('funds', funds);
 }
 
 // --- Transactions ---
@@ -97,8 +121,9 @@ export function getTransactions(): Transaction[] {
   return getItem<Transaction[]>('transactions', []);
 }
 
-export function saveTransactions(transactions: Transaction[]): void {
-  setItem('transactions', transactions);
+/** @returns 是否写盘成功（false = 存储空间不足/被禁用） */
+export function saveTransactions(transactions: Transaction[]): boolean {
+  return setItem('transactions', transactions);
 }
 
 // --- DCA Plans ---
@@ -106,8 +131,9 @@ export function getDcaPlans(): DcaPlan[] {
   return getItem<DcaPlan[]>('dca-plans', []);
 }
 
-export function saveDcaPlans(plans: DcaPlan[]): void {
-  setItem('dca-plans', plans);
+/** @returns 是否写盘成功（false = 存储空间不足/被禁用） */
+export function saveDcaPlans(plans: DcaPlan[]): boolean {
+  return setItem('dca-plans', plans);
 }
 
 // --- Snapshots ---
@@ -135,8 +161,9 @@ export function getSettings(): Settings {
   return { ...DEFAULT_SETTINGS, ...getItem<Settings>('settings', DEFAULT_SETTINGS) };
 }
 
-export function saveSettings(settings: Settings): void {
-  setItem('settings', settings);
+/** @returns 是否写盘成功（false = 存储空间不足/被禁用） */
+export function saveSettings(settings: Settings): boolean {
+  return setItem('settings', settings);
 }
 
 // --- Nav History (per fund) ---
@@ -144,8 +171,8 @@ export function getNavHistory(fundCode: string): NavRecord[] {
   return getItem<NavRecord[]>(`nav:${fundCode}`, []);
 }
 
-export function saveNavHistory(fundCode: string, records: NavRecord[]): void {
-  setItem(`nav:${fundCode}`, records);
+export function saveNavHistory(fundCode: string, records: NavRecord[]): boolean {
+  return setItem(`nav:${fundCode}`, records);
 }
 
 export function removeNavHistory(fundCode: string): void {
@@ -234,11 +261,14 @@ export function exportAllData(): ExportData {
   };
 }
 
-export function importAllData(data: ExportData): void {
+export function importAllData(data: ExportData): boolean {
+  // 返回是否**关键数据**全部写成功（基金 / 交易 / 净值历史）——导入是全量覆盖，
+  // 关键部分写失败时调用方不应把内存状态改成"导入成功"的假象
+  let ok = true;
   setVersion(data.version ?? CURRENT_VERSION);
   savePlatforms(data.platforms);
-  saveFunds(data.funds);
-  saveTransactions(data.transactions);
+  ok = saveFunds(data.funds) && ok;
+  ok = saveTransactions(data.transactions) && ok;
   saveDcaPlans(data.dcaPlans);
   saveSnapshots(data.snapshots);
   saveSettings(data.settings);
@@ -250,7 +280,7 @@ export function importAllData(data: ExportData): void {
   if (data.navHistories) {
     // 完整备份：用备份内的净值历史覆盖
     for (const [fundCode, records] of Object.entries(data.navHistories)) {
-      saveNavHistory(fundCode, records);
+      ok = saveNavHistory(fundCode, records) && ok;
     }
     // 清理掉备份里没有、但本地还残留的旧 nav（避免孤儿数据干扰显示）
     const importedFundIds = new Set(Object.keys(data.navHistories));
@@ -267,6 +297,7 @@ export function importAllData(data: ExportData): void {
     // v0 备份没有 navHistories 字段 → 保留 localStorage 现有的净值历史作为后备
     // （这里什么都不做：save* 没有动 nav:* 这些 key，原有数据自然保留）
   }
+  return ok;
 }
 
 // --- Indices cache ---

@@ -4,9 +4,10 @@ import { Card, Collapse, Table, Button, Input, Switch, Space, message, Popconfir
 import { PlusOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, ReloadOutlined, SaveOutlined, AuditOutlined, ImportOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useStore } from '../stores';
-import type { Platform } from '../types';
+import type { Platform, Settings } from '../types';
 import type { UsQdiiFilterMode } from '../utils/navPair';
 import * as storage from '../utils/storage';
+import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import TransactionAuditModal from '../components/TransactionAuditModal';
 import PlatformImportModal from '../components/PlatformImportModal';
 import {
@@ -34,6 +35,11 @@ export default function Settings() {
   const [autoBusy, setAutoBusy] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+
+  /** 设置写盘失败（存储空间不足）→ 状态不变、开关视觉回退，给出提示 */
+  const handleSetting = (updates: Partial<Settings>) => {
+    if (!updateSettings(updates)) message.error(STORAGE_WRITE_FAILED_MSG, 8);
+  };
 
   const refreshBackupState = () => {
     setBackupMeta(storage.getBackupMeta());
@@ -124,18 +130,25 @@ export default function Settings() {
       message.warning('请输入平台名称');
       return;
     }
-    addPlatform(name);
+    if (!addPlatform(name)) {
+      message.error(STORAGE_WRITE_FAILED_MSG, 8);
+      return;
+    }
     setNewPlatformName('');
     message.success('平台已添加');
   };
 
   const handleRemovePlatform = (id: string) => {
-    const ok = removePlatform(id);
-    if (!ok) {
+    // 两种失败要分开提示：还有基金 vs 写盘失败
+    if (funds.some((f) => f.platformId === id)) {
       message.error('该平台下还有基金，请先删除或迁移相关基金');
-    } else {
-      message.success('平台已删除');
+      return;
     }
+    if (!removePlatform(id)) {
+      message.error(STORAGE_WRITE_FAILED_MSG, 8);
+      return;
+    }
+    message.success('平台已删除');
   };
 
   // 清除指定基金的本地净值历史（不动 Fund/交易/快照）。
@@ -267,6 +280,11 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
         cancelText: '取消',
         onOk: () => {
           const autoCreated = importData(data as Parameters<typeof importData>[0]);
+          if (autoCreated < 0) {
+            // 写盘失败 → 内存状态没变，界面仍显示旧数据
+            message.error(STORAGE_WRITE_FAILED_MSG, 8);
+            return;
+          }
           message.success(
             autoCreated > 0
               ? `数据导入成功，已按定投计划自动生成 ${autoCreated} 笔待确认买入`
@@ -329,21 +347,21 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
             <span>暗色主题</span>
             <Switch
               checked={settings.theme === 'dark'}
-              onChange={(checked) => updateSettings({ theme: checked ? 'dark' : 'light' })}
+              onChange={(checked) => handleSetting({ theme: checked ? 'dark' : 'light' })}
             />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>自动刷新净值（打开/运行中；晚间 NAV 发布后会自动拉取）</span>
             <Switch
               checked={settings.navAutoRefresh}
-              onChange={(checked) => updateSettings({ navAutoRefresh: checked })}
+              onChange={(checked) => handleSetting({ navAutoRefresh: checked })}
             />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>定投计划自动生成交易记录</span>
             <Switch
               checked={settings.dcaAutoRecord}
-              onChange={(checked) => updateSettings({ dcaAutoRecord: checked })}
+              onChange={(checked) => handleSetting({ dcaAutoRecord: checked })}
             />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -359,7 +377,7 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
             </div>
             <Select
               value={settings.usQdiiFilterMode}
-              onChange={(v: UsQdiiFilterMode) => updateSettings({ usQdiiFilterMode: v })}
+              onChange={(v: UsQdiiFilterMode) => handleSetting({ usQdiiFilterMode: v })}
               style={{ width: 220 }}
               options={[
                 {
@@ -389,7 +407,7 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
             </div>
             <Select
               value={settings.backupReminderDays}
-              onChange={(v: number) => updateSettings({ backupReminderDays: v })}
+              onChange={(v: number) => handleSetting({ backupReminderDays: v })}
               style={{ width: 160 }}
               options={[
                 { value: 7, label: '每 7 天' },
@@ -510,7 +528,7 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
                 </div>
                 <Select
                   value={settings.autoBackupDays}
-                  onChange={(v: number) => updateSettings({ autoBackupDays: v })}
+                  onChange={(v: number) => handleSetting({ autoBackupDays: v })}
                   style={{ width: 120 }}
                   options={[
                     { value: 1, label: '每天' },
