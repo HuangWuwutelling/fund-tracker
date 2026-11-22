@@ -17,10 +17,9 @@ import { fetchMarketIndices, INDEX_LIST } from './api/indexApi';
 import { shouldUpdateIndexQuote } from './utils/indexQuote';
 import { decideTickAction } from './utils/refreshPolicy';
 import { mergeNavTail } from './utils/navHistoryMerge';
-import { generateSnapshot } from './utils/snapshot';
 import { lookupNavForDate } from './utils/navLookup';
 import { resolveTxValues } from './utils/txValues';
-import { hasStorageWriteFailure } from './utils/storage';
+import { hasStorageWriteFailure, STORAGE_WRITE_FAILED_MSG } from './utils/storage';
 import AppLayout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import FundList from './pages/FundList';
@@ -92,7 +91,7 @@ function reportRefreshOutcome(issues: Record<string, FundRefreshIssue>, total: n
 }
 
 export default function App() {
-  const { settings, funds, refreshTrigger, loadFromStorage, updateFund, updateNavHistory, updateTransaction, addSnapshot, updateIndex } = useStore();
+  const { settings, funds, refreshTrigger, loadFromStorage, updateFund, updateNavHistory, updateTransaction, regenerateTodaySnapshot, updateIndex } = useStore();
 
   /**
    * 多标签页同步。
@@ -127,9 +126,11 @@ export default function App() {
     // 启用时把到期计划补成待确认买入。放在 refreshAll 之前，让刚生成的过去日期
     // pending 记录能在同一次刷新里被 autoConfirmPending 确认。
     if (useStore.getState().settings.dcaAutoRecord) {
-      const autoCreated = useStore.getState().autoRecordDcaPlans();
-      if (autoCreated > 0) {
-        message.success(`已按定投计划自动生成 ${autoCreated} 笔待确认买入，请到「交易记录」核对`);
+      const auto = useStore.getState().autoRecordDcaPlans();
+      if (auto.writeFailed) {
+        message.error(STORAGE_WRITE_FAILED_MSG, 8);
+      } else if (auto.created > 0) {
+        message.success(`已按定投计划自动生成 ${auto.created} 笔待确认买入，请到「交易记录」核对`);
       }
     }
   }, [loadFromStorage]);
@@ -267,11 +268,9 @@ export default function App() {
     // 必须放在循环之后：freshness 读的就是 navHistory，提前调用会看到旧数据。
     useStore.getState().recordNavFreshness();
     if (refreshGenerationRef.current !== myGen) return;
-    const updatedFunds = useStore.getState().funds;
-    const updatedTxs = useStore.getState().transactions;
-    const snapshot = generateSnapshot(updatedFunds, updatedTxs);
-    if (snapshot) addSnapshot(snapshot);
-  }, [funds.length, updateFund, updateNavHistory, updateTransaction, addSnapshot, updateIndex, autoConfirmPending]);
+    // 今日快照：交易 / 净值变了要跟上，否则组合趋势图与账本不一致
+    regenerateTodaySnapshot();
+  }, [funds.length, updateFund, updateNavHistory, updateTransaction, regenerateTodaySnapshot, updateIndex, autoConfirmPending]);
 
   useEffect(() => {
     if (!settings.navAutoRefresh || funds.length === 0) return;

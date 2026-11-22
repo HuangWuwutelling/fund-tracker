@@ -261,17 +261,16 @@ export function exportAllData(): ExportData {
   };
 }
 
-export function importAllData(data: ExportData): boolean {
-  // 返回是否**关键数据**全部写成功（基金 / 交易 / 净值历史）——导入是全量覆盖，
-  // 关键部分写失败时调用方不应把内存状态改成"导入成功"的假象
-  let ok = true;
+/**
+ * 导入**派生数据**（快照 / 指数 / 指数历史 / 净值历史）。
+ *
+ * 财务关键数据（平台 / 基金 / 交易 / 定投 / 设置）由 `utils/commit.ts` 的
+ * `commitLedger` 一次性提交——要么全成、要么全不成，磁盘不会出现半套状态。
+ * 这里只处理写失败也只是「缓存没更新」的数据：下次刷新会补上。
+ */
+export function importDerivedData(data: ExportData): void {
   setVersion(data.version ?? CURRENT_VERSION);
-  savePlatforms(data.platforms);
-  ok = saveFunds(data.funds) && ok;
-  ok = saveTransactions(data.transactions) && ok;
-  saveDcaPlans(data.dcaPlans);
   saveSnapshots(data.snapshots);
-  saveSettings(data.settings);
   // indices 是 v1 新字段；旧版本备份里 data.indices === undefined 时取空 map
   // （清空本地 indices 而不是保留——因为旧备份的语义就是"完全替换状态"）。
   saveIndices(data.indices ?? {});
@@ -280,7 +279,7 @@ export function importAllData(data: ExportData): boolean {
   if (data.navHistories) {
     // 完整备份：用备份内的净值历史覆盖
     for (const [fundCode, records] of Object.entries(data.navHistories)) {
-      ok = saveNavHistory(fundCode, records) && ok;
+      saveNavHistory(fundCode, records);
     }
     // 清理掉备份里没有、但本地还残留的旧 nav（避免孤儿数据干扰显示）
     const importedFundIds = new Set(Object.keys(data.navHistories));
@@ -297,7 +296,6 @@ export function importAllData(data: ExportData): boolean {
     // v0 备份没有 navHistories 字段 → 保留 localStorage 现有的净值历史作为后备
     // （这里什么都不做：save* 没有动 nav:* 这些 key，原有数据自然保留）
   }
-  return ok;
 }
 
 // --- Indices cache ---

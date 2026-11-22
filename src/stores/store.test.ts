@@ -1,35 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useStore } from './index';
-import type { Transaction } from '../types';
-
-/** 极简 localStorage 桩：可模拟配额超限导致的写入失败 */
-class FakeStorage {
-  private map = new Map<string, string>();
-  failOnWrite = false;
-  get length(): number {
-    return this.map.size;
-  }
-  key(i: number): string | null {
-    return [...this.map.keys()][i] ?? null;
-  }
-  getItem(k: string): string | null {
-    return this.map.has(k) ? this.map.get(k)! : null;
-  }
-  setItem(k: string, v: string): void {
-    if (this.failOnWrite) {
-      const err = new Error('The quota has been exceeded.');
-      err.name = 'QuotaExceededError';
-      throw err;
-    }
-    this.map.set(k, v);
-  }
-  removeItem(k: string): void {
-    this.map.delete(k);
-  }
-  clear(): void {
-    this.map.clear();
-  }
-}
+import { installFakeStorage, type FakeStorage } from '../test/fakeStorage';
+import type { Transaction, Fund, DcaPlan } from '../types';
 
 function tx(over: Partial<Transaction> = {}): Transaction {
   return {
@@ -41,8 +13,7 @@ function tx(over: Partial<Transaction> = {}): Transaction {
 let fake: FakeStorage;
 
 beforeEach(() => {
-  fake = new FakeStorage();
-  (globalThis as unknown as { localStorage: unknown }).localStorage = fake;
+  fake = installFakeStorage();
   useStore.setState({ transactions: [], funds: [], dcaPlans: [], platforms: [] });
 });
 
@@ -115,5 +86,56 @@ describe('store：写盘失败时不改内存状态（内存 == 磁盘）', () =
     fake.failOnWrite = false;
     expect(useStore.getState().addTransaction(tx())).toBe(true);
     expect(useStore.getState().transactions).toHaveLength(1);
+  });
+});
+
+describe('store：写盘 seam（commitLedger）—— 一组关键数据要么全成、要么全不成', () => {
+  const fund: Fund = {
+    id: 'f1', name: '纳斯达克100(QDII)', platformId: 'p1',
+    type: 'index', currentNav: 1, navDate: '2026-11-20',
+  };
+  const plan: DcaPlan = {
+    id: 'p1', fundId: 'f1', amount: 100, frequency: 'monthly',
+    dayOfMonth: 1, active: true, startDate: '2026-01-01',
+  };
+
+  it('reclassifyFunds：写盘失败 → 不改内存状态（类型保持原样）', () => {
+    useStore.setState({ funds: [fund] });
+    fake.failOnWrite = true;
+    const changed = useStore.getState().reclassifyFunds();
+    expect(changed).toBe(0);
+    expect(useStore.getState().funds[0]!.type).toBe('index');
+  });
+
+  it('removeFund：其中一个 key 写失败 → 整体回滚，基金和交易都还在（磁盘也是）', () => {
+    useStore.getState().addFund(fund);
+    useStore.getState().addTransaction(tx());
+    useStore.getState().addDcaPlan(plan);
+    // 让定投计划这个 key 写失败（基金和交易的写会先成功）
+    fake.failOnKey = 'fund-tracker:dca-plans';
+    const ok = useStore.getState().removeFund('f1');
+    expect(ok).toBe(false);
+    expect(useStore.getState().funds).toHaveLength(1);
+    expect(useStore.getState().transactions).toHaveLength(1);
+    // 磁盘也必须保持原样 —— 写进去的基金要被回滚掉
+    expect(fake.getItem('fund-tracker:funds')).toContain('"f1"');
+  });
+
+  it('importData：设置写失败 → 返回 -1，内存状态不变（不能假装导入成功）', () => {
+    useStore.setState({ funds: [fund] });
+    fake.failOnKey = 'fund-tracker:settings';
+    const r = useStore.getState().importData({
+      version: 2,
+      platforms: [],
+      funds: [{ ...fund, id: 'imported' }],
+      transactions: [],
+      dcaPlans: [],
+      snapshots: [],
+      settings: { ...useStore.getState().settings, theme: 'dark' },
+      navHistories: {},
+    });
+    expect(r).toBe(-1);
+    expect(useStore.getState().funds[0]!.id).toBe('f1');
+    expect(useStore.getState().settings.theme).not.toBe('dark');
   });
 });

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote, IndexHistoryRecord, FundRefreshIssue } from '../types';
 import * as storage from '../utils/storage';
+import { commitLedger } from '../utils/commit';
 import { normalizeInitialPositionNav } from '../utils/txNormalize';
 import { generateSnapshot } from '../utils/snapshot';
 import { getPlanDueDates } from '../utils/calculator';
@@ -55,11 +56,12 @@ interface FundTrackerState {
   updateDcaPlan: (id: string, updates: Partial<DcaPlan>) => boolean;
   removeDcaPlan: (id: string) => boolean;
   toggleDcaPlan: (id: string) => boolean;
-  /** 把启用的定投计划按日程批量补成"待确认买入"交易记录；返回本次生成的笔数 */
-  autoRecordDcaPlans: () => number;
-
-  // Actions - Snapshots
-  addSnapshot: (snapshot: DailySnapshot) => void;
+  /**
+   * 把启用的定投计划按日程批量补成"待确认买入"交易记录。
+   * 返回 `{ created, writeFailed }`——两者必须分开：「没有到期计划」和
+   * 「写盘失败」对调用方是完全不同的两件事，合成一个数字会丢掉后者。
+   */
+  autoRecordDcaPlans: () => { created: number; writeFailed: boolean };
 
   // Actions - Settings
   /** 写盘失败返回 false（存储空间不足/被禁用）——此时内存状态不变 */
@@ -122,7 +124,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     const platform: Platform = { id: `platform-${Date.now()}`, name };
     const platforms = [...get().platforms, platform];
     // 写盘失败 → 不改内存状态（保持"内存 == 磁盘"）
-    if (!storage.savePlatforms(platforms)) return false;
+    if (!commitLedger({ platforms }).ok) return false;
     set({ platforms });
     return true;
   },
@@ -131,7 +133,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     const hasFund = get().funds.some((f) => f.platformId === id);
     if (hasFund) return false;
     const platforms = get().platforms.filter((p) => p.id !== id);
-    if (!storage.savePlatforms(platforms)) return false;
+    if (!commitLedger({ platforms }).ok) return false;
     set({ platforms });
     return true;
   },
@@ -141,7 +143,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   // --- Funds ---
   addFund: (fund) => {
     const funds = [...get().funds, fund];
-    if (!storage.saveFunds(funds)) return false;
+    if (!commitLedger({ funds }).ok) return false;
     set({ funds });
     get().regenerateTodaySnapshot();
     return true;
@@ -149,30 +151,24 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
   updateFund: (id, updates) => {
     const funds = get().funds.map((f) => (f.id === id ? { ...f, ...updates } : f));
-    if (!storage.saveFunds(funds)) return false;
+    if (!commitLedger({ funds }).ok) return false;
     set({ funds });
     return true;
   },
 
   removeFund: (id) => {
     const funds = get().funds.filter((f) => f.id !== id);
-    // 先写最大的那份：配额不足时它先失败 → 后面几步不执行，状态保持原样
-    if (!storage.saveFunds(funds)) return false;
-    // Also remove transactions and nav history for this fund
     const transactions = get().transactions.filter((t) => t.fundId !== id);
-    storage.saveTransactions(transactions);
     const dcaPlans = get().dcaPlans.filter((p) => p.fundId !== id);
-    storage.saveDcaPlans(dcaPlans);
+    // 三个 key 一次性提交：任一写失败 → 已写的回滚成旧值 → 磁盘不出现半套状态
+    // （旧实现"先写最大的那份"的前提是反的：funds 最小，transactions 才是最大）
+    if (!commitLedger({ funds, transactions, dcaPlans }).ok) return false;
+
     navHistoryCache.delete(id);
     storage.removeNavHistory(id);
-
+    set({ funds, transactions, dcaPlans });
     // Regenerate today's snapshot to reflect the removal (skip on non-trading days)
-    const newSnapshot = generateSnapshot(funds, transactions);
-    const snapshots = get().snapshots.filter((s) => s.date !== today());
-    if (newSnapshot) snapshots.push(newSnapshot);
-    storage.saveSnapshots(snapshots);
-
-    set({ funds, transactions, dcaPlans, snapshots });
+    get().regenerateTodaySnapshot();
     return true;
   },
 
@@ -189,7 +185,8 @@ export const useStore = create<FundTrackerState>((set, get) => ({
       return { ...f, type: t };
     });
     if (changed === 0) return 0;
-    storage.saveFunds(updated);
+    // 写盘失败 → 不改内存状态（否则内存跑到磁盘前面）
+    if (!commitLedger({ funds: updated }).ok) return 0;
     set({ funds: updated });
     return changed;
   },
@@ -198,7 +195,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   addTransaction: (tx) => {
     const transactions = [...get().transactions, tx];
     // 写盘失败 → 不改内存状态：界面不会显示"已保存"而磁盘里没有
-    if (!storage.saveTransactions(transactions)) return false;
+    if (!commitLedger({ transactions }).ok) return false;
     set({ transactions });
     // 交易变了 → 今日快照要跟上，否则组合趋势图与账本不一致（要等下次刷新才对）
     get().regenerateTodaySnapshot();
@@ -207,7 +204,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
   updateTransaction: (id, updates) => {
     const transactions = get().transactions.map((t) => (t.id === id ? { ...t, ...updates } : t));
-    if (!storage.saveTransactions(transactions)) return false;
+    if (!commitLedger({ transactions }).ok) return false;
     set({ transactions });
     get().regenerateTodaySnapshot();
     return true;
@@ -215,7 +212,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
   removeTransaction: (id) => {
     const transactions = get().transactions.filter((t) => t.id !== id);
-    if (!storage.saveTransactions(transactions)) return false;
+    if (!commitLedger({ transactions }).ok) return false;
     set({ transactions });
     // 删除卖出 → 份额回来 → 组合趋势图必须同步，否则图与账本对不上
     get().regenerateTodaySnapshot();
@@ -235,21 +232,21 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   // --- DCA Plans ---
   addDcaPlan: (plan) => {
     const dcaPlans = [...get().dcaPlans, plan];
-    if (!storage.saveDcaPlans(dcaPlans)) return false;
+    if (!commitLedger({ dcaPlans }).ok) return false;
     set({ dcaPlans });
     return true;
   },
 
   updateDcaPlan: (id, updates) => {
     const dcaPlans = get().dcaPlans.map((p) => (p.id === id ? { ...p, ...updates } : p));
-    if (!storage.saveDcaPlans(dcaPlans)) return false;
+    if (!commitLedger({ dcaPlans }).ok) return false;
     set({ dcaPlans });
     return true;
   },
 
   removeDcaPlan: (id) => {
     const dcaPlans = get().dcaPlans.filter((p) => p.id !== id);
-    if (!storage.saveDcaPlans(dcaPlans)) return false;
+    if (!commitLedger({ dcaPlans }).ok) return false;
     set({ dcaPlans });
     return true;
   },
@@ -258,7 +255,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     const dcaPlans = get().dcaPlans.map((p) =>
       p.id === id ? { ...p, active: !p.active } : p
     );
-    if (!storage.saveDcaPlans(dcaPlans)) return false;
+    if (!commitLedger({ dcaPlans }).ok) return false;
     set({ dcaPlans });
     return true;
   },
@@ -301,25 +298,19 @@ export const useStore = create<FundTrackerState>((set, get) => ({
       }
     }
 
-    if (newTxs.length === 0) return 0;
+    if (newTxs.length === 0) return { created: 0, writeFailed: false };
     const updatedTransactions = [...get().transactions, ...newTxs];
-    if (!storage.saveTransactions(updatedTransactions)) return 0;
+    if (!commitLedger({ transactions: updatedTransactions }).ok) {
+      return { created: 0, writeFailed: true };
+    }
     set({ transactions: updatedTransactions });
-    return newTxs.length;
-  },
-
-  // --- Snapshots ---
-  addSnapshot: (snapshot) => {
-    const existing = get().snapshots.filter((s) => s.date !== snapshot.date);
-    const snapshots = [...existing, snapshot];
-    storage.saveSnapshots(snapshots);
-    set({ snapshots });
+    return { created: newTxs.length, writeFailed: false };
   },
 
   // --- Settings ---
   updateSettings: (updates) => {
     const settings = { ...get().settings, ...updates };
-    if (!storage.saveSettings(settings)) return false;
+    if (!commitLedger({ settings }).ok) return false;
     set({ settings });
     return true;
   },
@@ -440,13 +431,24 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
   importData: (data) => {
     navHistoryCache.clear();
-    // 关键数据写盘失败（存储空间不足）→ 不更新内存状态，界面不会假装导入成功
-    if (!storage.importAllData(data)) return -1;
     // 缺字段时 fallback 到默认值，避免整个 app 崩溃成空白页；
     // 手编 JSON / 旧备份可能缺 platforms|funds|transactions|dcaPlans|navs 之一。
     // settings 用默认值打底再覆盖导入值，兼容缺新字段（如 dcaAutoRecord）的老备份
     // （运行时备份可能缺失部分字段，故以 Partial 展开，避免 TS2783）
     const settings: Settings = { ...storage.DEFAULT_SETTINGS, ...(data.settings as Partial<Settings>) };
+    // 财务关键数据一次性提交：任一写失败 → 已写的回滚 → 不更新内存状态，
+    // 界面不会假装导入成功（旧实现漏检 platforms / dcaPlans / settings，
+    // 它们的写失败会被吞掉，磁盘与内存就此分裂）
+    const committed = commitLedger({
+      platforms: data.platforms ?? [],
+      funds: data.funds ?? [],
+      transactions: data.transactions ?? [],
+      dcaPlans: data.dcaPlans ?? [],
+      settings,
+    });
+    if (!committed.ok) return -1;
+    // 派生数据（快照 / 指数 / 净值历史）：写失败只是缓存没更新，下次刷新补上
+    storage.importDerivedData(data);
     set({
       platforms: data.platforms ?? [],
       funds: data.funds ?? [],
@@ -460,10 +462,12 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     // 导入后基金集合已变，旧观测基线作废——重置为空，让下一次刷新重新建立
     set({ freshNavFundIds: new Set<string>(), navRefreshedAt: null });
     // 导入后立刻补定投记录（页面 mount 的自动记录早已跑过，导入不会重跑它）
-    const autoCreated = get().settings.dcaAutoRecord ? get().autoRecordDcaPlans() : 0;
+    const auto = get().settings.dcaAutoRecord
+      ? get().autoRecordDcaPlans()
+      : { created: 0, writeFailed: false };
     // 导入成功 = 用户手上有有效备份文件，视为一次备份动作（刷新提醒条计时）
     const meta = storage.getBackupMeta();
     storage.saveBackupMeta({ ...meta, lastBackupAt: new Date().toISOString() });
-    return autoCreated;
+    return auto.created;
   },
 }));
