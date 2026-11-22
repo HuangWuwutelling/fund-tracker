@@ -16,7 +16,8 @@ import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import { decideNavEntry } from '../utils/navEntry';
 import { initialPositionDate } from '../utils/txNormalize';
 import { pnlColor, formatDate, formatMoney, formatPercent } from '../utils/formatter';
-import { lookupNavForDate } from '../utils/navLookup';
+import { lookupNavOnOrBefore } from '../utils/navLookup';
+import { confirmPendingTx } from '../utils/autoConfirm';
 import { usableNavSeries } from '../utils/navPair';
 import { sma, computeFundIndicators, buildAdjustedSeries, navScaleFactor, INDICATOR_TOOLTIPS } from '../utils/indicators';
 import InitialPositionModal from '../components/InitialPositionModal';
@@ -203,7 +204,7 @@ export default function FundDetail() {
   }, [filteredNav]);
 
   // 交易点位（markPoint）：在日期轴上标注买入 / 卖出 / 分红
-  // 用 lookupNavForDate 把 tx.date 映射到"该日 NAV"，与折线对齐
+  // 用 lookupNavOnOrBefore 把 tx.date 映射到"该日 NAV"，与折线对齐
   const txMarkers = useMemo(() => {
     if (!fund) return { buy: [] as Array<{ name: string; coord: [string, number]; value: number }>, sell: [] as Array<{ name: string; coord: [string, number]; value: number }>, dividend: [] as Array<{ name: string; coord: [string, number]; value: number }> };
     const fundTxs = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
@@ -211,7 +212,7 @@ export default function FundDetail() {
     const sell: Array<{ name: string; coord: [string, number]; value: number }> = [];
     const dividend: Array<{ name: string; coord: [string, number]; value: number }> = [];
     for (const tx of fundTxs) {
-      const nav = lookupNavForDate(fund.id, tx.date);
+      const nav = lookupNavOnOrBefore(fund.id, tx.date);
       if (!nav) continue;
       const marker = { coord: [nav.navDate, nav.nav] as [string, number], value: nav.nav };
       if (tx.type === 'buy') buy.push({ name: '买', ...marker });
@@ -482,7 +483,7 @@ export default function FundDetail() {
     });
     // 编辑时同步预览该笔交易的净值
     const dateStr = tx.date;
-    const result = lookupNavForDate(fundRef.id, dateStr);
+    const result = lookupNavOnOrBefore(fundRef.id, dateStr);
     setNavPreview(result ?? null);
     setTxModalOpen(true);
   };
@@ -497,7 +498,7 @@ export default function FundDetail() {
       setNavPreview(null);
       return;
     }
-    const result = lookupNavForDate(fundRef.id, date.toDate());
+    const result = lookupNavOnOrBefore(fundRef.id, date.format('YYYY-MM-DD'));
     setNavPreview(result ?? null);
   };
 
@@ -508,7 +509,7 @@ export default function FundDetail() {
       message.warning('请先选择交易日期');
       return;
     }
-    const result = lookupNavForDate(fundRef.id, date.toDate());
+    const result = lookupNavOnOrBefore(fundRef.id, date.format('YYYY-MM-DD'));
     if (result) {
       setNavPreview(result);
       message.success(`使用 ${result.navDate} 的净值 ${result.nav.toFixed(4)}`);
@@ -530,33 +531,26 @@ export default function FundDetail() {
   const fundRef: Fund = fund;
 
   const handleConfirmTx = async (tx: Transaction) => {
-    if (tx.type === 'dividend') {
-      updateTransaction(tx.id, { status: 'confirmed' });
-      message.success('已确认');
+    // 确认口径只有一份（utils/autoConfirm.ts）：**只有交易当天的净值**能用来
+    // 推算份额。本地历史陈旧时不能用「≤ 该日期的最近一条」兜底——那会把旧净值
+    // 当成当日成交净值，份额直接算错（2026-08-26 实测多算 13.6 份）。
+    const result = confirmPendingTx(tx, getNavHistory(tx.fundId));
+    if (!result.ok) {
+      message.error(
+        result.latestKnownDate
+          ? `未收录 ${tx.date} 当天的净值（本地最新到 ${result.latestKnownDate}），` +
+            `请稍后重试或手动录入成交净值`
+          : `未找到 ${tx.date} 的净值，请稍后重试或手动录入成交净值`,
+      );
       return;
     }
-    const result = lookupNavForDate(tx.fundId, new Date(tx.date));
-    if (!result) {
-      message.error(`未找到 ${tx.date} 之前的净值，请稍后重试`);
+    if (!updateTransaction(tx.id, result.patch)) {
+      message.error(STORAGE_WRITE_FAILED_MSG, 8);
       return;
     }
-    // 买入按金额 → 确认净值后补份额；卖出按份额 → 确认净值后补成交额，份额不变
-    const resolved = resolveTxValues({
-      type: tx.type,
-      dividendType: 'cash',
-      amount: tx.amount,
-      fee: tx.fee,
-      shares: tx.shares,
-      nav: result.nav,
-      pending: false,
-    });
-    updateTransaction(tx.id, {
-      status: 'confirmed',
-      nav: result.nav,
-      amount: resolved.amount,
-      shares: Math.round(resolved.shares * 10000) / 10000,
-    });
-    message.success(`已确认：${resolved.shares.toFixed(4)} 份 @ ${result.nav.toFixed(4)}`);
+    message.success(
+      `已确认：${(result.patch.shares ?? 0).toFixed(4)} 份 @ ${(result.patch.nav ?? 0).toFixed(4)}`,
+    );
   };
 
   const txColumns = [

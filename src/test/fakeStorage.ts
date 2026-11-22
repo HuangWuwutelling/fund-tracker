@@ -26,6 +26,8 @@ export class FakeStorage {
 
   /** storage.ts 广播的事件（写失败 / 恢复） */
   events: CapturedEvent[] = [];
+  /** getItem 被调用的次数——用来断言"缓存命中时不再读盘" */
+  getItemCalls = 0;
 
   get length(): number {
     return this.map.size;
@@ -36,6 +38,7 @@ export class FakeStorage {
   }
 
   getItem(k: string): string | null {
+    this.getItemCalls++;
     return this.map.has(k) ? this.map.get(k)! : null;
   }
 

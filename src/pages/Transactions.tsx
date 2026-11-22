@@ -11,14 +11,15 @@ import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import { decideNavEntry } from '../utils/navEntry';
 import { initialPositionDate } from '../utils/txNormalize';
 import { formatMoney, formatDate, pnlColor } from '../utils/formatter';
-import { lookupNavForDate } from '../utils/navLookup';
+import { lookupNavOnOrBefore } from '../utils/navLookup';
+import { confirmPendingTx } from '../utils/autoConfirm';
 import InitialPositionModal from '../components/InitialPositionModal';
 import NavLink from '../components/NavLink';
 import { TRANSACTION_TYPE_LABELS, TX_TYPE_COLORS } from '../types';
 import type { Transaction } from '../types';
 
 export default function Transactions() {
-  const { funds, transactions, addTransaction, updateTransaction, removeTransaction } = useStore();
+  const { funds, transactions, getNavHistory, addTransaction, updateTransaction, removeTransaction } = useStore();
   const navigate = useNavigate();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -186,33 +187,26 @@ export default function Transactions() {
   };
 
   const handleConfirm = async (tx: Transaction) => {
-    if (tx.type === 'dividend') {
-      updateTransaction(tx.id, { status: 'confirmed' });
-      message.success('已确认');
+    // 确认口径只有一份（utils/autoConfirm.ts）：**只有交易当天的净值**能用来
+    // 推算份额。本地历史陈旧时不能用「≤ 该日期的最近一条」兜底——那会把旧净值
+    // 当成当日成交净值，份额直接算错（2026-08-26 实测多算 13.6 份）。
+    const result = confirmPendingTx(tx, getNavHistory(tx.fundId));
+    if (!result.ok) {
+      message.error(
+        result.latestKnownDate
+          ? `未收录 ${tx.date} 当天的净值（本地最新到 ${result.latestKnownDate}），` +
+            `请稍后重试或手动录入成交净值`
+          : `未找到 ${tx.date} 的净值，请稍后重试或手动录入成交净值`,
+      );
       return;
     }
-    const result = lookupNavForDate(tx.fundId, new Date(tx.date));
-    if (!result) {
-      message.error(`未找到 ${tx.date} 之前的净值，请稍后重试或手动编辑`);
+    if (!updateTransaction(tx.id, result.patch)) {
+      message.error(STORAGE_WRITE_FAILED_MSG, 8);
       return;
     }
-    // 买入按金额 → 确认净值后补份额；卖出按份额 → 确认净值后补成交额，份额不变
-    const resolved = resolveTxValues({
-      type: tx.type,
-      dividendType: 'cash',
-      amount: tx.amount,
-      fee: tx.fee,
-      shares: tx.shares,
-      nav: result.nav,
-      pending: false,
-    });
-    updateTransaction(tx.id, {
-      status: 'confirmed',
-      nav: result.nav,
-      amount: resolved.amount,
-      shares: Math.round(resolved.shares * 10000) / 10000,
-    });
-    message.success(`已确认：${resolved.shares.toFixed(4)} 份 @ ${result.nav.toFixed(4)}`);
+    message.success(
+      `已确认：${(result.patch.shares ?? 0).toFixed(4)} 份 @ ${(result.patch.nav ?? 0).toFixed(4)}`,
+    );
   };
 
   // 卖出预览（份额为准）：成交额 = 份额 × 净值；到手 = 成交额 − 手续费
@@ -277,7 +271,7 @@ export default function Transactions() {
     // Re-lookup NAV when fund or date changes
     if ('fundId' in changedValues || 'date' in changedValues) {
       if (fundId && date) {
-        const result = lookupNavForDate(fundId, date.toDate());
+        const result = lookupNavOnOrBefore(fundId, date.format('YYYY-MM-DD'));
         if (result) {
           nav = result.nav;
           navDate = result.navDate;
@@ -310,7 +304,7 @@ export default function Transactions() {
       message.warning('请先选择基金和日期');
       return;
     }
-    const result = lookupNavForDate(fundId, date.toDate());
+    const result = lookupNavOnOrBefore(fundId, date.format('YYYY-MM-DD'));
     if (result) {
       setPreview((p) => ({ ...p, nav: result.nav, navDate: result.navDate }));
       message.success(`使用 ${result.navDate} 的净值 ${result.nav.toFixed(4)}`);

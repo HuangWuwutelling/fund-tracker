@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote, IndexHistoryRecord, FundRefreshIssue } from '../types';
 import * as storage from '../utils/storage';
 import { commitLedger } from '../utils/commit';
+import { readNavHistory, putNavHistory, invalidateNavHistory } from '../utils/navSeries';
 import { normalizeInitialPositionNav } from '../utils/txNormalize';
 import { generateSnapshot } from '../utils/snapshot';
 import { getPlanDueDates } from '../utils/calculator';
@@ -11,11 +12,6 @@ import { today } from '../utils/formatter';
 import { getFundTypeFromName } from '../api/fundApi';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
-
-/** 净值历史内存缓存：避免每次 getNavHistory 都解析 localStorage JSON。
- *  updateNavHistory 和 loadFromStorage 时清空；getNavHistory 命中后写入。
- */
-const navHistoryCache = new Map<string, NavRecord[]>();
 
 interface FundTrackerState {
   // Data
@@ -164,7 +160,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     // （旧实现"先写最大的那份"的前提是反的：funds 最小，transactions 才是最大）
     if (!commitLedger({ funds, transactions, dcaPlans }).ok) return false;
 
-    navHistoryCache.delete(id);
+    invalidateNavHistory(id);
     storage.removeNavHistory(id);
     set({ funds, transactions, dcaPlans });
     // Regenerate today's snapshot to reflect the removal (skip on non-trading days)
@@ -332,24 +328,18 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
   // --- Nav History ---
   updateNavHistory: (fundCode, records) => {
-    navHistoryCache.set(fundCode, records);
-    storage.saveNavHistory(fundCode, records);
+    // 缓存与落盘同时更新——缓存归 utils/navSeries.ts 管
+    putNavHistory(fundCode, records);
   },
 
-  getNavHistory: (fundCode) => {
-    const cached = navHistoryCache.get(fundCode);
-    if (cached) return cached;
-    const records = storage.getNavHistory(fundCode);
-    navHistoryCache.set(fundCode, records);
-    return records;
-  },
+  getNavHistory: (fundCode) => readNavHistory(fundCode),
 
   resetNavHistory: (fundCode) => {
     if (fundCode) {
-      navHistoryCache.delete(fundCode);
+      invalidateNavHistory(fundCode);
       storage.removeNavHistory(fundCode);
     } else {
-      navHistoryCache.clear();
+      invalidateNavHistory();
       storage.removeAllNavHistory();
     }
     set((s) => ({ refreshTrigger: s.refreshTrigger + 1 }));
@@ -394,7 +384,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
   // --- Init & Bulk ---
   loadFromStorage: () => {
-    navHistoryCache.clear();
+    invalidateNavHistory();
     storage.initStorage();
     // 归一化「初始持仓」记录的 nav（它是成本单价、不是市场净值）——
     // 存量数据一次性纠正并落盘，之后不再变
@@ -430,7 +420,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   },
 
   importData: (data) => {
-    navHistoryCache.clear();
+    invalidateNavHistory();
     // 缺字段时 fallback 到默认值，避免整个 app 崩溃成空白页；
     // 手编 JSON / 旧备份可能缺 platforms|funds|transactions|dcaPlans|navs 之一。
     // settings 用默认值打底再覆盖导入值，兼容缺新字段（如 dcaAutoRecord）的老备份

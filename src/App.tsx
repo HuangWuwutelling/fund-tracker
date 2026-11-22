@@ -17,8 +17,7 @@ import { fetchMarketIndices, INDEX_LIST } from './api/indexApi';
 import { shouldUpdateIndexQuote } from './utils/indexQuote';
 import { decideTickAction } from './utils/refreshPolicy';
 import { mergeNavTail } from './utils/navHistoryMerge';
-import { lookupNavForDate } from './utils/navLookup';
-import { resolveTxValues } from './utils/txValues';
+import { confirmPendingTx } from './utils/autoConfirm';
 import { hasStorageWriteFailure, STORAGE_WRITE_FAILED_MSG } from './utils/storage';
 import AppLayout from './components/Layout';
 import Dashboard from './pages/Dashboard';
@@ -155,46 +154,25 @@ export default function App() {
   // Today's pending tx stays pending — user confirms manually to avoid stale-NAV mistakes.
   // 不订阅 transactions（避免 addTransaction 触发 refreshAll 无限循环）；用 useStore.getState() 读最新值
   const autoConfirmPending = useCallback(() => {
-    const today = dayjs().format('YYYY-MM-DD');
-    const pendingTxs = useStore.getState().transactions.filter((t) => t.status === 'pending');
+    const todayStr = dayjs().format('YYYY-MM-DD');
+    const { transactions, getNavHistory } = useStore.getState();
+    const pendingTxs = transactions.filter((t) => t.status === 'pending');
     if (pendingTxs.length === 0) return 0;
 
     let confirmed = 0;
     for (const tx of pendingTxs) {
       // Skip today's pending (T+1 NAV not yet released) and future-dated entries
-      if (tx.date >= today) continue;
-      // Dividend has no NAV lookup — just flip status
-      if (tx.type === 'dividend') {
-        updateTransaction(tx.id, { status: 'confirmed' });
-        confirmed++;
-        continue;
-      }
-      const result = lookupNavForDate(tx.fundId, new Date(tx.date));
-      if (!result) continue; // NAV not yet available, leave as pending
-      // 必须等到 tx.date 当天的 NAV 实际发布后才能确认——QDII 等净值延迟基金
-      // 的 lookup 总会 fallback 到 ≤ tx.date 的最新一条（旧日期），如果直接用会被
-      // 误认为当日成交 NAV，导致用历史净值计算份额（南方纳斯达克100 8/26 NAV
-      // 被错误应用到 8/27、8/28 交易）。A 股基金 T+1 NAV 在 D+1 晚间更新到历史，
-      // 等用户下次打开 app 时 navDate === txDate，会正常自动确认。
-      if (result.navDate !== tx.date) continue;
-      // 买入按金额 → 补份额；卖出按份额 → 补成交额（份额不变）。
-      // 必须走 resolveTxValues：待确认卖出的 amount 恒为 0（净值未知），
-      // 用旧的 calcSharesFromAmount 会把份额算成 (0−fee)/nav 的负数。
-      const resolved = resolveTxValues({
-        type: tx.type,
-        dividendType: 'cash',
-        amount: tx.amount,
-        fee: tx.fee,
-        shares: tx.shares,
-        nav: result.nav,
-        pending: false,
-      });
-      updateTransaction(tx.id, {
-        status: 'confirmed',
-        nav: result.nav,
-        amount: resolved.amount,
-        shares: Math.round(resolved.shares * 10000) / 10000,
-      });
+      if (tx.date >= todayStr) continue;
+      // 确认口径只有一份（utils/autoConfirm.ts）：**只有 tx.date 当天的净值**
+      // 能用来推算份额。查不到就继续等——QDII 等净值延迟基金的 lookup 总会
+      // fallback 到 ≤ tx.date 的最新一条（旧日期），直接用会被误认为当日成交
+      // NAV，导致用历史净值计算份额（南方纳斯达克100 8/26 NAV 被错误应用到
+      // 8/27、8/28 交易）。A 股基金 T+1 NAV 在 D+1 晚间更新到历史，
+      // 等用户下次打开 app 时当天净值已收录，会正常自动确认。
+      const result = confirmPendingTx(tx, getNavHistory(tx.fundId));
+      if (!result.ok) continue;
+      // 写盘失败 → 不算数（内存与磁盘必须一致）
+      if (!updateTransaction(tx.id, result.patch)) continue;
       confirmed++;
     }
     return confirmed;

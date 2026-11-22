@@ -1,7 +1,7 @@
 import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform, NavRecord } from '../types';
 import { calcShares, onlyConfirmed, isInPlanWindow } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
-import { countTradingDays, lookupNavForDate } from './navLookup';
+import { countTradingDays, lookupNavOnOrBefore } from './navLookup';
 import { getNavHistory } from './storage';
 import { today } from './formatter';
 import { usableNavSeries, type UsQdiiFilterMode, DEFAULT_US_QDII_FILTER_MODE } from './navPair';
@@ -405,7 +405,7 @@ function calcPortfolioValueAtDate(
     const txs = transactions.filter((t) => t.fundId === fund.id && t.date <= date);
     const shares = calcShares(txs);
     if (shares <= 0) continue;
-    const nav = lookupNavForDate(fund.id, date);
+    const nav = lookupNavOnOrBefore(fund.id, date);
     if (nav) total += shares * nav.nav;
   }
   return total;
@@ -415,7 +415,7 @@ function calcPortfolioValueAtDate(
  * 计算区间内的资金加权持仓市值（用于月/年收益率分母）
  *
  * 算法：遍历 [start, end] 内每天（自然日，含周末/节假日），
- * 每只基金 = shares × lookupNavForDate（无当日 NAV 时回退到最近已发布 NAV），
+ * 每只基金 = shares × lookupNavOnOrBefore（无当日 NAV 时回退到最近已发布 NAV），
  * 累加每日总市值，最后除以天数 = 时间加权平均持仓市值。
  *
  * 修复前：月/年 returnRate 用月初持仓市值做分母，但 totalReturn 是日格之和，
@@ -445,7 +445,7 @@ function calcWeightedPortfolioValueInRange(
       const timeline = sharesTimeline.get(fund.id);
       const shares = getSharesAsOf(timeline, dateStr);
       if (shares <= 0) continue;
-      const nav = lookupNavForDate(fund.id, dateStr);
+      const nav = lookupNavOnOrBefore(fund.id, dateStr);
       if (nav) dailyValue += shares * nav.nav;
     }
     sumDailyValue += dailyValue;
