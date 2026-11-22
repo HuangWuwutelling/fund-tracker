@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 
 // Node 环境没有 localStorage——stub 它，让 storage.ts 的 getItem 不抛
 beforeAll(() => {
@@ -26,7 +26,7 @@ import {
   generateYearlyReturns,
   generateMonthlyReport,
   generateWeeklyReport,
-  __setNavHistoryForTest,
+  type NavHistorySource,
 } from './reportGenerator';
 import type { Fund, Transaction, Platform, NavRecord } from '../types';
 
@@ -108,49 +108,48 @@ function expectedCumAt(fundIdx: number, date: string): number {
   return shares * nav - totalBuy + totalSellNet + totalCashDiv;
 }
 
-/** 写入 nav 数据：localStorage（月报内部 lookupNavForDate 走 storage）+ 测试注入钩子 */
-function loadNavs(histories: Record<string, NavRecord[]>) {
-  for (const [code, records] of Object.entries(histories)) {
-    localStorage.setItem(`fund-tracker:nav:${code}`, JSON.stringify(records));
-  }
-  __setNavHistoryForTest((code: string) => histories[code] ?? []);
+/**
+ * 净值历史来源——报表生成器唯一的外部依赖。
+ *
+ * 以前这个文件要**同时**写 localStorage 和调全局钩子（两套注入机制手工保持
+ * 同步），因为分子走钩子、分母走 storage。现在净值历史是入参，一处就够。
+ */
+function navSourceOf(histories: Record<string, NavRecord[]>): NavHistorySource {
+  return (code: string) => histories[code] ?? [];
 }
-
-afterEach(() => {
-  __setNavHistoryForTest(null);
-});
 
 /** 对一组 (funds, transactions) 运行全部对账断言；platforms 可注入（真实备份分支传 json.platforms） */
 function assertReconciliation(
   funds: Fund[],
   transactions: Transaction[],
   platforms: Platform[] = PLATFORMS,
+  navOf: NavHistorySource = () => [],
 ) {
-  const dailyReturns = generateDailyReturns(funds, transactions);
+  const dailyReturns = generateDailyReturns(funds, transactions, navOf);
 
   // 1) 月报 = 当月日格之和（Aug / Sep 2026）
-  const augRep = generateMonthlyReport(2026, 8, funds, transactions, [], platforms);
-  const sepRep = generateMonthlyReport(2026, 9, funds, transactions, [], platforms);
+  const augRep = generateMonthlyReport(2026, 8, funds, transactions, [], platforms, navOf);
+  const sepRep = generateMonthlyReport(2026, 9, funds, transactions, [], platforms, navOf);
   const augWC = dailyReturns.filter((d) => d.date.startsWith('2026-08')).reduce((s, d) => s + d.totalReturn, 0);
   const sepWC = dailyReturns.filter((d) => d.date.startsWith('2026-09')).reduce((s, d) => s + d.totalReturn, 0);
   expect(Math.abs(augRep.totalReturn - augWC)).toBeLessThan(0.01);
   expect(Math.abs(sepRep.totalReturn - sepWC)).toBeLessThan(0.01);
 
   // 2) 月度聚合 = 日格之和
-  const monthly2026 = generateMonthlyReturns(funds, transactions, dailyReturns, 2026);
+  const monthly2026 = generateMonthlyReturns(funds, transactions, dailyReturns, 2026, navOf);
   const augMR = monthly2026.find((m) => m.month === '2026-08');
   const sepMR = monthly2026.find((m) => m.month === '2026-09');
   expect(Math.abs((augMR?.totalReturn ?? 0) - augWC)).toBeLessThan(0.01);
   expect(Math.abs((sepMR?.totalReturn ?? 0) - sepWC)).toBeLessThan(0.01);
 
   // 3) 年度聚合 = 日格之和
-  const yearly = generateYearlyReturns(funds, transactions, dailyReturns);
+  const yearly = generateYearlyReturns(funds, transactions, dailyReturns, navOf);
   const yr2026 = yearly.find((y) => y.year === '2026');
   const total2026 = dailyReturns.filter((d) => d.date.startsWith('2026')).reduce((s, d) => s + d.totalReturn, 0);
   expect(Math.abs((yr2026?.totalReturn ?? 0) - total2026)).toBeLessThan(0.01);
 
   // 4) 周报 = 周内日格之和（2026-09-09 所在周 = 9/7 周一 ~ 9/13 周日，跨卖出事件）
-  const weekRep = generateWeeklyReport(new Date('2026-09-09'), funds, transactions, [], []);
+  const weekRep = generateWeeklyReport(new Date('2026-09-09'), funds, transactions, [], [], navOf);
   const weekWC = dailyReturns
     .filter((d) => d.date >= '2026-09-07' && d.date <= '2026-09-13')
     .reduce((s, d) => s + d.totalReturn, 0);
@@ -161,9 +160,9 @@ function assertReconciliation(
 
 describe('WC ↔ Reports 对账（程序化确定性场景）', () => {
   it('月报/月度/年度 = 日格之和，且日格望远镜求和与累计公式吻合', () => {
-    loadNavs({ TEST001: navHistoryFor(0), TEST002: navHistoryFor(1) });
+    const navOf = navSourceOf({ TEST001: navHistoryFor(0), TEST002: navHistoryFor(1) });
 
-    const { augWC, sepWC, weekWC } = assertReconciliation(FUNDS, TRANSACTIONS);
+    const { augWC, sepWC, weekWC } = assertReconciliation(FUNDS, TRANSACTIONS, PLATFORMS, navOf);
 
     // 独立公式复核（不只验内部自洽）：
     // Aug = cum(8/31) − 0：f1 10000 份 + f2 5000 份 + f2 现金分红 50
@@ -183,8 +182,8 @@ describe('WC ↔ Reports 对账（程序化确定性场景）', () => {
   });
 
   it('pending 交易不产生日格（排除验证）', () => {
-    loadNavs({ TEST001: navHistoryFor(0), TEST002: navHistoryFor(1) });
-    const dailyReturns = generateDailyReturns(FUNDS, TRANSACTIONS);
+    const navOf = navSourceOf({ TEST001: navHistoryFor(0), TEST002: navHistoryFor(1) });
+    const dailyReturns = generateDailyReturns(FUNDS, TRANSACTIONS, navOf);
     // pending 买入 9/15：若被误计入，9/15 起日格会额外多 1000 份的涨跌，
     // Sep 总和就会偏离独立公式（expectedSep 只含 8000 份 + 2390 回款）
     const expectedSep =
@@ -230,8 +229,8 @@ describe('WC ↔ Reports 对账（可选：本地真实备份）', () => {
       for (const [code, records] of Object.entries(json.navHistories ?? {})) {
         histories[code] = records.map((r) => ({ date: r.date, nav: r.nav, accNav: r.accNav }));
       }
-      loadNavs(histories);
-      const { augWC, sepWC, weekWC, weekRep } = assertReconciliation(json.funds, json.transactions, json.platforms ?? PLATFORMS);
+      const navOf = navSourceOf(histories);
+      const { augWC, sepWC, weekWC, weekRep } = assertReconciliation(json.funds, json.transactions, json.platforms ?? PLATFORMS, navOf);
       const fileName = path.replace(/\\/g, '/').split('/').pop();
       console.log(`[真实备份 ${fileName}] Aug: ${augWC.toFixed(2)}, Sep: ${sepWC.toFixed(2)}, 周 9/7-9/13: 报表 ${weekRep.totalReturn.toFixed(2)} vs 日历 ${weekWC.toFixed(2)}`);
     },

@@ -405,7 +405,7 @@ export function YearView({
 
 /** 主组件：Tabs 容器，自包含从 useStore() 取数据 */
 export default function ReturnCalendar() {
-  const { funds, transactions, settings } = useStore();
+  const { funds, transactions, settings, getNavHistory } = useStore();
   const usQdiiFilterMode = settings.usQdiiFilterMode;
   const [granularity, setGranularity] = useState<Granularity>('day');
   const [selected, setSelected] = useState<{ g: Granularity; key: string } | null>(null);
@@ -415,7 +415,7 @@ export default function ReturnCalendar() {
 
   // 各粒度数据（日粒度由现有 generateDailyReturns 算；月/年用 Task 1 新增）
   const dailyReturns = useMemo(
-    () => generateDailyReturns(funds, transactions, usQdiiFilterMode),
+    () => generateDailyReturns(funds, transactions, getNavHistory, usQdiiFilterMode),
     [funds, transactions, usQdiiFilterMode]
   );
 
@@ -426,11 +426,11 @@ export default function ReturnCalendar() {
     return confirmed.map((t) => t.date).sort()[0]!;
   }, [transactions]);
   const monthlyReturns = useMemo(
-    () => generateMonthlyReturns(funds, transactions, dailyReturns, viewYear),
+    () => generateMonthlyReturns(funds, transactions, dailyReturns, viewYear, getNavHistory),
     [funds, transactions, dailyReturns, viewYear]
   );
   const yearlyReturns = useMemo(
-    () => generateYearlyReturns(funds, transactions, dailyReturns),
+    () => generateYearlyReturns(funds, transactions, dailyReturns, getNavHistory),
     [funds, transactions, dailyReturns]
   );
 

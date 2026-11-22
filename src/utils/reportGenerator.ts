@@ -1,32 +1,28 @@
 import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform, NavRecord } from '../types';
 import { calcShares, onlyConfirmed, isInPlanWindow } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
-import { countTradingDays, lookupNavOnOrBefore } from './navLookup';
-import { getNavHistory } from './storage';
+import { countTradingDays } from './navLookup';
+import { buildNavIndex, navOnOrBefore, type NavIndex } from './navSeries';
 import { today } from './formatter';
 import { usableNavSeries, type UsQdiiFilterMode, DEFAULT_US_QDII_FILTER_MODE } from './navPair';
 import { isNonTradingDay } from './chineseHolidays';
 import dayjs from 'dayjs';
 
 /**
- * Test seam：单测里通过 `__setNavHistoryForTest(() => records)` 注入 NAV 历史，
- * 避免 vitest node 环境里 localStorage stub 的麻烦。
- * 设为 `null` 恢复走真实 `getNavHistory`。
+ * 净值历史的来源——报表生成器**唯一**的外部依赖。
  *
- * 设计动机：vitest 跑在 node 环境（见 vite.config.ts），`localStorage` 不存在；
- * `getNavHistory` 直接读 localStorage，会抛 ReferenceError。让测试走真实路径
- * 需要 jsdom + 全套存储 stub，反而更脆——纯函数的 wealth-change 算法不依赖
- * 任何存储副作用。
+ * 之前这个依赖是隐形的：模块内部直接读 storage，靠一个全局可变钩子
+ * `__setNavHistoryForTest` 给测试注入。那个钩子只接了一半——分子（每日收益）
+ * 走钩子，分母（资金加权持仓市值）走真实 storage——于是：
+ * - `generateWeeklyReport` / `generateMonthlyReport` / `generateMonthlyReturns` /
+ *   `generateYearlyReturns` 这四个函数**完全无法测试**（node 环境没有
+ *   localStorage，走到分母就抛 ReferenceError）；
+ * - 钩子是一个**只在测试里用、却随生产包发布**的导出。
+ *
+ * 现在净值历史是**入参**：调用方（应用传缓存、测试传夹具）自己决定数据从哪来，
+ * 四个函数第一次变得可测，钩子也删掉了。
  */
-let _navHistoryOverride: ((fundCode: string) => NavRecord[]) | null = null;
-export function __setNavHistoryForTest(fn: ((code: string) => NavRecord[]) | null) {
-  _navHistoryOverride = fn;
-}
-
-/** 内部用：测试 seam 优先，否则走真实 storage。供 reportGenerator 内函数复用 */
-function getNavHistoryOverrideable(fundCode: string): NavRecord[] {
-  return _navHistoryOverride ? _navHistoryOverride(fundCode) : getNavHistory(fundCode);
-}
+export type NavHistorySource = (fundId: string) => NavRecord[];
 
 /**
  * 单只基金的每日收益序列（wealth-change 算法）。
@@ -61,12 +57,13 @@ function getNavHistoryOverrideable(fundCode: string): NavRecord[] {
 export function generateFundDailyReturns(
   fund: Fund,
   transactions: Transaction[],
+  navOf: NavHistorySource,
   todayStr: string = today(),
   mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE,
 ): DailyReturn[] {
   // 1. 只看已确认 + 当前基金；按日期升序
   const confirmed = onlyConfirmed(transactions.filter((t) => t.fundId === fund.id));
-  const usable = usableNavSeries(fund, getNavHistoryOverrideable(fund.id), mode);
+  const usable = usableNavSeries(fund, navOf(fund.id), mode);
   if (usable.length === 0 && confirmed.length === 0) return [];
 
   // 2. 有意义日 = NAV 发布日 ∪ 交易确认日
@@ -345,6 +342,7 @@ function getSharesAsOf(
 export function generateDailyReturns(
   funds: Fund[],
   transactions: Transaction[],
+  navOf: NavHistorySource,
   mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE
 ): DailyReturn[] {
   const todayStr = today();
@@ -353,7 +351,7 @@ export function generateDailyReturns(
   // Per-fund series → 按日期合并
   const mergedByDate = new Map<string, DailyReturn>();
   for (const fund of funds) {
-    const series = generateFundDailyReturns(fund, transactions, todayStr, mode);
+    const series = generateFundDailyReturns(fund, transactions, navOf, todayStr, mode);
     for (const dr of series) {
       let entry = mergedByDate.get(dr.date);
       if (!entry) {
@@ -398,14 +396,16 @@ export function generateDailyReturns(
 function calcPortfolioValueAtDate(
   date: string,
   funds: Fund[],
-  transactions: Transaction[]
+  transactions: Transaction[],
+  navOf: NavHistorySource
 ): number {
   let total = 0;
   for (const fund of funds) {
     const txs = transactions.filter((t) => t.fundId === fund.id && t.date <= date);
     const shares = calcShares(txs);
     if (shares <= 0) continue;
-    const nav = lookupNavOnOrBefore(fund.id, date);
+    const index = buildNavIndex(navOf(fund.id));
+    const nav = navOnOrBefore(index, date);
     if (nav) total += shares * nav.nav;
   }
   return total;
@@ -415,7 +415,7 @@ function calcPortfolioValueAtDate(
  * 计算区间内的资金加权持仓市值（用于月/年收益率分母）
  *
  * 算法：遍历 [start, end] 内每天（自然日，含周末/节假日），
- * 每只基金 = shares × lookupNavOnOrBefore（无当日 NAV 时回退到最近已发布 NAV），
+ * 每只基金 = shares × 区间内最近已发布 NAV（无当日 NAV 时回退），
  * 累加每日总市值，最后除以天数 = 时间加权平均持仓市值。
  *
  * 修复前：月/年 returnRate 用月初持仓市值做分母，但 totalReturn 是日格之和，
@@ -425,15 +425,24 @@ function calcPortfolioValueAtDate(
  *   - 新：日均持仓市值≈55000（含新购 10000 元×15/30 权重）→ returnRate=0.36%
  *
  * sharesTimeline 复用 generateDailyReturns 预建的时间线，避免内层 filter+sort 全表。
+ *
+ * **索引只建一次**：净值索引按基金建好后整段区间复用，不按天重建——否则又回到
+ * 「每天每只基金重新解析一遍历史」的 O(days × funds × history) 慢路径
+ * （实测一年 × 15 只基金 = 4,031ms 主线程阻塞）。
  */
 function calcWeightedPortfolioValueInRange(
   startDate: string,
   endDate: string,
   funds: Fund[],
-  sharesTimeline: Map<string, Array<{ date: string; cumShares: number }>>
+  sharesTimeline: Map<string, Array<{ date: string; cumShares: number }>>,
+  navOf: NavHistorySource
 ): number {
   const days = dayjs(endDate).diff(dayjs(startDate), 'day') + 1;
   if (days <= 0) return 0;
+
+  // 每只基金建一次索引，整段区间复用
+  const indexes = new Map<string, NavIndex>();
+  for (const fund of funds) indexes.set(fund.id, buildNavIndex(navOf(fund.id)));
 
   let sumDailyValue = 0;
   let countedDays = 0;
@@ -445,7 +454,7 @@ function calcWeightedPortfolioValueInRange(
       const timeline = sharesTimeline.get(fund.id);
       const shares = getSharesAsOf(timeline, dateStr);
       if (shares <= 0) continue;
-      const nav = lookupNavOnOrBefore(fund.id, dateStr);
+      const nav = navOnOrBefore(indexes.get(fund.id)!, dateStr);
       if (nav) dailyValue += shares * nav.nav;
     }
     sumDailyValue += dailyValue;
@@ -461,6 +470,7 @@ export function generateWeeklyReport(
   transactions: Transaction[],
   dcaPlans: DcaPlan[],
   _snapshots: DailySnapshot[],
+  navOf: NavHistorySource,
   mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE
 ): WeeklyReport {
   const [weekStart, weekEnd] = getWeekRange(date);
@@ -470,7 +480,7 @@ export function generateWeeklyReport(
   //   即 cashDelta = shares×NAV_end - shares×NAV_start - buyCashOut + (sellCashIn + cashDiv) - fee
   // 与 portfolio 日历（generateMonthlyReturns 周聚合）口径完全一致——"日 vs 周/月/年算法分叉"消除。
   // 旧 `endValue - startValue - buy + sell` 公式漏现金分红且把卖出视为投资回报，导致与日历对不上。
-  const allDailies = generateDailyReturns(funds, transactions, mode);
+  const allDailies = generateDailyReturns(funds, transactions, navOf, mode);
   const weekDailies = allDailies.filter((d) => d.date >= weekStart && d.date <= weekEnd);
   const totalReturn = weekDailies.reduce((sum, d) => sum + d.totalReturn, 0);
 
@@ -484,7 +494,7 @@ export function generateWeeklyReport(
   // 解决"周中买入的份额贡献收益但分母未含买入资金"导致的 returnRate 偏高
   const confirmed = onlyConfirmed(transactions);
   const sharesTimeline = buildSharesTimeline(funds, confirmed);
-  const weightedValue = calcWeightedPortfolioValueInRange(weekStart, weekEnd, funds, sharesTimeline);
+  const weightedValue = calcWeightedPortfolioValueInRange(weekStart, weekEnd, funds, sharesTimeline, navOf);
   const returnRate = weightedValue > 0 ? (totalReturn / weightedValue) * 100 : 0;
 
   // 每只基金：从 weekDailies.perFund 聚合 returnAmount，returnRate 用 startValue 做分母
@@ -498,7 +508,7 @@ export function generateWeeklyReport(
   const fundRankings = funds
     .map((f) => {
       const returnAmount = periodPerFundByFund.get(f.id) ?? 0;
-      const startValue = calcPortfolioValueAtDate(weekStart, [f], transactions);
+      const startValue = calcPortfolioValueAtDate(weekStart, [f], transactions, navOf);
       return {
         fundId: f.id,
         fundName: f.name,
@@ -554,7 +564,7 @@ export function generateWeeklyReport(
       expected = isDueWeek ? 1 : 0;
     } else if (plan.frequency === 'daily') {
       // Count actual trading days in this week from the fund's NAV history
-      expected = countTradingDays(plan.fundId, weekStart, weekEnd);
+      expected = countTradingDays(navOf(plan.fundId), weekStart, weekEnd);
     }
     // 实际笔数：金额匹配 + 日期落在计划执行窗口内的 buy 交易（**仅 confirmed**）
     // 口径与周报 totalReturn / fundRankings 一致——都基于 onlyConfirmed 交易。
@@ -608,6 +618,7 @@ export function generateMonthlyReport(
   transactions: Transaction[],
   snapshots: DailySnapshot[],
   platforms: Platform[],
+  navOf: NavHistorySource,
   mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE
 ): MonthlyReport {
   const [monthStart, monthEnd] = getMonthRange(year, month);
@@ -621,14 +632,14 @@ export function generateMonthlyReport(
   // 与 portfolio 日历（generateMonthlyReturns）口径完全一致——"日 vs 月报算法分叉"消除。
   // 旧 `endValue - startValue - buy + sell` 漏现金分红（Aug 6.66 仅 ¥200 而已、
   // Sep 漏 14.95 + 卖出视为投资回报导致符号反转到 -448.75）。
-  const allDailies = generateDailyReturns(funds, transactions, mode);
+  const allDailies = generateDailyReturns(funds, transactions, navOf, mode);
   const monthDailies = allDailies.filter((d) => d.date >= monthStart && d.date <= monthEnd);
   const totalReturn = monthDailies.reduce((sum, d) => sum + d.totalReturn, 0);
 
   // 月 returnRate：分母用"资金加权持仓市值"（同 generateMonthlyReturns 口径）
   const confirmed = onlyConfirmed(transactions);
   const sharesTimeline = buildSharesTimeline(funds, confirmed);
-  const weightedValue = calcWeightedPortfolioValueInRange(monthStart, monthEnd, funds, sharesTimeline);
+  const weightedValue = calcWeightedPortfolioValueInRange(monthStart, monthEnd, funds, sharesTimeline, navOf);
   const returnRate = weightedValue > 0 ? (totalReturn / weightedValue) * 100 : 0;
 
   // 每只基金：从 monthDailies.perFund 聚合 returnAmount，returnRate 用 startValue 做分母
@@ -642,7 +653,7 @@ export function generateMonthlyReport(
   const fundRankings = funds
     .map((f) => {
       const returnAmount = periodPerFundByFund.get(f.id) ?? 0;
-      const startValue = calcPortfolioValueAtDate(monthStart, [f], transactions);
+      const startValue = calcPortfolioValueAtDate(monthStart, [f], transactions, navOf);
       return {
         fundId: f.id,
         fundName: f.name,
@@ -705,7 +716,8 @@ export function generateMonthlyReturns(
   funds: Fund[],
   transactions: Transaction[],
   dailyReturns: DailyReturn[],
-  year: number
+  year: number,
+  navOf: NavHistorySource
 ): MonthlyReturn[] {
   // 初始化 12 个月（无论有没有数据都填 0 格，保证视图完整）
   const result: MonthlyReturn[] = [];
@@ -749,7 +761,7 @@ export function generateMonthlyReturns(
       });
     }
     const [monthStart, monthEnd] = getMonthRange(year, parseInt(monthResult.month.slice(5, 7), 10));
-    const weightedValue = calcWeightedPortfolioValueInRange(monthStart, monthEnd, funds, sharesTimeline);
+    const weightedValue = calcWeightedPortfolioValueInRange(monthStart, monthEnd, funds, sharesTimeline, navOf);
     monthResult.returnRate = weightedValue > 0 ? (monthResult.totalReturn / weightedValue) * 100 : 0;
   }
 
@@ -769,7 +781,8 @@ export function generateMonthlyReturns(
 export function generateYearlyReturns(
   funds: Fund[],
   transactions: Transaction[],
-  dailyReturns: DailyReturn[]
+  dailyReturns: DailyReturn[],
+  navOf: NavHistorySource
 ): YearlyReturn[] {
   const currentYear = new Date().getFullYear();
   const confirmed = onlyConfirmed(transactions);
@@ -816,7 +829,7 @@ export function generateYearlyReturns(
     }
     const yearStart = `${yearResult.year}-01-01`;
     const yearEnd = `${yearResult.year}-12-31`;
-    const weightedValue = calcWeightedPortfolioValueInRange(yearStart, yearEnd, funds, sharesTimeline);
+    const weightedValue = calcWeightedPortfolioValueInRange(yearStart, yearEnd, funds, sharesTimeline, navOf);
     yearResult.returnRate = weightedValue > 0 ? (yearResult.totalReturn / weightedValue) * 100 : 0;
   }
 

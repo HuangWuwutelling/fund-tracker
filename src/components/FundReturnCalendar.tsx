@@ -31,11 +31,11 @@ export default function FundReturnCalendar({ fund, transactions }: Props) {
   const [granularity, setGranularity] = useState<Granularity>('day');
   const [selected, setSelected] = useState<{ g: Granularity; key: string } | null>(null);
   const [viewYear, setViewYear] = useState<number>(() => dayjs().year());
-  const { settings } = useStore();
+  const { settings, getNavHistory } = useStore();
   const usQdiiFilterMode = settings.usQdiiFilterMode;
 
   const dailyReturns = useMemo(
-    () => generateFundDailyReturns(fund, transactions, undefined, usQdiiFilterMode),
+    () => generateFundDailyReturns(fund, transactions, getNavHistory, undefined, usQdiiFilterMode),
     [fund, transactions, usQdiiFilterMode]
   );
 
@@ -49,11 +49,11 @@ export default function FundReturnCalendar({ fund, transactions }: Props) {
 
   // 复用 portfolio 月/年聚合（传入单只基金 + 单只基金日序列）——月/年格自动 = 日格之和
   const monthlyReturns = useMemo(
-    () => generateMonthlyReturns([fund], transactions, dailyReturns, viewYear),
+    () => generateMonthlyReturns([fund], transactions, dailyReturns, viewYear, getNavHistory),
     [fund, transactions, dailyReturns, viewYear]
   );
   const yearlyReturns = useMemo(
-    () => generateYearlyReturns([fund], transactions, dailyReturns),
+    () => generateYearlyReturns([fund], transactions, dailyReturns, getNavHistory),
     [fund, transactions, dailyReturns]
   );
 

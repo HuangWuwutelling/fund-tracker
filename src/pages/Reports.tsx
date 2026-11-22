@@ -8,7 +8,13 @@ import { BarChart, LineChart, PieChart } from 'echarts/charts';
 import { TooltipComponent, GridComponent, LegendComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import { useStore } from '../stores';
-import { generateWeeklyReport, generateMonthlyReport, generateDailyReturns, generateMonthlyReturns } from '../utils/reportGenerator';
+import {
+  generateWeeklyReport,
+  generateMonthlyReport,
+  generateDailyReturns,
+  generateMonthlyReturns,
+  type NavHistorySource,
+} from '../utils/reportGenerator';
 import type { UsQdiiFilterMode } from '../utils/navPair';
 import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
 import { FREQUENCY_LABELS } from '../types';
@@ -48,13 +54,13 @@ const rankingColumns = (navigate: (path: string) => void) => [
 ];
 
 function WeeklyReportView() {
-  const { funds, transactions, dcaPlans, snapshots, settings } = useStore();
+  const { funds, transactions, dcaPlans, snapshots, settings, getNavHistory } = useStore();
   const usQdiiFilterMode = settings.usQdiiFilterMode;
   const [date, setDate] = useState(dayjs());
   const navigate = useNavigate();
 
   const report = useMemo(
-    () => generateWeeklyReport(date.toDate(), funds, transactions, dcaPlans, snapshots, usQdiiFilterMode),
+    () => generateWeeklyReport(date.toDate(), funds, transactions, dcaPlans, snapshots, getNavHistory, usQdiiFilterMode),
     [date, funds, transactions, dcaPlans, snapshots, usQdiiFilterMode]
   );
 
@@ -91,7 +97,7 @@ function WeeklyReportView() {
         </Col>
       </Row>
 
-      <WeeklyChartCard weekStart={report.weekStart} weekEnd={report.weekEnd} funds={funds} transactions={transactions} usQdiiFilterMode={usQdiiFilterMode} />
+      <WeeklyChartCard weekStart={report.weekStart} weekEnd={report.weekEnd} funds={funds} transactions={transactions} usQdiiFilterMode={usQdiiFilterMode} navOf={getNavHistory} />
 
       <Card
         title={`定投执行（${report.dcaActual} / ${report.dcaExpected} 笔）`}
@@ -164,13 +170,13 @@ function WeeklyReportView() {
 }
 
 function MonthlyReportView() {
-  const { funds, transactions, snapshots, platforms, settings } = useStore();
+  const { funds, transactions, snapshots, platforms, settings, getNavHistory } = useStore();
   const usQdiiFilterMode = settings.usQdiiFilterMode;
   const [date, setDate] = useState(dayjs());
   const navigate = useNavigate();
 
   const report = useMemo(
-    () => generateMonthlyReport(date.year(), date.month() + 1, funds, transactions, snapshots, platforms, usQdiiFilterMode),
+    () => generateMonthlyReport(date.year(), date.month() + 1, funds, transactions, snapshots, platforms, getNavHistory, usQdiiFilterMode),
     [date, funds, transactions, snapshots, platforms, usQdiiFilterMode]
   );
 
@@ -228,6 +234,7 @@ function MonthlyReportView() {
         funds={funds}
         transactions={transactions}
         usQdiiFilterMode={usQdiiFilterMode}
+        navOf={getNavHistory}
       />
 
       <Card title="各基金表现排名">
@@ -263,15 +270,17 @@ function WeeklyChartCard({
   funds,
   transactions,
   usQdiiFilterMode,
+  navOf,
 }: {
   weekStart: string;
   weekEnd: string;
   funds: Fund[];
   transactions: Transaction[];
   usQdiiFilterMode: UsQdiiFilterMode;
+  navOf: NavHistorySource;
 }) {
   const option = useMemo(() => {
-    const all = generateDailyReturns(funds, transactions, usQdiiFilterMode);
+    const all = generateDailyReturns(funds, transactions, navOf, usQdiiFilterMode);
     const inWeek = all.filter((d) => d.date >= weekStart && d.date <= weekEnd);
     if (inWeek.length === 0) return null;
     return {
@@ -327,19 +336,21 @@ function MonthlyChartCard({
   funds,
   transactions,
   usQdiiFilterMode,
+  navOf,
 }: {
   year: number;
   month: number;
   funds: Fund[];
   transactions: Transaction[];
   usQdiiFilterMode: UsQdiiFilterMode;
+  navOf: NavHistorySource;
 }) {
   const dailyReturns = useMemo(
-    () => generateDailyReturns(funds, transactions, usQdiiFilterMode),
+    () => generateDailyReturns(funds, transactions, navOf, usQdiiFilterMode),
     [funds, transactions, usQdiiFilterMode]
   );
   const monthlyReturns = useMemo(
-    () => generateMonthlyReturns(funds, transactions, dailyReturns, year),
+    () => generateMonthlyReturns(funds, transactions, dailyReturns, year, navOf),
     [funds, transactions, dailyReturns, year]
   );
 

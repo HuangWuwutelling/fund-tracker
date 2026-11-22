@@ -1,4 +1,5 @@
-import { getNavIndex, readNavHistory, exactNavOn, navOnOrBefore } from './navSeries';
+import type { NavRecord } from '../types';
+import { getNavIndex, exactNavOn, navOnOrBefore } from './navSeries';
 
 /**
  * 净值查表。
@@ -35,10 +36,15 @@ export function lookupNavOnOrBefore(fundId: string, date: string): NavLookupResu
 }
 
 /**
- * 统计区间内的交易日数（按该基金的净值历史）。
+ * 统计区间内的交易日数（按给定的净值历史）。
  * 没有净值历史时返回 0。
+ *
+ * 纯函数——净值历史由调用方给，报表生成器因此可以在测试里注入夹具。
  */
-export function countTradingDays(fundId: string, startDate: string, endDate: string): number {
-  const history = readNavHistory(fundId);
+export function countTradingDays(
+  history: NavRecord[],
+  startDate: string,
+  endDate: string
+): number {
   return history.filter((r) => r.date >= startDate && r.date <= endDate).length;
 }
