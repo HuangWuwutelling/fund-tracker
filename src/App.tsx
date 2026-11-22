@@ -94,6 +94,33 @@ function reportRefreshOutcome(issues: Record<string, FundRefreshIssue>, total: n
 export default function App() {
   const { settings, funds, refreshTrigger, loadFromStorage, updateFund, updateNavHistory, updateTransaction, addSnapshot, updateIndex } = useStore();
 
+  /**
+   * 多标签页同步。
+   *
+   * 内存状态是**启动时**从 localStorage 读一次的，此后一直拿内存写盘。所以同一
+   * 浏览器开两个标签页时，两个标签页各有一份内存状态 —— 后写的会覆盖先写的
+   * （丢数据），而且"内存 == 磁盘"的不变式只在单标签页内成立：一个标签页的内存
+   * 可能已被另一个改过期，它再写就是拿过期状态盖掉对方的新数据。
+   *
+   * `storage` 事件只在**其它**标签页写 localStorage 时触发，正好用来重新加载。
+   * 合并 500ms 窗口：一次刷新会写十几个 key（15 只基金的净值历史），逐个重载太浪费。
+   */
+  useEffect(() => {
+    let timer: number | undefined;
+    const onStorage = (e: StorageEvent) => {
+      if (e.key && !e.key.startsWith('fund-tracker:')) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        loadFromStorage();
+      }, 500);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [loadFromStorage]);
+
   useEffect(() => {
     loadFromStorage();
     // 定投自动记录：用 getState() 读刚加载的最新 settings（渲染闭包里的还是默认值），
