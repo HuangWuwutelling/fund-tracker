@@ -444,6 +444,7 @@ export default function Transactions() {
               title="净投入（买 - 卖）"
               value={summary.net}
               prefix="¥"
+              precision={2}
               valueStyle={{ fontSize: 16, color: pnlColor(summary.net) === '#666' ? undefined : pnlColor(summary.net) }}
             />
           </Card>

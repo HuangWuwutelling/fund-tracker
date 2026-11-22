@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useStore } from './index';
 import type { Transaction } from '../types';
 
@@ -83,6 +83,30 @@ describe('store：写盘失败时不改内存状态（内存 == 磁盘）', () =
     const ok = useStore.getState().updateSettings({ theme: 'dark' });
     expect(ok).toBe(false);
     expect(useStore.getState().settings.theme).toBe(before);
+  });
+
+  it('交易变动后今日快照立即重算（组合趋势图与账本一致）', () => {
+    // 固定到交易日（2026-11-20 周五）——非交易日 generateSnapshot 返回 null
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-20T10:00:00'));
+    try {
+      useStore.setState({
+        funds: [{ id: 'f1', name: '测试基金', platformId: 'p1', type: 'mixed', currentNav: 1, navDate: '2026-11-20' }],
+        transactions: [],
+        snapshots: [],
+      });
+      // 买入 100 份 → 市值 100
+      useStore.getState().addTransaction(tx({ shares: 100, nav: 1 }));
+      const afterBuy = useStore.getState().snapshots.find((s) => s.date === '2026-11-20');
+      expect(afterBuy?.totalValue).toBe(100);
+
+      // 删掉这笔 → 份额归零 → 快照要跟着归零（不能等下次刷新）
+      useStore.getState().removeTransaction('t1');
+      const afterDelete = useStore.getState().snapshots.find((s) => s.date === '2026-11-20');
+      expect(afterDelete?.totalValue).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('失败后恢复写入 → 下一次操作正常保存（状态位会清）', () => {

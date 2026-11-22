@@ -143,6 +143,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     const funds = [...get().funds, fund];
     if (!storage.saveFunds(funds)) return false;
     set({ funds });
+    get().regenerateTodaySnapshot();
     return true;
   },
 
@@ -199,6 +200,8 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     // 写盘失败 → 不改内存状态：界面不会显示"已保存"而磁盘里没有
     if (!storage.saveTransactions(transactions)) return false;
     set({ transactions });
+    // 交易变了 → 今日快照要跟上，否则组合趋势图与账本不一致（要等下次刷新才对）
+    get().regenerateTodaySnapshot();
     return true;
   },
 
@@ -206,6 +209,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     const transactions = get().transactions.map((t) => (t.id === id ? { ...t, ...updates } : t));
     if (!storage.saveTransactions(transactions)) return false;
     set({ transactions });
+    get().regenerateTodaySnapshot();
     return true;
   },
 
@@ -213,6 +217,8 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     const transactions = get().transactions.filter((t) => t.id !== id);
     if (!storage.saveTransactions(transactions)) return false;
     set({ transactions });
+    // 删除卖出 → 份额回来 → 组合趋势图必须同步，否则图与账本对不上
+    get().regenerateTodaySnapshot();
     return true;
   },
 
