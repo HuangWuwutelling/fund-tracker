@@ -12,8 +12,9 @@ dayjs.locale('zh-cn');
 dayjs.updateLocale('zh-cn', { weekStart: 0 });
 import { useStore } from './stores';
 import type { IndexQuote, FundRefreshIssue } from './types';
+import { INDEX_LIST } from './types';
 import { fetchFundWithHistory } from './api/fundApi';
-import { fetchMarketIndices, INDEX_LIST } from './api/indexApi';
+import { fetchMarketIndices } from './api/indexApi';
 import { shouldUpdateIndexQuote } from './utils/indexQuote';
 import { decideTickAction } from './utils/refreshPolicy';
 import { mergeNavTail } from './utils/navHistoryMerge';
@@ -263,8 +264,8 @@ export default function App() {
     });
   }, [settings.navAutoRefresh, funds.length, refreshAll]);
 
-  // Manual refresh trigger: Settings 的 "重置净值历史" 会调用 store.requestRefresh()
-  // 把 refreshTrigger 计数 +1，本 effect 借此触发一次全量刷新
+  // Manual refresh trigger: Settings 的 "重置净值历史" 会把 refreshTrigger 计数 +1
+  // （store.resetNavHistory 里直接 set），本 effect 借此触发一次全量刷新
   // （refreshTrigger 初始为 0，跳过首次挂载——交给上面的自动刷新 effect 处理）
   useEffect(() => {
     if (refreshTrigger === 0) return;

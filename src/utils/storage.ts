@@ -1,4 +1,5 @@
-import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote, IndexHistoryRecord, IndexSpec } from '../types';
+import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote, IndexHistoryRecord } from '../types';
+import { INDEX_LIST } from '../types';
 
 const PREFIX = 'fund-tracker';
 const CURRENT_VERSION = 2;
@@ -242,7 +243,7 @@ export function exportAllData(): ExportData {
   }
   // 指数历史：只把 INDEX_LIST 里实际存在的 code 导出来，避免孤儿数据污染备份
   const indexHistories: Record<string, IndexHistoryRecord[]> = {};
-  for (const code of INDEX_CODES) {
+  for (const code of INDEX_LIST.map((s) => s.code)) {
     const recs = getIndexHistory(code);
     if (recs.length > 0) indexHistories[code] = recs;
   }
@@ -321,15 +322,6 @@ export function saveIndices(map: Record<string, IndexQuote>): void {
   setItem('indices', map);
 }
 
-/**
- * INDEX_LIST 的稳定 code 列表。exportAllData 用它决定哪些 index-history:* 要打包。
- * 保持与 api/indexApi.ts INDEX_LIST 同步——这里刻意不 import INDEX_LIST 避免循环依赖
- * （api → storage 用于 getIndices/installData? no，但 INDEX_LIST 在 stores 中间引用会形成环）。
- */
-export const INDEX_CODES: readonly string[] = [
-  'sh000300', 'sz399006', 'sh000905',
-  'usNDX', 'usSPX', 'usDJI',
-];
 
 // --- Index History (per code) ---
 // 懒加载缓存：首次打开 Modal 才拉，写到 localStorage 后下次打开即时显示。
@@ -361,20 +353,16 @@ export function saveAllIndexHistories(map: Record<string, IndexHistoryRecord[]>)
 
 /**
  * 一次性把所有 `index-history:*` 读进 map（store.loadFromStorage 用）。
- * 只挑 INDEX_CODES 里实际存在的 code——避免历史脏数据（比如有 v2 时期别的指数）。
+ * 只挑 INDEX_LIST 里实际存在的 code——避免历史脏数据（比如有 v2 时期别的指数）。
  */
 export function loadAllIndexHistories(): Record<string, IndexHistoryRecord[]> {
   const out: Record<string, IndexHistoryRecord[]> = {};
-  for (const code of INDEX_CODES) {
+  for (const code of INDEX_LIST.map((s) => s.code)) {
     const recs = getIndexHistory(code);
     if (recs.length > 0) out[code] = recs;
   }
   return out;
 }
-
-// Re-export type aliases so consumers can import everything from storage if they want.
-// (Not strictly needed since types/index.ts is the canonical source.)
-export type { IndexSpec };
 
 // --- Init ---
 export function initStorage(): void {

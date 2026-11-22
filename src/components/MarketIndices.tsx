@@ -3,10 +3,11 @@ import { Card, Row, Col, Tooltip } from 'antd';
 import { ArrowUpOutlined, ArrowDownOutlined, LineChartOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useStore } from '../stores';
-import { INDEX_LIST } from '../api/indexApi';
+
 import { pnlColor } from '../utils/formatter';
 import { etToBeijing } from '../utils/indexQuote';
 import type { Market } from '../types';
+import { INDEX_LIST } from '../types';
 import IndexHistoryModal from './IndexHistoryModal';
 
 /** US 指数的日期前缀，明示"这是美东时区"——避免用户混淆美东 10-04 与北京 10-04 */

@@ -16,7 +16,7 @@ export type SeenNavMap = Record<string, string>;
  * 注意这不影响盈亏数字本身——数字永远是最新一对 NAV 的涨跌。本函数只驱动
  * "本轮刷新有没有新东西"这一个 UI 提示。
  */
-export function isNewlyPublished(
+function isNewlyPublished(
   previousSeen: string | undefined,
   latestNavDate: string | undefined
 ): boolean {

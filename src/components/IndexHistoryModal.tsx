@@ -6,9 +6,10 @@ import { LineChart } from 'echarts/charts';
 import { TooltipComponent, GridComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import { useStore } from '../stores';
-import { INDEX_LIST, fetchIndexHistory } from '../api/indexApi';
+import { fetchIndexHistory } from '../api/indexApi';
 import { pnlColor } from '../utils/formatter';
 import { shouldRefreshIndexHistory } from '../utils/indexQuote';
+import { INDEX_LIST } from '../types';
 
 echarts.use([LineChart, TooltipComponent, GridComponent, CanvasRenderer]);
 

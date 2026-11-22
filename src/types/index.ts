@@ -201,6 +201,33 @@ export interface IndexSpec {
 }
 
 /**
+ * v1 硬编码的指数清单。后续要做"用户自定义"再加 UI / 持久化。
+ *
+ * 数据源：腾讯 qt.gtimg.cn（理由见设计文档 §9.1 + 2026-10 调试记录）：
+ *   - 该接口 `Access-Control-Allow-Origin: *`，浏览器 fetch 直连；
+ *   - 一次请求带多个 code，GBK 编码；
+ *   - A 股日历来回调，US 周末和节假日正常出数（与 ETF fallback 路径相比，
+ *     513100 上 6 天滞后的问题不复存在）；
+ *   - 字段是真实指数点位（不是 ETF NAV），与本意一致。
+ *
+ * NDX 行情 / K 线 symbol 不对称——`usNDX`（无点）走 qt.gtimg.cn 行情 OK，但 web.ifzq
+ * （K 线）只回 1 天；`us.NDX`（带点）K 线回多日但最新日是 DX.N 股价错值。两边各发一次
+ * 合并：历史取 `us.NDX`、最新日取 `usNDX`（逻辑见 fetchIndexHistory 注释）。
+ *
+ * 已知 trade-off：
+ *   - push2（eastmoney）的字段更规整，但 2026-10 起间歇 ERR_EMPTY_RESPONSE；
+ *   - 腾讯接口偶尔会出现 `v_pv_none_match="1"` 空匹配（标的代码下线/输错），落到 catch。
+ */
+export const INDEX_LIST: IndexSpec[] = [
+  { code: 'sh000300', symbol: 'sh000300', name: '沪深300',     market: 'CN' },
+  { code: 'sz399006', symbol: 'sz399006', name: '创业板指',    market: 'CN' },
+  { code: 'sh000905', symbol: 'sh000905', name: '中证500',     market: 'CN' },
+  { code: 'usNDX',    symbol: 'usNDX', klineSymbol: 'us.NDX', name: '纳斯达克100', market: 'US' },
+  { code: 'usSPX',    symbol: 'us.INX',   name: '标普500',    market: 'US' },
+  { code: 'usDJI',    symbol: 'us.DJI',   name: '道琼斯',     market: 'US' },
+];
+
+/**
  * 指数历史每日收盘点位。Modal 曲线用；
  * `date` 为该市场当地的 YYYY-MM-DD，`value` 为当日收盘点位（原单位，非 ETF NAV）。
  */

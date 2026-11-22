@@ -1,4 +1,5 @@
 import type { NavRecord } from '../types';
+import { hasRealAcc } from './navSeries';
 
 /**
  * 回填本地历史的**真实累计净值**（accNav）。
@@ -19,7 +20,7 @@ import type { NavRecord } from '../types';
 export function backfillAccNav(local: NavRecord[], remote: NavRecord[]): NavRecord[] {
   if (local.length === 0 || remote.length === 0) return local;
   // 上游没给真实累计净值（全是 ≡ nav）→ 无可回填
-  if (!remote.some((r) => r.accNav !== r.nav)) return local;
+  if (!hasRealAcc(remote)) return local;
   const byDate = new Map(remote.map((r) => [r.date, r.accNav]));
   let changed = false;
   const out = local.map((r) => {
@@ -57,8 +58,8 @@ export function mergeNavTail(local: NavRecord[], remote: NavRecord[]): NavRecord
   const remoteLatest = remote[remote.length - 1]?.date;
   if (remoteLatest === undefined) return null;
 
-  const remoteHasRealAcc = remote.some((r) => r.accNav !== r.nav);
-  const localHasRealAcc = local.some((r) => r.accNav !== r.nav);
+  const remoteHasRealAcc = hasRealAcc(remote);
+  const localHasRealAcc = hasRealAcc(local);
   if (localHasRealAcc && !remoteHasRealAcc) {
     console.warn(
       '[navHistoryMerge] 远程数据缺少真实累计净值，跳过本次合并（避免在拼接处制造假分红）',

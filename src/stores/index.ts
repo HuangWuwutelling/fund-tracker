@@ -9,7 +9,7 @@ import { getPlanDueDates } from '../utils/calculator';
 import { latestNavPair } from '../utils/navPair';
 import { computeFreshness } from '../utils/navFreshness';
 import { today } from '../utils/formatter';
-import { getFundTypeFromName } from '../api/fundApi';
+import { classifyFundTypeByName } from '../utils/fundType';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 
@@ -26,7 +26,6 @@ interface FundTrackerState {
   /** 写盘失败返回 false（存储空间不足/被禁用）——此时内存状态不变 */
   addPlatform: (name: string) => boolean;
   removePlatform: (id: string) => boolean;
-  getPlatformById: (id: string) => Platform | undefined;
 
   // Actions - Funds
   /** 写盘失败返回 false（存储空间不足/被禁用）——此时内存状态不变 */
@@ -86,7 +85,6 @@ interface FundTrackerState {
 
   // Actions - Refresh trigger (App.tsx subscribes to bump to re-run refreshAll)
   refreshTrigger: number;
-  requestRefresh: () => void;
 
   // Actions - Refresh issues（刷新失败上报；非持久化，见 types 的 FundRefreshIssue）
   refreshIssues: Record<string, FundRefreshIssue>;
@@ -134,7 +132,6 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     return true;
   },
 
-  getPlatformById: (id) => get().platforms.find((p) => p.id === id),
 
   // --- Funds ---
   addFund: (fund) => {
@@ -175,7 +172,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     let changed = 0;
     const updated = funds.map((f) => {
       // 名称无线索时返回 null——保留用户手动设置的原类型，不被覆盖成 'mixed'
-      const t = getFundTypeFromName(f.name);
+      const t = classifyFundTypeByName(f.name);
       if (t === null || t === f.type) return f;
       changed++;
       return { ...f, type: t };
@@ -347,10 +344,6 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
   // --- Refresh trigger ---
   refreshTrigger: 0,
-
-  requestRefresh: () => {
-    set((s) => ({ refreshTrigger: s.refreshTrigger + 1 }));
-  },
 
   // --- Refresh issues ---
   refreshIssues: {},

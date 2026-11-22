@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   generateFundDailyReturns,
   generateDailyReturns,
@@ -239,44 +239,59 @@ describe('generateFundDailyReturns - wealth change', () => {
  *
  * 用 today() 当锚点构造 NAV + 买入日；保证 generateDailyReturns 内部 today() 与
  * generateFundDailyReturns 外部传入的 todayStr 同值（一天内多次调用 today() 不会跨日）。
+ *
+ * **时钟必须冻结**：夹具锚在「今天」和「昨天」两天上，而生成器会跳过非交易日。
+ * 今天是周日时：今天(周日)跳过、昨天(周六)也跳过 → 序列为空 →
+ * `expect(portfolio.length).toBe(perFund1.length)` 变成 0===0，for 循环体
+ * 一次都不执行，测试**报 PASS 但什么都没验**（实测约 1/7 的运行如此）。
+ * 冻结到一个确定的交易日（2026-11-18 周三），并断言序列非空，杜绝空转。
  */
 describe('generateDailyReturns - portfolio composition', () => {
   it('portfolio daily total = sum of per-fund daily totals', () => {
-    const todayStr = today();
-    const prev = dayjs(todayStr).subtract(1, 'day').format('YYYY-MM-DD');
-    // NAV 双天序列（prev + today）。NAV 跳 1% on 1000 shares = +10 / +20 收益。
-    const navs1 = [nav(prev, 1.0), nav(todayStr, 1.01)];
-    const navs2 = [nav(prev, 2.0), nav(todayStr, 2.02)];
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-18T10:00:00'));
+    try {
+      const todayStr = today();
+      const prev = dayjs(todayStr).subtract(1, 'day').format('YYYY-MM-DD');
+      // NAV 双天序列（prev + today）。NAV 跳 1% on 1000 shares = +10 / +20 收益。
+      const navs1 = [nav(prev, 1.0), nav(todayStr, 1.01)];
+      const navs2 = [nav(prev, 2.0), nav(todayStr, 2.02)];
 
-    navOf = (code) => {
-      if (code === 'f1') return navs1;
-      if (code === 'f2') return navs2;
-      return [];
-    };
+      navOf = (code) => {
+        if (code === 'f1') return navs1;
+        if (code === 'f2') return navs2;
+        return [];
+      };
 
-    const f1 = fund('f1', 'Fund 1');
-    const f2 = fund('f2', 'Fund 2');
-    const txs = [
-      { ...buy(prev, 1000, 1000, 1.0), fundId: 'f1' },
-      { ...buy(prev, 1000, 500, 2.0), fundId: 'f2' },
-    ];
+      const f1 = fund('f1', 'Fund 1');
+      const f2 = fund('f2', 'Fund 2');
+      const txs = [
+        { ...buy(prev, 1000, 1000, 1.0), fundId: 'f1' },
+        { ...buy(prev, 1000, 500, 2.0), fundId: 'f2' },
+      ];
 
-    const perFund1 = generateFundDailyReturns(f1, txs, navOf, todayStr);
-    const perFund2 = generateFundDailyReturns(f2, txs, navOf, todayStr);
-    const portfolio = generateDailyReturns([f1, f2], txs, navOf);
+      const perFund1 = generateFundDailyReturns(f1, txs, navOf, todayStr);
+      const perFund2 = generateFundDailyReturns(f2, txs, navOf, todayStr);
+      const portfolio = generateDailyReturns([f1, f2], txs, navOf);
 
-    // 同日期序列、同 dailyReturn = Σ per-fund
-    expect(portfolio.length).toBe(perFund1.length);
-    for (let i = 0; i < portfolio.length; i++) {
-      expect(portfolio[i]!.date).toBe(perFund1[i]!.date);
-      expect(portfolio[i]!.totalReturn).toBeCloseTo(
-        perFund1[i]!.totalReturn + perFund2[i]!.totalReturn,
-        6,
-      );
-      // 每个 portfolio 格子都包含两只基金的 perFund
-      expect(portfolio[i]!.perFund).toHaveLength(2);
-      const ids = portfolio[i]!.perFund.map((p) => p.fundId).sort();
-      expect(ids).toEqual(['f1', 'f2']);
+      // 防空转：序列必须真的有格子，否则下面的循环等于没跑
+      expect(portfolio.length).toBe(2);
+
+      // 同日期序列、同 dailyReturn = Σ per-fund
+      expect(portfolio.length).toBe(perFund1.length);
+      for (let i = 0; i < portfolio.length; i++) {
+        expect(portfolio[i]!.date).toBe(perFund1[i]!.date);
+        expect(portfolio[i]!.totalReturn).toBeCloseTo(
+          perFund1[i]!.totalReturn + perFund2[i]!.totalReturn,
+          6,
+        );
+        // 每个 portfolio 格子都包含两只基金的 perFund
+        expect(portfolio[i]!.perFund).toHaveLength(2);
+        const ids = portfolio[i]!.perFund.map((p) => p.fundId).sort();
+        expect(ids).toEqual(['f1', 'f2']);
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

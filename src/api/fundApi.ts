@@ -1,4 +1,4 @@
-import type { NavRecord, Fund, FundFetchFailureReason } from '../types';
+import type { NavRecord, FundFetchFailureReason } from '../types';
 import dayjs from 'dayjs';
 
 // --- Fund search: load full fund list once for code/name search ---
@@ -11,14 +11,6 @@ export interface FundSearchItem {
 }
 
 let fundSearchCache: FundSearchItem[] | null = null;
-
-/** 仅当名称不携带类型线索时，退回用 search 接口的 type 字段判断 */
-function mapRawType(rawType: string): Fund['type'] {
-  if (rawType.includes('QDII') || rawType.includes('qdi')) return 'qdii';
-  if (rawType.includes('债券')) return 'bond';
-  if (rawType.includes('指数')) return 'index';
-  return 'mixed';
-}
 
 export async function loadFundSearchList(): Promise<FundSearchItem[]> {
   if (fundSearchCache) return fundSearchCache;
@@ -75,31 +67,6 @@ export function searchFunds(keyword: string, items: FundSearchItem[]): FundSearc
       item.pinyin.toLowerCase().includes(kw)
     )
     .slice(0, 20);
-}
-
-/**
- * 判断基金类型，名称优先（比 search 接口的 type 字段可靠）：
- * - QDII 指数基金（纳指/标普）在 search 里常被标成"指数型"，但名称带 "(QDII)"
- * - 债券指数基金（中债7-10年国开）同理，名称带"债券"
- * 顺序：QDII → 债券 → 指数 → 混合；名称无线索时退回 rawType。
- */
-export function getFundTypeFromSearch(rawType: string, name?: string): Fund['type'] {
-  const n = name ?? '';
-  if (n.includes('(QDII)') || n.includes('QDII')) return 'qdii';
-  if (n.includes('债券') || n.includes('中债') || n.includes('国债')) return 'bond';
-  if (n.includes('ETF') || n.includes('指数') || n.includes('联接') || n.includes('LOF')) return 'index';
-  return mapRawType(rawType);
-}
-
-/**
- * 仅按名称分类，无名称线索返回 null（用于"按名称重新分类"场景，避免把手动设置的
-  类型覆盖成 'mixed'）。语义与 getFundTypeFromSearch 的名称分支一致。
- */
-export function getFundTypeFromName(name: string): Fund['type'] | null {
-  if (name.includes('(QDII)') || name.includes('QDII')) return 'qdii';
-  if (name.includes('债券') || name.includes('中债') || name.includes('国债')) return 'bond';
-  if (name.includes('ETF') || name.includes('指数') || name.includes('联接') || name.includes('LOF')) return 'index';
-  return null;
 }
 
 // --- Fund info + NAV history via pingzhongdata API ---
@@ -207,40 +174,6 @@ function loadPingzhongScript(fundCode: string): Promise<Record<string, unknown>>
   });
 }
 
-export async function fetchFundEstimate(fundCode: string): Promise<FundEstimate | null> {
-  try {
-    const data = await loadPingzhongScript(fundCode);
-    const name = data['fS_name'] as string;
-    const code = data['fS_code'] as string;
-    if (!name || !code) return null;
-
-    // Extract latest NAV from Data_netWorthTrend
-    const trend = data['Data_netWorthTrend'] as Array<{ x: number; y: number }> | undefined;
-    if (!trend || trend.length === 0) {
-      return { name, code, nav: 0, lastNav: 0, changePercent: 0, navDate: '' };
-    }
-
-    const latest = trend[trend.length - 1]!;
-    const prev = trend.length > 1 ? trend[trend.length - 2]! : latest;
-    const navDate = dayjs(latest.x).format('YYYY-MM-DD');
-    const lastNav = latest.y;
-    const prevNav = prev.y;
-    const changePercent = prevNav > 0 ? ((lastNav - prevNav) / prevNav) * 100 : 0;
-
-    return {
-      name,
-      code,
-      nav: lastNav,
-      lastNav,
-      changePercent,
-      navDate,
-    };
-  } catch (err) {
-    console.error('[fundApi] fetchFundEstimate failed for', fundCode, err);
-    return null;
-  }
-}
-
 // --- Historical NAV from pingzhongdata ---
 
 /**
@@ -278,27 +211,6 @@ export function pairNavWithAcc(
     const acc = covered ? accByDate.get(date) : undefined;
     return { date, nav: item.y, accNav: acc !== undefined ? acc : item.y };
   });
-}
-
-export async function fetchNavHistory(
-  fundCode: string,
-  startDate: string,
-  endDate: string
-): Promise<NavRecord[]> {
-  try {
-    const data = await loadPingzhongScript(fundCode);
-    const trend = data['Data_netWorthTrend'] as Array<{ x: number; y: number }> | undefined;
-    if (!trend || trend.length === 0) return [];
-
-    const accTrend = data['Data_ACWorthTrend'] as Array<[number, number]> | undefined;
-    const records: NavRecord[] = pairNavWithAcc(trend, accTrend);
-
-    // Filter by date range
-    return records.filter((r) => r.date >= startDate && r.date <= endDate);
-  } catch (err) {
-    console.error('[fundApi] fetchNavHistory failed for', fundCode, err);
-    return [];
-  }
 }
 
 // --- Fetch fund info + full NAV history in one call ---
@@ -354,24 +266,3 @@ export async function fetchFundWithHistory(fundCode: string): Promise<FetchFundR
   };
 }
 
-// --- Batch fetch with rate limiting ---
-export async function batchFetchNav(
-  fundCodes: string[],
-  onProgress?: (current: number, total: number) => void
-): Promise<Map<string, FundEstimate>> {
-  const results = new Map<string, FundEstimate>();
-
-  for (let i = 0; i < fundCodes.length; i++) {
-    const code = fundCodes[i]!;
-    const estimate = await fetchFundEstimate(code);
-    if (estimate) {
-      results.set(code, estimate);
-    }
-    onProgress?.(i + 1, fundCodes.length);
-    if (i < fundCodes.length - 1) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-
-  return results;
-}

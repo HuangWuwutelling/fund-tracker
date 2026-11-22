@@ -115,13 +115,15 @@ export default function FundDetail() {
         active: existing?.active ?? true,
         startDate: (values.startDate as dayjs.Dayjs).format('YYYY-MM-DD'),
       };
-      if (editingDcaId) {
-        updateDcaPlan(editingDcaId, plan);
-        message.success('已更新');
-      } else {
-        addDcaPlan(plan);
-        message.success('已创建');
+      // 写盘失败 → 内存状态没变 → 保留弹窗与用户已填的内容，不要当成成功
+      const saved = editingDcaId
+        ? updateDcaPlan(editingDcaId, plan)
+        : addDcaPlan(plan);
+      if (!saved) {
+        message.error(STORAGE_WRITE_FAILED_MSG, 8);
+        return;
       }
+      message.success(editingDcaId ? '已更新' : '已创建');
       setDcaModalOpen(false);
       setEditingDcaId(null);
       dcaForm.resetFields();

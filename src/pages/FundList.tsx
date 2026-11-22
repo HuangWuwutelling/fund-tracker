@@ -4,7 +4,8 @@ import { PlusOutlined, SearchOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../stores';
 import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
-import { fetchFundWithHistory, loadFundSearchList, searchFunds, getFundTypeFromSearch } from '../api/fundApi';
+import { fetchFundWithHistory, loadFundSearchList, searchFunds } from '../api/fundApi';
+import { classifyFundTypeBySearch } from '../utils/fundType';
 import { mergeNavTail } from '../utils/navHistoryMerge';
 import { formatDate } from '../utils/formatter';
 import InitialPositionModal from '../components/InitialPositionModal';
@@ -59,7 +60,7 @@ export default function FundList() {
       id: item.code,
       name: item.name,
     });
-    setSelectedType(getFundTypeFromSearch(item.type, item.name));
+    setSelectedType(classifyFundTypeBySearch(item.type, item.name));
     setSearchKeyword('');
     setSearchResults([]);
   };
@@ -311,7 +312,7 @@ export default function FundList() {
           {searchResults.length > 0 && (
             <Card size="small" style={{ marginTop: 8, maxHeight: 240, overflow: 'auto' }}>
               {searchResults.map((item) => {
-                const mappedType = getFundTypeFromSearch(item.type, item.name);
+                const mappedType = classifyFundTypeBySearch(item.type, item.name);
                 return (
                   <div
                     key={item.code}

@@ -31,13 +31,6 @@ export function today(): string {
   return `${y}-${m}-${day}`;
 }
 
-/** 计算两个日期之间的天数差 */
-export function daysBetween(date1: string, date2: string): number {
-  const d1 = new Date(date1);
-  const d2 = new Date(date2);
-  return Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24));
-}
-
 /** 盈亏颜色（中国惯例：红涨绿跌） */
 export function pnlColor(value: number): string {
   if (value > 0) return '#cf1322';
