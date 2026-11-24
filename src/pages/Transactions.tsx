@@ -198,8 +198,15 @@ export default function Transactions() {
   // 卖出预览（份额为准）：成交额 = 份额 × 净值；到手 = 成交额 − 手续费
   const sellSharesVal = sharesWatch ?? 0;
   const sellFeeVal = feeWatch ?? 0;
-  // 手动录入的成交净值优先（用户从平台抄来的当日净值才是权威）
-  const sellNavVal = (manualNavWatch && manualNavWatch > 0 ? manualNavWatch : preview.nav) ?? 0;
+  // 预览用的净值：手动录入的成交净值优先（用户从平台抄来的当日净值才是权威）；
+  // 否则**只认交易当日的净值**——"最近交易日"兜底值算出来的成交额是假的
+  //（提示里正说着"直接用它推算份额会算错"，紧接着下一框又拿它算一遍成交额）
+  const sellNavVal =
+    manualNavWatch && manualNavWatch > 0
+      ? manualNavWatch
+      : navDecision.isExact
+        ? preview.nav ?? 0
+        : 0;
   const sellAmountVal = calcAmountFromShares(sellSharesVal, sellNavVal);
 
   /**
