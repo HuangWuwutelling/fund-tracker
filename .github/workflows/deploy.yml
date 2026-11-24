@@ -18,7 +18,9 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
+      # lockfile 的 resolved 指向国内镜像，runner 在美国——同 ci.yml 的理由：
+      # 从中国镜像拉依赖，链路抖动会让部署随机失败。
+      - run: npm ci --registry=https://registry.npmjs.org --replace-registry-host=always
       - run: npm test
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3

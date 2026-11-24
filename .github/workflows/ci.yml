@@ -23,6 +23,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
+      # package-lock.json 里的 resolved 全部指向 registry.npmmirror.com（国内镜像），
+      # 而 runner 在美国。从中国镜像拉 217 个包，链路一抖门禁就红——而代码没问题。
+      # --replace-registry-host=always 会把 lockfile 里的 resolved 主机改写成本条
+      # 命令指定的 registry；本地仍走 npmmirror（快），不受影响。
+      - run: npm ci --registry=https://registry.npmjs.org --replace-registry-host=always
       - run: npm test
       - run: npm run build
