@@ -11,7 +11,7 @@ import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { calcFundSummary, calcAmountFromShares, calcSharesBeforeTx, calcShares, calcCost, onlyConfirmed } from '../utils/calculator';
-import { resolveTxValues } from '../utils/txValues';
+import { buildTxDraft, inferDividendType } from '../utils/txFormModel';
 import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import { decideNavEntry } from '../utils/navEntry';
 import { initialPositionDate } from '../utils/txNormalize';
@@ -351,66 +351,53 @@ export default function FundDetail() {
     try {
       const values = await txForm.validateFields();
       const txType = values.type as Transaction['type'];
-      const pending = (values.pending as boolean) ?? false;
+      const pendingFlag = (values.pending as boolean) ?? false;
       const txDate = (values.date as dayjs.Dayjs).format('YYYY-MM-DD');
-      // 净值可用性：只有**交易当日**的净值才能用来推算份额。查到的净值若是
-      // "最近交易日"兜底（旧日期），用它算份额会静默算错（实测南方标普红利低波
-      // 08-26 的买入被多算 13.6 份）。拿不到当日净值 → 按待确认记录，等净值发布
-      // 后由 autoConfirmPending 自动补齐。详见 utils/navEntry.ts。
-      const decision = decideNavEntry({
-        txDate,
-        lookedUp: navPreview ? { nav: navPreview.nav, navDate: navPreview.navDate } : null,
-        manualNav: editingTxId ? 0 : ((values.nav as number) ?? 0),
-      });
-      // 编辑既有记录时，净值以记录里（用户可改）的值为准，不重新判定可用性
-      const status: 'confirmed' | 'pending' = editingTxId
-        ? (pending ? 'pending' : 'confirmed')
-        : (pending ? 'pending' : decision.status);
-      const nav = editingTxId
-        ? ((values.nav as number) ?? 0)
-        : (status === 'confirmed' ? decision.nav : 0);
-      if (status === 'pending' && !pending && decision.warning) {
-        message.warning(decision.warning, 8);
-      }
-      // 统一口径解析：买入按金额、卖出按份额、分红分现金/再投资。
-      // 详见 utils/txValues.ts —— 两个页面的表单与「确认净值」都走这一个函数。
-      const resolved = resolveTxValues({
+      const editing = !!editingTxId;
+
+      // 卖出超额校验需要「该笔交易之前」的持仓份额（编辑时排除自身，避免重复计算）
+      const priorShares =
+        txType === 'sell'
+          ? calcSharesBeforeTx(
+              transactions.filter((t) => t.fundId === fundRef.id),
+              { id: editingTxId ?? '', date: txDate },
+            )
+          : 0;
+
+      // 录入决策只有一份实现（utils/txFormModel.ts）：净值可用性、公式方向、
+      // 扣费口径、卖出超额校验都在那里——本页与交易记录页不再各写一遍。
+      const draft = buildTxDraft({
         type: txType,
         dividendType: (values.dividendType as 'cash' | 'reinvest') ?? 'cash',
         amount: (values.amount as number) ?? 0,
         fee: (values.fee as number) ?? 0,
         shares: (values.shares as number) ?? 0,
-        nav,
-        pending: status === 'pending',
+        // 净值取表单字段：编辑期是用户填的值（可修正错净值），新增期是手动补录的当日净值
+        manualNav: (values.nav as number) ?? 0,
+        lookedUp: navPreview ? { nav: navPreview.nav, navDate: navPreview.navDate } : null,
+        txDate,
+        pendingFlag,
+        editing,
+        priorShares,
       });
-      const finalAmount = resolved.amount;
-      const finalShares = resolved.shares;
-      const finalFee = resolved.fee;
 
-      // 卖出校验：截至当前交易日期的持仓必须 >= 卖出份额
-      // 编辑时排除自身，避免重复计算
-      if (txType === 'sell' && !pending && finalShares > 0) {
-        const priorShares = calcSharesBeforeTx(
-          transactions.filter((t) => t.fundId === fundRef.id),
-          { id: editingTxId ?? '', date: txDate },
-        );
-        if (finalShares > priorShares + 0.0001) {
-          message.error(
-            `卖出份额超过当前持仓：当前 ${priorShares.toFixed(4)} 份，最多可卖 ${priorShares.toFixed(4)} 份`
-          );
-          return;
-        }
+      if (draft.blocking) {
+        message.error(draft.blocking);
+        return;
+      }
+      if (draft.warning) {
+        message.warning(draft.warning, 8);
       }
 
       const txData: Partial<Transaction> = {
         type: txType,
         date: txDate,
-        amount: finalAmount,
-        fee: finalFee,
-        shares: Math.round(finalShares * 10000) / 10000,
-        nav,
+        amount: draft.amount,
+        fee: draft.fee,
+        shares: draft.shares,
+        nav: draft.nav,
         note: values.note as string | undefined,
-        status,
+        status: draft.status,
       };
 
       // 写盘失败 → 内存状态没变 → 保留弹窗与用户已填的内容，不要当成成功
@@ -431,7 +418,7 @@ export default function FundDetail() {
           return;
         }
         message.success(
-          status === 'pending'
+          draft.status === 'pending'
             ? '已记录为待确认交易（净值发布后自动补齐份额）'
             : '交易记录已添加',
         );
@@ -469,12 +456,9 @@ export default function FundDetail() {
 
   const handleEditTx = (tx: Transaction) => {
     setEditingTxId(tx.id);
-    // 推断分红方式：amount > 0 → 现金分红；shares > 0 → 红利再投资
+    // 分红方式只能按 shares 判——判据与理由见 utils/txFormModel.ts 的 inferDividendType
     const dividendType: 'cash' | 'reinvest' | undefined =
-      // 红利再投资既有 amount（= 份额 × 净值）也有 shares，用 amount>0 判会把
-      // 再投资误判成现金分红 → 编辑保存时把 shares 清零，份额凭空消失。
-      // 判据只能是 shares：现金分红的份额恒为 0。
-      tx.type === 'dividend' ? (tx.shares > 0 ? 'reinvest' : 'cash') : undefined;
+      tx.type === 'dividend' ? inferDividendType(tx) : undefined;
     // 同步 pending 表单字段，否则编辑 pending 交易时 checkbox 默认未勾选，
     // 会触发 nav 缺失校验导致无法保存（T+1 净值未发布的 pending 交易 nav=0）
     txForm.setFieldsValue({
