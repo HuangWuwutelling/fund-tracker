@@ -19,6 +19,19 @@ export interface NavRecord {
 }
 
 /**
+ * 删除平台的结果。
+ *
+ * 两种失败必须分开：「平台下还有基金」（业务规则，用户要先迁移基金）与
+ * 「写盘失败」（技术问题，磁盘没写成）。合成一个 boolean 会让调用方分不清
+ * 该提示"先删基金"还是"存储空间不足"。
+ *
+ * 判定在 store 这一个 seam 里做——调用方不该自己再判一遍。
+ */
+export type PlatformRemovalResult =
+  | { ok: true }
+  | { ok: false; reason: 'has-funds' | 'write-failed' };
+
+/**
  * 交易的来源（provenance）。
  *
  * 以前 provenance 靠备注字符串表达（`note.includes('初始持仓')`），于是用户在备注里

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote, IndexHistoryRecord, FundRefreshIssue } from '../types';
+import type { Platform, Fund, Transaction, DcaPlan, DailySnapshot, Settings, NavRecord, IndexQuote, IndexHistoryRecord, FundRefreshIssue, PlatformRemovalResult } from '../types';
 import * as storage from '../utils/storage';
 import { commitLedger } from '../utils/commit';
 import { readNavHistory, putNavHistory, invalidateNavHistory } from '../utils/navSeries';
@@ -26,7 +26,8 @@ interface FundTrackerState {
   // Actions - Platforms
   /** 写盘失败返回 false（存储空间不足/被禁用）——此时内存状态不变 */
   addPlatform: (name: string) => boolean;
-  removePlatform: (id: string) => boolean;
+  /** 删除平台。两种失败要分开：平台下还有基金（业务）vs 写盘失败（技术） */
+  removePlatform: (id: string) => PlatformRemovalResult;
 
   // Actions - Funds
   /** 写盘失败返回 false（存储空间不足/被禁用）——此时内存状态不变 */
@@ -125,12 +126,17 @@ export const useStore = create<FundTrackerState>((set, get) => ({
   },
 
   removePlatform: (id) => {
-    const hasFund = get().funds.some((f) => f.platformId === id);
-    if (hasFund) return false;
+    // 「平台下还有基金」是**业务规则**，由 store 这一个 seam 判定并报出原因——
+    // 调用方不该自己再判一遍（两处各判一次，改一处忘一处就是口径漂移）。
+    if (get().funds.some((f) => f.platformId === id)) {
+      return { ok: false, reason: 'has-funds' };
+    }
     const platforms = get().platforms.filter((p) => p.id !== id);
-    if (!commitLedger({ platforms }).ok) return false;
+    if (!commitLedger({ platforms }).ok) {
+      return { ok: false, reason: 'write-failed' };
+    }
     set({ platforms });
-    return true;
+    return { ok: true };
   },
 
 

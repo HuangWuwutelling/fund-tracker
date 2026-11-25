@@ -139,13 +139,15 @@ export default function Settings() {
   };
 
   const handleRemovePlatform = (id: string) => {
-    // 两种失败要分开提示：还有基金 vs 写盘失败
-    if (funds.some((f) => f.platformId === id)) {
-      message.error('该平台下还有基金，请先删除或迁移相关基金');
-      return;
-    }
-    if (!removePlatform(id)) {
-      message.error(STORAGE_WRITE_FAILED_MSG, 8);
+    // 两种失败由 store 一次判定并报出原因（调用方不再自己判一遍）
+    const result = removePlatform(id);
+    if (!result.ok) {
+      message.error(
+        result.reason === 'has-funds'
+          ? '该平台下还有基金，请先删除或迁移相关基金'
+          : STORAGE_WRITE_FAILED_MSG,
+        8,
+      );
       return;
     }
     message.success('平台已删除');

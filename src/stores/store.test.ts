@@ -117,26 +117,31 @@ describe('store：平台 / 基金 / 定投计划的写盘不变式', () => {
     expect(fake.getItem('fund-tracker:platforms')).toContain('南方基金');
   });
 
-  it('removePlatform：写盘失败 → 返回 false，平台还在', () => {
+  it('removePlatform：写盘失败 → 返回 write-failed，平台还在', () => {
     useStore.getState().addPlatform('南方基金');
     const id = useStore.getState().platforms[0]!.id;
     fake.failOnWrite = true;
-    expect(useStore.getState().removePlatform(id)).toBe(false);
+    expect(useStore.getState().removePlatform(id)).toEqual({ ok: false, reason: 'write-failed' });
     expect(useStore.getState().platforms).toHaveLength(1);
   });
 
-  it('removePlatform：平台下还有基金 → 返回 false（业务原因，不是写盘失败）', () => {
-    // ⚠️ 这个 false 与「写盘失败」的 false 是**两回事**，调用方分不出来：
-    //   前者是「还有基金挂在这个平台上，不能删」，后者是「磁盘没写成」。
-    //   与 autoRecordDcaPlans 把 created / writeFailed 分开返回是同一个问题，
-    //   这里尚未拆开——先钉住现状，别让"顺手改成 true"溜过去。
+  it('removePlatform：平台下还有基金 → 返回 has-funds（业务原因，与写盘失败分开）', () => {
+    // 两种失败必须分得开：调用方要提示「先删基金」还是「存储空间不足」。
+    // 判定在 store 这一个 seam 里做——调用方（Settings.tsx）不再自己判一遍。
     useStore.setState({
       platforms: [{ id: 'platform-1', name: '南方基金' }],
       funds: [fund],
     });
     fake.failOnWrite = false;
-    expect(useStore.getState().removePlatform('platform-1')).toBe(false);
+    expect(useStore.getState().removePlatform('platform-1')).toEqual({ ok: false, reason: 'has-funds' });
     expect(useStore.getState().platforms).toHaveLength(1);
+  });
+
+  it('removePlatform：成功 → ok，且平台真的没了', () => {
+    useStore.getState().addPlatform('南方基金');
+    const id = useStore.getState().platforms[0]!.id;
+    expect(useStore.getState().removePlatform(id)).toEqual({ ok: true });
+    expect(useStore.getState().platforms).toHaveLength(0);
   });
 
   it('addFund：写盘失败 → 返回 false，基金没加', () => {
