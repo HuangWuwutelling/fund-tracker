@@ -38,8 +38,12 @@ const FIELD_CHANGE_PERCENT = 32;
 
 /**
  * 解析单条 `v_X="...";` 记录。失败返回 null（让 fetch 整体 null 返回）。
+ *
+ * **导出**是为了可测：字段偏移（[3]/[30]/[31]/[32]）是腾讯接口格式的一部分，
+ * 改格式会**静默**算错——界面上的指数点位看着正常，数字却是错的。
+ * 真实响应样本见 `src/test/fixtures/tencentQuotes.ts`，偏移被钉在测试里。
  */
-function parseQuoteLine(line: string): IndexQuoteRaw | null {
+export function parseQuoteLine(line: string): IndexQuoteRaw | null {
   // v_X="...";
   const m = /^v_[^=]+="(.*)";?\s*$/.exec(line);
   if (!m) return null;
@@ -187,8 +191,12 @@ export async function fetchIndexHistory(
   }
 }
 
-/** 从 K 线 day 数组抽出 `[date, close]` 对，非法行丢弃。 */
-function parseKlineRows(rows: unknown): IndexHistoryRecord[] {
+/**
+ * 从 K 线 day 数组抽出 `[date, close]` 对，非法行丢弃。
+ *
+ * **导出**是为了可测——真实响应样本见 `src/test/fixtures/tencentKline.ts`。
+ */
+export function parseKlineRows(rows: unknown): IndexHistoryRecord[] {
   if (!Array.isArray(rows)) return [];
   const out: IndexHistoryRecord[] = [];
   for (const row of rows) {
