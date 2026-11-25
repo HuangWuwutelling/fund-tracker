@@ -1,5 +1,5 @@
-import type { Fund, Transaction, DailySnapshot } from '../types';
-import { calcShares, calcCost, calcMarketValue, onlyConfirmed } from './calculator';
+import type { DailySnapshot } from '../types';
+import { portfolioView, type PortfolioInput } from './portfolio';
 import { today } from './formatter';
 import { isNonTradingDay } from './chineseHolidays';
 
@@ -7,29 +7,19 @@ import { isNonTradingDay } from './chineseHolidays';
  *
  * 非交易日（周末 / 节假日）跳过：避免日历里多出 0 涨跌的空格子；
  * 老数据里残留的非交易日快照在 calendar 层过滤，详见 reportGenerator.ts。
+ *
+ * 合计**取自 portfolioView**——与 Dashboard 同一份实现，快照与组合总览不可能对不上。
+ * 以前这里是独立的一份 calcShares + calcCost 循环，两处各算各的。
  */
-export function generateSnapshot(funds: Fund[], transactions: Transaction[]): DailySnapshot | null {
+export function generateSnapshot(input: PortfolioInput): DailySnapshot | null {
   const todayStr = today();
   if (isNonTradingDay(todayStr)) return null;
 
-  let totalValue = 0;
-  let totalCost = 0;
-
-  // 一次性过滤 confirmed，避免每只基金都重跑一遍 filter
-  const confirmed = onlyConfirmed(transactions);
-
-  for (const fund of funds) {
-    const fundTxs = confirmed.filter((t) => t.fundId === fund.id);
-    const shares = calcShares(fundTxs);
-    const cost = calcCost(fundTxs);
-    const marketValue = calcMarketValue(shares, fund.currentNav);
-    totalValue += marketValue;
-    totalCost += cost;
-  }
+  const { totals } = portfolioView(input);
 
   return {
     date: todayStr,
-    totalValue: Math.round(totalValue * 100) / 100,
-    totalCost: Math.round(totalCost * 100) / 100,
+    totalValue: Math.round(totals.totalValue * 100) / 100,
+    totalCost: Math.round(totals.totalCost * 100) / 100,
   };
 }

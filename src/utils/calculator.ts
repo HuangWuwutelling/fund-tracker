@@ -479,39 +479,3 @@ export function calcTodayInvested(
   return { txAmount, planAmount, total: txAmount + planAmount };
 }
 
-/**
- * 计算基金汇总信息。
- *
- * 不再接收 `todayStr`：盈亏取的是"最新一对已发布 NAV"，与今天是哪天无关，
- * 传入今天反而会诱导调用方以为这里有"今天"的口径。UI 若需要知道"今天是否非交易日"，
- * 自己调 `isNonTradingDay()`。
- */
-export function calcFundSummary(
-  fund: Fund,
-  transactions: Transaction[],
-  navHistory: NavRecord[],
-  mode: UsQdiiFilterMode = DEFAULT_US_QDII_FILTER_MODE
-) {
-  const fundTransactions = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
-  const shares = calcShares(fundTransactions);
-  const cost = calcCost(fundTransactions);
-  const marketValue = calcMarketValue(shares, fund.currentNav);
-  const totalReturn = calcReturn(marketValue, cost);
-  const returnRate = calcReturnRate(totalReturn, cost);
-  const latest = calcLatestNavPnl(fund, navHistory, fundTransactions, mode);
-  const xirr = calcXIRR(fundTransactions, marketValue);
-  const dividend = calcDividendTotal(fundTransactions);
-
-  return {
-    shares,
-    cost,
-    marketValue,
-    totalReturn,
-    returnRate,
-    dailyPnl: latest.pnl,
-    currNavDate: latest.currDate,
-    prevNavDate: latest.prevDate,
-    xirr,
-    dividend,
-  };
-}

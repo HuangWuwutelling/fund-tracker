@@ -214,8 +214,14 @@ export const useStore = create<FundTrackerState>((set, get) => ({
 
   // --- Snapshot ---
   regenerateTodaySnapshot: () => {
-    const { funds, transactions } = get();
-    const newSnapshot = generateSnapshot(funds, transactions);
+    const { funds, transactions, getNavHistory, settings } = get();
+    // 快照的合计取自 portfolioView —— 与 Dashboard 同一份实现
+    const newSnapshot = generateSnapshot({
+      funds,
+      transactions,
+      navHistoryOf: getNavHistory,
+      mode: settings.usQdiiFilterMode,
+    });
     const snapshots = get().snapshots.filter((s) => s.date !== today());
     if (newSnapshot) snapshots.push(newSnapshot);
     storage.saveSnapshots(snapshots);

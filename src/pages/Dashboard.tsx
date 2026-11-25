@@ -4,7 +4,8 @@ import { ArrowUpOutlined, ArrowDownOutlined, FundOutlined } from '@ant-design/ic
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { useStore } from '../stores';
-import { calcFundSummary, calcXIRR, calcDividendTotal, calcTodayInvested } from '../utils/calculator';
+import { calcXIRR, calcDividendTotal, calcTodayInvested } from '../utils/calculator';
+import { portfolioView } from '../utils/portfolio';
 import { today } from '../utils/formatter';
 import { isNonTradingDay } from '../utils/chineseHolidays';
 import ReturnCalendar from '../components/ReturnCalendar';
@@ -46,53 +47,21 @@ export default function Dashboard() {
   }, [refreshIssues, funds]);
 
   // todayStr 用于 ⚡ 卡片的休市态与「下次开盘自动刷新」提示（日历的 today 高亮
-  // 由 ReturnCalendar 自己算）。它**不在** summaries 的 deps 里——
-  // summaries 只依赖 funds / transactions / navHistory，与"跨日"无关。
+  // 由 ReturnCalendar 自己算）。它**不在** positions 的 deps 里——
+  // positions 只依赖 funds / transactions / navHistory，与"跨日"无关。
   const todayStr = today();
-  const summaries = useMemo(() => {
-    return funds.map((fund) => ({
-      fund,
-      ...calcFundSummary(fund, transactions, getNavHistory(fund.id), usQdiiFilterMode),
-    }));
-  }, [funds, transactions, getNavHistory, usQdiiFilterMode]);
-
-  // 衍生统计：memoize 避免每次渲染重算 + 重复 getNavHistory 调用
-  const totals = useMemo(() => {
-    const totalValue = summaries.reduce((sum, s) => sum + s.marketValue, 0);
-    const totalCost = summaries.reduce((sum, s) => sum + s.cost, 0);
-    const totalReturn = totalValue - totalCost;
-    const totalReturnRate = totalCost > 0 ? (totalReturn / totalCost) * 100 : 0;
-
-    // 最新净值日盈亏：汇总所有"有可用 NAV 对"的基金。
-    // 不做任何发布节奏假设——数字就是各基金最新一对已发布 NAV 的涨跌；
-    // 因为不同基金的最新净值日可能不同（A 股今天、QDII 常落后 1 个交易日），
-    // 按 currNavDate 分桶展示，把口径直接写在卡片上而不是藏进 tooltip。
-    let totalDailyPnl: number | null = null;
-    const bucketCount = new Map<string, number>();
-    let noNavCount = 0;
-    for (const s of summaries) {
-      if (s.dailyPnl === null) {
-        noNavCount++;
-        continue;
-      }
-      totalDailyPnl = (totalDailyPnl ?? 0) + s.dailyPnl;
-      bucketCount.set(s.currNavDate, (bucketCount.get(s.currNavDate) ?? 0) + 1);
-    }
-    const navDateBuckets = [...bucketCount.entries()]
-      .map(([date, count]) => ({ date, count }))
-      .sort((a, b) => b.date.localeCompare(a.date));
-
-    return {
-      totalValue,
-      totalCost,
-      totalReturn,
-      totalReturnRate,
-      totalDailyPnl,
-      navDateBuckets,
-      noNavCount,
-      coveredCount: summaries.length - noNavCount,
-    };
-  }, [summaries]);
+  const { positions, totals } = useMemo(
+    () =>
+      // 「我持有什么」只有一份实现（utils/portfolio.ts）——mode 收在接口里，
+      // 调用方无从漏传（漏传不报错、只是安静改变数字，是最难查的一类 bug）
+      portfolioView({
+        funds,
+        transactions,
+        navHistoryOf: getNavHistory,
+        mode: usQdiiFilterMode,
+      }),
+    [funds, transactions, getNavHistory, usQdiiFilterMode],
+  );
 
   // 本轮刷新是否"一无所获"：跑过刷新、但没有一只基金拿到新净值。
   // 非交易日不算（休市时本来就该没有新净值，提示反而误导）。
@@ -162,9 +131,9 @@ export default function Dashboard() {
       width: 240,
       align: 'left' as const,
       fixed: 'left' as const,
-      sorter: (a: typeof summaries[0], b: typeof summaries[0]) =>
+      sorter: (a: typeof positions[0], b: typeof positions[0]) =>
         a.fund.name.localeCompare(b.fund.name, 'zh-CN'),
-      render: (_: unknown, record: typeof summaries[0]) => (
+      render: (_: unknown, record: typeof positions[0]) => (
         <div style={{ display: 'flex', alignItems: 'center' }}>
           <span
             style={{
@@ -197,12 +166,12 @@ export default function Dashboard() {
       key: 'platform',
       width: 100,
       align: 'left' as const,
-      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => {
+      sorter: (a: typeof positions[0], b: typeof positions[0]) => {
         const an = platforms.find((p) => p.id === a.fund.platformId)?.name ?? '';
         const bn = platforms.find((p) => p.id === b.fund.platformId)?.name ?? '';
         return an.localeCompare(bn, 'zh-CN');
       },
-      render: (_: unknown, record: typeof summaries[0]) =>
+      render: (_: unknown, record: typeof positions[0]) =>
         platforms.find((p) => p.id === record.fund.platformId)?.name ?? '—',
     },
     {
@@ -211,7 +180,7 @@ export default function Dashboard() {
       key: 'cost',
       width: 130,
       align: 'right' as const,
-      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.cost - b.cost,
+      sorter: (a: typeof positions[0], b: typeof positions[0]) => a.cost - b.cost,
       render: (v: number) => formatMoney(v),
     },
     {
@@ -221,7 +190,7 @@ export default function Dashboard() {
       width: 130,
       align: 'right' as const,
       defaultSortOrder: 'descend' as const,
-      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.marketValue - b.marketValue,
+      sorter: (a: typeof positions[0], b: typeof positions[0]) => a.marketValue - b.marketValue,
       render: (v: number) => <span style={{ fontWeight: 500 }}>{formatMoney(v)}</span>,
     },
     {
@@ -230,7 +199,7 @@ export default function Dashboard() {
       key: 'totalReturn',
       width: 130,
       align: 'right' as const,
-      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.totalReturn - b.totalReturn,
+      sorter: (a: typeof positions[0], b: typeof positions[0]) => a.totalReturn - b.totalReturn,
       render: (v: number) => <span style={{ color: pnlColor(v), fontWeight: 500 }}>{formatMoney(v)}</span>,
     },
     {
@@ -239,7 +208,7 @@ export default function Dashboard() {
       key: 'returnRate',
       width: 100,
       align: 'right' as const,
-      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => a.returnRate - b.returnRate,
+      sorter: (a: typeof positions[0], b: typeof positions[0]) => a.returnRate - b.returnRate,
       render: (v: number) => <span style={{ color: pnlColor(v) }}>{formatPercent(v)}</span>,
     },
     {
@@ -248,8 +217,8 @@ export default function Dashboard() {
       key: 'dailyPnl',
       width: 150,
       align: 'right' as const,
-      sorter: (a: typeof summaries[0], b: typeof summaries[0]) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
-      render: (_v: number | null, record: typeof summaries[0]) => {
+      sorter: (a: typeof positions[0], b: typeof positions[0]) => (a.dailyPnl ?? 0) - (b.dailyPnl ?? 0),
+      render: (_v: number | null, record: typeof positions[0]) => {
         if (record.dailyPnl === null) {
           return (
             <Tooltip title="该基金可用净值不足 2 期，暂时算不出涨跌">
@@ -648,7 +617,7 @@ export default function Dashboard() {
         }
       >
         <Table
-          dataSource={summaries}
+          dataSource={positions}
           columns={columns}
           rowKey={(record) => record.fund.id}
           pagination={false}

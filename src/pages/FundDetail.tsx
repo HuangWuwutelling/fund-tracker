@@ -10,7 +10,8 @@ import { CanvasRenderer } from 'echarts/renderers';
 import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
-import { calcFundSummary, calcShares, calcCost, onlyConfirmed } from '../utils/calculator';
+import { onlyConfirmed } from '../utils/calculator';
+import { fundPosition } from '../utils/portfolio';
 import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import { pnlColor, formatDate, formatMoney, formatPercent } from '../utils/formatter';
 import { lookupNavOnOrBefore } from '../utils/navLookup';
@@ -47,6 +48,16 @@ echarts.use([
   MarkPointComponent,
   CanvasRenderer,
 ]);
+
+/**
+ * 基金不存在时的零值头寸。
+ * 页面在 `!fund` 时会提前 return，这个常量只是让类型收窄——
+ * 它不参与任何计算。
+ */
+const EMPTY_POSITION = {
+  shares: 0, cost: 0, avgCost: 0, marketValue: 0, totalReturn: 0, returnRate: 0,
+  dailyPnl: null, currNavDate: '', prevNavDate: '', xirr: 0, dividend: 0,
+};
 
 export default function FundDetail() {
   const { id } = useParams<{ id: string }>();
@@ -113,9 +124,19 @@ export default function FundDetail() {
   );
   const summary = useMemo(
     () =>
+      // 「我持有什么」只有一份实现（utils/portfolio.ts）——mode 收在接口里，
+      // 调用方无从漏传
       fund
-        ? calcFundSummary(fund, transactions, navHistory, usQdiiFilterMode)
-        : { shares: 0, cost: 0, marketValue: 0, totalReturn: 0, returnRate: 0, dailyPnl: null, currNavDate: '', prevNavDate: '', xirr: 0, dividend: 0 },
+        ? (fundPosition(
+            {
+              funds: [fund],
+              transactions,
+              navHistoryOf: () => navHistory,
+              mode: usQdiiFilterMode,
+            },
+            fund.id,
+          ) ?? EMPTY_POSITION)
+        : EMPTY_POSITION,
     [fund, transactions, navHistory, usQdiiFilterMode]
   );
   const fundTxs = useMemo(
@@ -143,15 +164,10 @@ export default function FundDetail() {
       : navHistory;
   }, [navHistory, navRange]);
 
-  // 平均成本（持仓成本 / 当前份额）—— 用作图上的水平基线
-  // 卖出后份额减少，cost 也按比例扣减，所以 avgCost 反映"未卖出部分的平均买入价"
-  const avgCost = useMemo(() => {
-    if (!fund) return 0;
-    const fundTxs = onlyConfirmed(transactions).filter((t) => t.fundId === fund.id);
-    const cost = calcCost(fundTxs);
-    const shares = calcShares(fundTxs);
-    return shares > 0 ? cost / shares : 0;
-  }, [fund, transactions]);
+  // 平均成本（持仓成本 / 当前份额）—— 用作图上的水平基线。
+  // 卖出后份额减少，cost 也按比例扣减，所以 avgCost 反映"未卖出部分的平均买入价"。
+  // 口径来自 portfolio.ts 的同一个头寸计算，不再自己重算一遍。
+  const avgCost = summary?.avgCost ?? 0;
 
   // 区间涨跌（首日 vs 末日 NAV）—— 右上角展示
   const periodChange = useMemo(() => {
