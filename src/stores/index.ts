@@ -81,7 +81,7 @@ interface FundTrackerState {
   /** 最近一次刷新完成时间（ISO 字符串）；null = 本次会话还没跑过刷新 */
   navRefreshedAt: string | null;
   /** 刷新结束后调用：对比并更新本地观测基线，产出 freshNavFundIds */
-  recordNavFreshness: () => void;
+  recordNavFreshness: () => Set<string>;
 
   // Actions - Refresh trigger (App.tsx subscribes to bump to re-run refreshAll)
   refreshTrigger: number;
@@ -379,6 +379,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     );
     storage.saveSeenNavMap(nextSeen);
     set({ freshNavFundIds: fresh, navRefreshedAt: new Date().toISOString() });
+    return fresh;
   },
 
   // --- Init & Bulk ---

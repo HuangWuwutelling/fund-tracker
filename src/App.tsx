@@ -16,9 +16,8 @@ import { INDEX_LIST } from './types';
 import { fetchFundWithHistory } from './api/fundApi';
 import { fetchMarketIndices } from './api/indexApi';
 import { shouldUpdateIndexQuote } from './utils/indexQuote';
-import { decideTickAction } from './utils/refreshPolicy';
-import { mergeNavTail } from './utils/navHistoryMerge';
-import { confirmPendingTx } from './utils/autoConfirm';
+import { decideTickAction, PLAN_FULL, type RefreshPlan } from './utils/refreshPolicy';
+import { runRefreshCycle } from './refresh/refreshCycle';
 import { hasStorageWriteFailure, STORAGE_WRITE_FAILED_MSG } from './utils/storage';
 import AppLayout from './components/Layout';
 import Dashboard from './pages/Dashboard';
@@ -43,7 +42,7 @@ import Settings from './pages/Settings';
  * 写入用 shouldUpdateIndexQuote 兜底（只接受比 cache 更新的日期），所以不需要
  * refreshAll 那套 generation 中断机制——过期的响应写不进去。
  */
-async function refreshMarketIndices(): Promise<void> {
+async function refreshMarketIndices(): Promise<IndexQuote[]> {
   try {
     const allData = await fetchMarketIndices();
     for (const spec of INDEX_LIST) {
@@ -67,6 +66,7 @@ async function refreshMarketIndices(): Promise<void> {
   } catch (err) {
     console.error('[App] index batch failed:', err);
   }
+  return [];
 }
 
 /** 按刷新结果分档提示：全部成功 success / 部分失败 warning / 全部失败 error。
@@ -150,106 +150,44 @@ export default function App() {
   // the in-flight old one must not overwrite with stale state.
   const refreshGenerationRef = useRef(0);
 
-  // Auto-confirm pending transactions: any buy/sell whose date is in the past and
-  // whose NAV is now available in the fund's NAV history can be confirmed automatically.
-  // Today's pending tx stays pending — user confirms manually to avoid stale-NAV mistakes.
-  // 不订阅 transactions（避免 addTransaction 触发 refreshAll 无限循环）；用 useStore.getState() 读最新值
-  const autoConfirmPending = useCallback(() => {
-    const todayStr = dayjs().format('YYYY-MM-DD');
-    const { transactions, getNavHistory } = useStore.getState();
-    const pendingTxs = transactions.filter((t) => t.status === 'pending');
-    if (pendingTxs.length === 0) return 0;
-
-    let confirmed = 0;
-    for (const tx of pendingTxs) {
-      // Skip today's pending (T+1 NAV not yet released) and future-dated entries
-      if (tx.date >= todayStr) continue;
-      // 确认口径只有一份（utils/autoConfirm.ts）：**只有 tx.date 当天的净值**
-      // 能用来推算份额。查不到就继续等——QDII 等净值延迟基金的 lookup 总会
-      // fallback 到 ≤ tx.date 的最新一条（旧日期），直接用会被误认为当日成交
-      // NAV，导致用历史净值计算份额（南方纳斯达克100 8/26 NAV 被错误应用到
-      // 8/27、8/28 交易）。A 股基金 T+1 NAV 在 D+1 晚间更新到历史，
-      // 等用户下次打开 app 时当天净值已收录，会正常自动确认。
-      const result = confirmPendingTx(tx, getNavHistory(tx.fundId));
-      if (!result.ok) continue;
-      // 写盘失败 → 不算数（内存与磁盘必须一致）
-      if (!updateTransaction(tx.id, result.patch)) continue;
-      confirmed++;
-    }
-    return confirmed;
-  }, [updateTransaction]);
 
   // Auto-refresh NAV + generate snapshot when funds are loaded
-  const refreshAll = useCallback(async () => {
+  //
+  // 顺序约束（指数先拉 / 确认在净值写入之后 / 基线在循环之后 / 快照最后）
+  // 写在 refresh/refreshCycle.ts 的函数体里，并在那边有测试钉住——
+  // 重排任何一个都不会报错，只会静默产出错误数字。
+  const refreshAll = useCallback(async (plan: RefreshPlan = PLAN_FULL) => {
     const myGen = ++refreshGenerationRef.current;
-    // 指数是**全市场数据**，与账户有没有持仓无关 → 空账户也要拉，
-    // 否则新用户的 Dashboard 指数卡片永远是"—"。放在基金循环之前，
-    // 指数也能比基金净值更早显示。
-    await refreshMarketIndices();
-    if (funds.length === 0) return;
+    const store = useStore.getState();
+    const fundIds = store.funds.map((f) => f.id);
 
-    // per-fund 失败上报：本轮结束后整体写入 store，UI（Dashboard/FundDetail Alert）
-    // 据此展示醒目警告。跳过更新不写错数据的既有语义不变，只是不再静默。
-    const issues: Record<string, FundRefreshIssue> = {};
-
-    for (let i = 0; i < funds.length; i++) {
-      if (refreshGenerationRef.current !== myGen) return; // superseded
-      const fund = funds[i]!;
-      try {
-        const result = await fetchFundWithHistory(fund.id);
-        if (refreshGenerationRef.current !== myGen) return;
-        if (!result.ok) {
-          // new-format / not-found / network / timeout：跳过更新（防写错 NAV），上报原因
-          issues[fund.id] = { reason: result.reason, at: Date.now() };
-        } else if (result.estimate.lastNav > 0) {
-          updateFund(fund.id, {
-            currentNav: result.estimate.lastNav,
-            navDate: result.estimate.navDate,
-          });
-
-          // 增量合并净值历史：mergeNavTail 与 FundList 手动刷新共用同一语义
-          // （边界日期保留本地值；API 修正历史净值请走 Settings 的"重置净值历史"）
-          const merged = mergeNavTail(
-            useStore.getState().getNavHistory(fund.id),
-            result.navHistory,
-          );
-          if (merged) {
-            updateNavHistory(fund.id, merged);
-          }
-        } else {
-          // 加载成功但 trend 为空——此前静默跳过，现在上报让用户看到
-          issues[fund.id] = { reason: 'no-data', at: Date.now() };
-        }
-      } catch (err) {
-        console.error('[App] refreshAll failed for', fund.id, err);
-        issues[fund.id] = { reason: 'network', at: Date.now() };
-      }
-      if (i < funds.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-    }
+    const outcome = await runRefreshCycle(
+      {
+        fundIds,
+        fetchFundNav: fetchFundWithHistory,
+        fetchIndexQuotes: refreshMarketIndices,
+        navOf: (id) => useStore.getState().getNavHistory(id),
+        pendingTransactions: () => useStore.getState().transactions,
+        commitFund: (id, nav, navDate) => updateFund(id, { currentNav: nav, navDate }),
+        commitNavHistory: (id, records) => updateNavHistory(id, records),
+        commitTransaction: (id, patch) => updateTransaction(id, patch),
+        commitSnapshot: () => regenerateTodaySnapshot(),
+        recordBaseline: () => useStore.getState().recordNavFreshness(),
+        paceMs: 500,
+        isAborted: () => refreshGenerationRef.current !== myGen,
+      },
+      // 没有基金时只刷指数（与旧实现一致：空账户不该产生零值快照）
+      fundIds.length === 0 ? { runIndices: plan.runIndices, runFundNavs: false } : plan,
+    );
 
     // 上报整体替换（成功基金不保留旧失败标记）
-    if (refreshGenerationRef.current !== myGen) return;
-    useStore.getState().setRefreshIssues(issues);
+    useStore.getState().setRefreshIssues(outcome.issues);
 
-    // （指数已在函数开头拉取 —— 全市场数据，与基金净值无关，不受 tick 退避牵连）
-
-    if (refreshGenerationRef.current !== myGen) return;
-    // NAV history is now fresh — try to auto-confirm pending transactions whose NAV is available
-    // 用 useStore.getState() 读最新 transactions，避免把 transactions 加进依赖
-    const confirmedCount = autoConfirmPending();
-    if (refreshGenerationRef.current !== myGen) return;
-    if (confirmedCount > 0) {
-      message.success(`已自动确认 ${confirmedCount} 笔历史交易`);
+    if (outcome.confirmedCount > 0) {
+      message.success(`已自动确认 ${outcome.confirmedCount} 笔历史交易`);
     }
-    // 所有 updateNavHistory 都已完成 → 用刚写入的 navHistory 对比上次观测基线。
-    // 必须放在循环之后：freshness 读的就是 navHistory，提前调用会看到旧数据。
-    useStore.getState().recordNavFreshness();
-    if (refreshGenerationRef.current !== myGen) return;
-    // 今日快照：交易 / 净值变了要跟上，否则组合趋势图与账本不一致
-    regenerateTodaySnapshot();
-  }, [funds.length, updateFund, updateNavHistory, updateTransaction, regenerateTodaySnapshot, updateIndex, autoConfirmPending]);
+    return outcome;
+  }, [updateFund, updateNavHistory, updateTransaction, regenerateTodaySnapshot, updateIndex]);
 
   useEffect(() => {
     if (!settings.navAutoRefresh || funds.length === 0) return;
@@ -303,14 +241,17 @@ export default function App() {
       const staleIds = new Set(
         useStore.getState().funds.filter((f) => f.navDate < today).map((f) => f.id),
       );
-      const action = decideTickAction(staleIds, lastStaleIdsRef.current, skippedTicksRef.current);
+      const plan = decideTickAction(staleIds, lastStaleIdsRef.current, skippedTicksRef.current);
       lastStaleIdsRef.current = staleIds;
 
-      if (action === 'idle') {
+      if (!plan.runIndices && !plan.runFundNavs) {
         skippedTicksRef.current = 0;
         return;
       }
-      if (action === 'indices-only') {
+      if (!plan.runFundNavs) {
+        // 基金净值退避，**指数行情照刷**——指数与基金净值没有依赖关系，
+        // 曾经指数拉取被包在整条刷新链路里，退避时一起被跳过，
+        // Dashboard 的指数点位从每 30 分钟退化到 ~2 小时一次。
         skippedTicksRef.current++;
         console.debug('[App] periodic refresh: stale set unchanged, backing off (skipped', skippedTicksRef.current, 'ticks) — 指数行情照常刷新');
         void refreshMarketIndices();
@@ -318,7 +259,7 @@ export default function App() {
       }
       skippedTicksRef.current = 0;
       console.debug('[App] periodic refresh: stale NAV detected, fetching');
-      refreshAll().catch((err) => {
+      refreshAll(plan).catch((err) => {
         console.error('[App] periodic refresh error:', err);
       });
     };
