@@ -13,7 +13,7 @@ import type { NavRecord } from '../types';
  * （2026-08-26 买入多算 13.6 份那次事故的形状）。
  *
  * 底层语义由 `navSeries.test.ts` 覆盖；这里覆盖**适配层自己的语义**——
- * 尤其�� `navDate` 必须是**那条净值自己的日期**，而不是查询日。
+ * 尤其是 `navDate` 必须是**那条净值自己的日期**，而不是查询日。
  */
 
 beforeEach(() => {
