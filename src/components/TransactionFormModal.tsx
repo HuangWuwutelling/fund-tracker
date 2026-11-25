@@ -199,6 +199,9 @@ export default function TransactionFormModal({ open, fundId, tx, onClose }: Tran
         nav: draft.nav,
         note: values.note as string | undefined,
         status: draft.status,
+        // 手动录入：来源写死 'manual'——备注是自由文本，
+        // 用户在备注里写"初始持仓"不该改变这笔交易的语义
+        origin: 'manual',
       };
 
       // 写盘失败 → 内存状态没变 → 保留弹窗与用户已填的内容

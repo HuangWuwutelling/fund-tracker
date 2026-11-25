@@ -1,6 +1,6 @@
 import type { NavRecord, Transaction } from '../types';
 import { resolveTxValues } from './txValues';
-import { INITIAL_POSITION_NOTE, PLATFORM_IMPORT_NOTE } from './txNormalize';
+import { originOf } from './txOrigin';
 
 /** 一笔交易的净值核对结果 */
 export interface TxAuditIssue {
@@ -47,8 +47,10 @@ export function auditTransactions(
   for (const t of transactions) {
     if (t.type !== 'buy' && t.type !== 'sell') continue;
     if (t.status === 'pending') continue;
-    if (t.note?.includes(INITIAL_POSITION_NOTE)) continue;
-    if (t.note?.includes(PLATFORM_IMPORT_NOTE)) continue; // 平台真值，不核对
+    // 来源用 origin 判，不看 note——备注是自由文本
+    const origin = originOf(t);
+    if (origin === 'initial-position') continue;
+    if (origin === 'platform-import') continue; // 平台真值，不核对
 
     const history = navHistories[t.fundId];
     if (!history || history.length === 0) continue;

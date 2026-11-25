@@ -4,6 +4,7 @@ import * as storage from '../utils/storage';
 import { commitLedger } from '../utils/commit';
 import { readNavHistory, putNavHistory, invalidateNavHistory } from '../utils/navSeries';
 import { normalizeInitialPositionNav } from '../utils/txNormalize';
+import { backfillOrigin } from '../utils/txOrigin';
 import { generateSnapshot } from '../utils/snapshot';
 import { getPlanDueDates } from '../utils/calculator';
 import { latestNavPair } from '../utils/navPair';
@@ -292,6 +293,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
           nav: 0,
           status: 'pending',
           planId: plan.id,
+          origin: 'dca-auto',
           note: '定投自动记录',
         });
       }
@@ -389,7 +391,11 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     // 归一化「初始持仓」记录的 nav（它是成本单价、不是市场净值）——
     // 存量数据一次性纠正并落盘，之后不再变
     const rawTxs = storage.getTransactions();
-    const transactions = normalizeInitialPositionNav(rawTxs);
+    // 回填 provenance（origin）：老数据没有这个字段，按 note/planId 推断一次。
+    // 判定规则与旧实现完全一致 → 老数据的分类结果与今天一样，不会突变。
+    // 之后来源就冻结在 origin 里，备注再写什么都不影响。
+    const withOrigin = backfillOrigin(rawTxs);
+    const transactions = normalizeInitialPositionNav(withOrigin);
     if (transactions !== rawTxs) storage.saveTransactions(transactions);
     set({
       platforms: storage.getPlatforms(),
@@ -429,10 +435,11 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     // 财务关键数据一次性提交：任一写失败 → 已写的回滚 → 不更新内存状态，
     // 界面不会假装导入成功（旧实现漏检 platforms / dcaPlans / settings，
     // 它们的写失败会被吞掉，磁盘与内存就此分裂）
+    const importedTxs = backfillOrigin(data.transactions ?? []);
     const committed = commitLedger({
       platforms: data.platforms ?? [],
       funds: data.funds ?? [],
-      transactions: data.transactions ?? [],
+      transactions: importedTxs,
       dcaPlans: data.dcaPlans ?? [],
       settings,
     });
@@ -442,7 +449,7 @@ export const useStore = create<FundTrackerState>((set, get) => ({
     set({
       platforms: data.platforms ?? [],
       funds: data.funds ?? [],
-      transactions: data.transactions ?? [],
+      transactions: importedTxs,
       dcaPlans: data.dcaPlans ?? [],
       snapshots: data.snapshots ?? [],
       settings,

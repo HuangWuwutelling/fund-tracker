@@ -87,6 +87,7 @@ export default function PlatformImportModal({ open, onClose }: Props) {
             fee: 0,
             shares: row.shares,
             nav: row.nav,
+            origin: 'platform-import',
             note: PLATFORM_IMPORT_NOTE,
             status: 'confirmed',
           };

@@ -103,3 +103,27 @@ describe('auditTransactions（交易自检：记录净值 vs 净值历史）', (
     expect(issues).toHaveLength(0);
   });
 });
+
+/**
+ * provenance 改成类型之后，**备注不再决定来源**。
+ *
+ * 旧实现用 `note.includes('初始持仓')` 跳过自检——用户在备注里写这两个字，
+ * 手动交易就被静默排除在自检之外（错账就查不出来）。
+ */
+describe('provenance 由 origin 决定，备注不再有判据职责', () => {
+  it('手动交易（origin=manual）+ 备注写着「初始持仓」→ 参与自检', () => {
+    const issues = auditTransactions(
+      [tx({ origin: 'manual', note: INITIAL_POSITION_NOTE, nav: 1.0386 })],
+      { f1: [nav('2026-08-26', 1.048)] },
+    );
+    expect(issues).toHaveLength(1);
+  });
+
+  it('初始持仓（origin=initial-position）→ 照旧跳过', () => {
+    const issues = auditTransactions(
+      [tx({ origin: 'initial-position', note: '随便写的备注', nav: 1.0386 })],
+      { f1: [nav('2026-08-26', 1.048)] },
+    );
+    expect(issues).toHaveLength(0);
+  });
+});

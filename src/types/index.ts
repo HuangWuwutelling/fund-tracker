@@ -18,6 +18,18 @@ export interface NavRecord {
   accNav: number;
 }
 
+/**
+ * 交易的来源（provenance）。
+ *
+ * 以前 provenance 靠备注字符串表达（`note.includes('初始持仓')`），于是用户在备注里
+ * 写"初始持仓"两个字，手动交易会被静默当成初始持仓——排除自检、nav 被归零、
+ * 还触发重复计算预警。规则靠子串匹配，用户无法回避。
+ *
+ * 现在来源由这个字段表达。缺省视为 'manual'（老数据在 loadFromStorage / importData
+ * 时回填一次，判定规则与旧实现一致，所以老数据的分类结果不变）。
+ */
+export type TxOrigin = 'manual' | 'platform-import' | 'initial-position' | 'dca-auto';
+
 export interface Transaction {
   id: string;
   fundId: string;
@@ -31,6 +43,8 @@ export interface Transaction {
   /** 若该交易由定投计划自动生成，记录来源计划 id（便于去重/打标签） */
   planId?: string;
   status?: 'pending' | 'confirmed';
+  /** 来源。缺省视为 'manual'（老备份 / 老数据） */
+  origin?: TxOrigin;
 }
 
 /**

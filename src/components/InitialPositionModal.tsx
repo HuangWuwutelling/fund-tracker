@@ -116,6 +116,7 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
         // 市场净值。两者语义不同，混存会让"净值"列显示错东西，也让任何按 nav
         // 核对的工具误报。成本单价可由 amount ÷ shares 推导。
         nav: 0,
+        origin: 'initial-position',
         note: '初始持仓',
       };
 

@@ -1,15 +1,9 @@
 import type { Transaction } from '../types';
+import { originOf } from './txOrigin';
 
-/** 「初始持仓」记录的 note 标记（初始持仓弹窗写入） */
-export const INITIAL_POSITION_NOTE = '初始持仓';
-
-/**
- * 「平台流水导入」记录的 note 标记（平台流水对账弹窗写入）。
- *
- * 这类记录的金额/份额/净值**都是平台给的真值**，不是应用反算出来的，
- * 所以「交易自检」不参与核对（见 utils/txAudit.ts）。
- */
-export const PLATFORM_IMPORT_NOTE = '平台流水导入';
+// 历史遗留的 note 标记搬到 txOrigin.ts（它们本质是 provenance 的判据）。
+// 这里转出去是为了不打断既有引用。
+export { INITIAL_POSITION_NOTE, PLATFORM_IMPORT_NOTE } from './txOrigin';
 
 /**
  * 归一化「初始持仓」记录的 `nav` 字段。
@@ -27,7 +21,8 @@ export const PLATFORM_IMPORT_NOTE = '平台流水导入';
 export function normalizeInitialPositionNav(transactions: Transaction[]): Transaction[] {
   let changed = false;
   const out = transactions.map((t) => {
-    if (t.note?.includes(INITIAL_POSITION_NOTE) && t.nav > 0) {
+    // 判来源用 origin，不看 note——用户在备注里写"初始持仓"不该改变这笔交易的语义
+    if (originOf(t) === 'initial-position' && t.nav > 0) {
       changed = true;
       return { ...t, nav: 0 };
     }
@@ -45,7 +40,7 @@ export function normalizeInitialPositionNav(transactions: Transaction[]): Transa
  */
 export function initialPositionDate(transactions: Transaction[], fundId: string): string | null {
   const dates = transactions
-    .filter((t) => t.fundId === fundId && t.note?.includes(INITIAL_POSITION_NOTE))
+    .filter((t) => t.fundId === fundId && originOf(t) === 'initial-position')
     .map((t) => t.date)
     .sort();
   return dates.length > 0 ? dates[0]! : null;

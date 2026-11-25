@@ -61,3 +61,36 @@ describe('initialPositionDate（初始持仓日期，重复计算预警用）', 
     expect(initialPositionDate(txs, 'f1')).toBeNull();
   });
 });
+
+/**
+ * provenance 改成类型之后，**备注不再决定来源**。
+ *
+ * 这几条是这次改动真正要挡住的事故形状：用户在备注里写"初始持仓"两个字，
+ * 手动交易被静默当成初始持仓——nav 被归零、还触发重复计算预警。
+ */
+describe('provenance 由 origin 决定，备注不再有判据职责', () => {
+  it('手动交易（origin=manual）+ 备注写着「初始持仓」→ nav 不被归零', () => {
+    const out = normalizeInitialPositionNav([
+      tx({ origin: 'manual', note: INITIAL_POSITION_NOTE, nav: 1.048 }),
+    ]);
+    expect(out[0]!.nav).toBe(1.048);
+  });
+
+  it('手动交易（origin=manual）+ 备注写着「初始持仓」→ 不算初始持仓日期', () => {
+    expect(
+      initialPositionDate([tx({ origin: 'manual', note: INITIAL_POSITION_NOTE })], 'f1'),
+    ).toBeNull();
+  });
+
+  it('初始持仓（origin=initial-position）→ 照旧归零', () => {
+    const out = normalizeInitialPositionNav([
+      tx({ origin: 'initial-position', note: '随便写的备注', nav: 1.048 }),
+    ]);
+    expect(out[0]!.nav).toBe(0);
+  });
+
+  it('老数据（没有 origin）+ 备注是标记 → 按旧规则推断，行为不变', () => {
+    const out = normalizeInitialPositionNav([tx({ note: INITIAL_POSITION_NOTE })]);
+    expect(out[0]!.nav).toBe(0);
+  });
+});
