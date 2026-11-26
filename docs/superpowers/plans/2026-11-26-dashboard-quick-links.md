@@ -1147,10 +1147,11 @@ Expected: 全部通过。记录测试条数。
 
 - [ ] **Step 3: 提交**
 
-```bash
-git add CLAUDE.md
-git commit -m "docs(claude-md): 补第 9 个 seam —— 交易筛选的唯一实现"
-```
+**注意：`CLAUDE.md` 是被 gitignore 的**（`.gitignore:6`，理由是「包含架构细节/已知坑/
+内部约定——不上传」），**不要 commit 它**。改动落在磁盘上即生效（本地 Claude Code
+会话读的就是这个文件）。强推需要 `git add -f`，那是违背用户既定策略，不要做。
+
+本任务**不产生 commit**。
 
 ---
 
