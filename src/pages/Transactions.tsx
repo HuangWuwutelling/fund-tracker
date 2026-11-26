@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Card, Table, Button, Select, Tag, Space, message, Popconfirm, Checkbox, Statistic, Row, Col } from 'antd';
+import { Card, Table, Button, Select, Tag, Space, message, Popconfirm, Statistic, Row, Col } from 'antd';
 import { PlusOutlined, ImportOutlined } from '@ant-design/icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../stores';
@@ -10,6 +10,13 @@ import TransactionFormModal from '../components/TransactionFormModal';
 import InitialPositionModal from '../components/InitialPositionModal';
 import NavLink from '../components/NavLink';
 import { TRANSACTION_TYPE_LABELS, TX_TYPE_COLORS } from '../types';
+import {
+  parseTxFilters,
+  filterTransactions,
+  txFilterParams,
+  type TxFilters,
+  type TxStatusFilter,
+} from '../utils/txFilter';
 import type { Transaction } from '../types';
 
 export default function Transactions() {
@@ -18,23 +25,28 @@ export default function Transactions() {
   const [modalOpen, setModalOpen] = useState(false);
   /** 正在编辑的交易（null = 新增）。弹窗本体在 components/TransactionFormModal.tsx */
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
-  const [filterFund, setFilterFund] = useState<string>('');
-  const [filterType, setFilterType] = useState<string>('');
-  const [searchParams, setSearchParams] = useSearchParams();
-  const pendingOnly = searchParams.get('status') === 'pending';
-  const setPendingOnly = (v: boolean) => {
-    if (v) setSearchParams({ status: 'pending' });
-    else setSearchParams({});
-  };
   const [initModalOpen, setInitModalOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // 筛选的唯一真源是 URL（utils/txFilter.ts 是唯一实现）——本地 state 不再持有
+  // 筛选。此前 fund/type 走本地 state、status 走 URL，是"同一个概念两处各写一遍"。
+  //
+  // fundIds / filters 都必须 memo：filters 若是每次渲染的新对象 → filteredTxs
+  // 换引用 → summary 重算 → AntD Table 拿新 dataSource 全量重渲染（本项目有
+  // 4 秒实测卡顿史）。searchParams 本身稳定（react-router 内部 useMemo 依赖
+  // [location.search]），所以这两层 memo 成立。
+  const fundIds = useMemo(() => funds.map((f) => f.id), [funds]);
+  const filters = useMemo(() => parseTxFilters(searchParams, fundIds), [searchParams, fundIds]);
+
+  /** 改筛选 = 改 URL。重建式写入：不认识的参数（如 ?foo=1）会被丢弃。 */
+  const updateFilters = (patch: Partial<TxFilters>) => {
+    setSearchParams(txFilterParams({ ...filters, ...patch }), { replace: true });
+  };
 
   const filteredTxs = useMemo(() => {
-    let list = [...transactions];
-    if (filterFund) list = list.filter((t) => t.fundId === filterFund);
-    if (filterType) list = list.filter((t) => t.type === filterType);
-    if (pendingOnly) list = list.filter((t) => t.status === 'pending');
-    return list.sort((a, b) => b.date.localeCompare(a.date));
-  }, [transactions, filterFund, filterType, pendingOnly]);
+    // filterTransactions 返回新数组，排序在上面做 —— 不动 store 里的 transactions
+    return filterTransactions(transactions, filters).sort((a, b) => b.date.localeCompare(a.date));
+  }, [transactions, filters]);
 
   // 汇总：用于表头上方的"本页统计"条（不区分 confirmed/pending，与过滤后列表口径一致）
   const summary = useMemo(() => {
@@ -141,7 +153,7 @@ export default function Transactions() {
       title="交易记录"
       extra={
         <Space>
-          {filterFund && (
+          {filters.fundId && (
             <Button icon={<ImportOutlined />} onClick={() => setInitModalOpen(true)}>
               补登初始持仓
             </Button>
@@ -211,8 +223,8 @@ export default function Transactions() {
           allowClear
           placeholder="筛选基金"
           style={{ width: 160 }}
-          value={filterFund || undefined}
-          onChange={(v) => setFilterFund(v ?? '')}
+          value={filters.fundId || undefined}
+          onChange={(v) => updateFilters({ fundId: v ?? '' })}
         >
           {funds.map((f) => (
             <Select.Option key={f.id} value={f.id}>{f.name}</Select.Option>
@@ -222,16 +234,34 @@ export default function Transactions() {
           allowClear
           placeholder="筛选类型"
           style={{ width: 120 }}
-          value={filterType || undefined}
-          onChange={(v) => setFilterType(v ?? '')}
+          value={filters.type || undefined}
+          onChange={(v) => updateFilters({ type: (v ?? '') as TxFilters['type'] })}
         >
           {Object.entries(TRANSACTION_TYPE_LABELS).map(([key, label]) => (
             <Select.Option key={key} value={key}>{label}</Select.Option>
           ))}
         </Select>
-        <Checkbox checked={pendingOnly} onChange={(e) => setPendingOnly(e.target.checked)}>
-          仅看未确认
-        </Checkbox>
+        {/* status 是三态（全部 / 已确认 / 未确认）——二值 Checkbox 表达不了
+            「只看已确认」。?status=pending 是既有契约（首页「去确认」按钮在用）。 */}
+        <Select
+          allowClear
+          placeholder="确认状态"
+          style={{ width: 120 }}
+          value={filters.status || undefined}
+          onChange={(v) => updateFilters({ status: (v ?? '') as TxStatusFilter })}
+        >
+          <Select.Option value="confirmed">已确认</Select.Option>
+          <Select.Option value="pending">未确认</Select.Option>
+        </Select>
+        {filters.date && (
+          <Tag
+            closable
+            onClose={() => updateFilters({ date: '' })}
+            style={{ marginInlineEnd: 0 }}
+          >
+            日期 {filters.date}
+          </Tag>
+        )}
       </Space>
 
       <Table dataSource={filteredTxs} columns={columns} rowKey="id" pagination={{ pageSize: 20 }} />
@@ -243,7 +273,7 @@ export default function Transactions() {
       />
 
       <InitialPositionModal
-        fundId={filterFund || null}
+        fundId={filters.fundId || null}
         open={initModalOpen}
         onClose={() => setInitModalOpen(false)}
       />
