@@ -14,7 +14,7 @@
 
 - **只用 node 环境 vitest**（`vite.config.ts` 的 `include: ['src/**/*.test.ts']`、`environment: 'node'`）。不引入 jsdom / @testing-library。
 - **不碰 `Transaction` 类型与任何持久化结构**。
-- **不改任何金额计算口径**——只让两处本来就该相等的公式显式对齐（落地页分红公式改成 `Math.max(...)`，与 `calcDividendTotal` 逐字一致）。
+- **不改任何金额计算口径**——只把「这笔分红值多少钱」收成**一个实现**：抽出共享的 `dividendValue(tx)`（`src/utils/calculator.ts`），三处（首页卡片的 `calcDividendTotal`、年化的 `calcXIRR`、落地页的分红统计条）都走它。**不要**把落地页改成无条件 `Math.max(...)` —— `calcDividendTotal` 是 `amount > 0` 早退结构，那会造出第三种写法，正是本计划要消灭的分叉。
 - **`noUncheckedIndexedAccess: true`**（`tsconfig.app.json:18`）——判"某键是否存在"一律用 `Object.prototype.hasOwnProperty.call(...)`，不能靠索引取值判空。
 - **日期用本地时区**——用 `utils/formatter.ts` 的 `today()`，**不用** `toISOString()`（那是 UTC，UTC+8 早上 8 点前会算错一天）。
 - **「待确认」判定只有一个定义**——`isPendingTx()`（本计划 Task 1 抽出），任何地方判断 confirmed 都用 `!isPendingTx(tx)`，**不用** `t.status === 'confirmed'`（`Transaction.status` 是可选字段，初始持仓与旧数据没有它）。
@@ -27,7 +27,7 @@
 
 | 文件 | 动作 | 职责 |
 |---|---|---|
-| `src/utils/calculator.ts` | 改 | 导出 `isPendingTx()`；`onlyConfirmed` 改用它 |
+| `src/utils/calculator.ts` | 改 | 导出 `isPendingTx()`（`onlyConfirmed` 改用它）；导出 `dividendValue()`（分红金额的唯一实现，三处共用） |
 | `src/utils/platformImport.ts` | 改 | 第 177 行 confirmed 判定改用 `isPendingTx` |
 | `src/refresh/refreshCycle.ts` | 改 | 第 154 行 pending 判定改用 `isPendingTx` |
 | `src/utils/calculator.test.ts` | 改 | 补 `isPendingTx` 与 `onlyConfirmed` 一致性的测试 |
@@ -850,16 +850,50 @@ filters 与 fundIds 都用 useMemo：filters 若是每次渲染的新对象 → 
 ## Task 5: `Transactions.tsx` —— 数字对齐
 
 **Files:**
+- Modify: `src/utils/calculator.ts`（新增 `dividendValue()` 导出；`calcDividendTotal` / `calcXIRR` 改走它）
 - Modify: `src/pages/Transactions.tsx:7`（import）、`:40-49`（summary）、`:155`（统计条上方插入提示）
 
 **Interfaces:**
-- Consumes: `calcTodayInvested(transactions, dcaPlans)`（`src/utils/calculator.ts:459`）、`today()`（`src/utils/formatter.ts:26`）
+- Consumes: `calcTodayInvested(transactions, dcaPlans)`（`src/utils/calculator.ts:459`）、`dividendValue(tx: Transaction): number`（`src/utils/calculator.ts`，本任务新增）、`today()`（`src/utils/formatter.ts:26`）
 
-**为什么:** 卡片数字 ≡ 落地页合计，是本次改造的核心约束。两处要动：落地页分红公式与 `calcDividendTotal` 写法不同；「待执行定投」在落地页看不到。
+**为什么:** 卡片数字 ≡ 落地页合计，是本次改造的核心约束。两处要动：落地页分红公式与 `calcDividendTotal` 写法不同（→ 抽出共享的 `dividendValue(tx)`，**不是**把落地页改成无条件 `Math.max`）；「待执行定投」在落地页看不到。
 
-- [ ] **Step 1: 改分红公式，与 `calcDividendTotal` 逐字一致**
+- [ ] **Step 1: 抽出共享的 `dividendValue(tx)`，落地页改走它**
 
-`src/pages/Transactions.tsx` 的 summary 里这一行：
+**先在 `src/utils/calculator.ts` 加一个导出**（放在 `calcDividendTotal` 前面）：
+
+```ts
+/**
+ * 一笔分红折算成金额 —— 现金分红取 amount，红利再投资取 shares × nav。
+ *
+ * 全项目对「这笔分红值多少钱」只有这一个实现：首页「累计分红」卡片
+ * （calcDividendTotal）、年化 XIRR（calcXIRR）、交易记录页的分红统计条
+ * 都走它。写成三份就等着分叉。
+ */
+export function dividendValue(tx: Transaction): number {
+  return tx.amount > 0 ? tx.amount : Math.max(tx.amount, tx.shares * tx.nav);
+}
+```
+
+`calcDividendTotal` 改成：
+
+```ts
+export function calcDividendTotal(transactions: Transaction[]): number {
+  return onlyConfirmed(transactions)
+    .filter((tx) => tx.type === 'dividend')
+    .reduce((sum, tx) => sum + dividendValue(tx), 0);
+}
+```
+
+`calcXIRR` 里的分红那一行改成：
+
+```ts
+    else if (tx.type === 'dividend') amount = dividendValue(tx);
+```
+
+**然后**改 `src/pages/Transactions.tsx` 的 summary（import 区加
+`import { calcTodayInvested, dividendValue } from '../utils/calculator';`），
+这一行：
 
 ```tsx
       else { dividendCount++; dividendAmount += tx.amount > 0 ? tx.amount : tx.shares * tx.nav; }
@@ -868,10 +902,15 @@ filters 与 fundIds 都用 useMemo：filters 若是每次渲染的新对象 → 
 改成：
 
 ```tsx
-      // 与 calcDividendTotal 逐字一致（Math.max）——首页「累计分红」卡片走的是
-      // 那一个，两处写法不同的话将来会给出不同数字
-      else { dividendCount++; dividendAmount += Math.max(tx.amount, tx.shares * tx.nav); }
+      // 分红金额走 `dividendValue` —— 与首页卡片（calcDividendTotal）、年化 XIRR
+      // （calcXIRR）同一个实现（utils/calculator.ts）。三处各写一遍就等着分叉。
+      else { dividendCount++; dividendAmount += dividendValue(tx); }
 ```
+
+> ⚠️ **不要**把落地页改成无条件 `Math.max(tx.amount, tx.shares * tx.nav)`。
+> `calcDividendTotal` 是 `amount > 0` 早退结构，两者**不等价** —— 无条件
+> `Math.max` 会在「`amount > 0` 且 `shares × nav > amount`」区间给出不同的数。
+> 正确方向是抽出共享的 `dividendValue(tx)`，三处都走它。
 
 - [ ] **Step 2: 算「待执行定投」提示**
 
@@ -958,9 +997,10 @@ git commit -m "fix(transactions): 数字对齐 —— 分红公式与卡片一�
 两处让「卡片数字 ≡ 落地页合计」成立：
 
 1. 分红公式写法不同。落地页用 amount > 0 ? amount : shares*nav，首页
-   calcDividendTotal 用 Math.max(amount, shares*nav)。真实数据上一致（红利
-   再投资的 amount ≡ shares × nav），但写法不同 —— 将来若出现 amount > 0 且
-   shares × nav > amount 的分红，两边会给出不同数字。改成逐字一致。
+   calcDividendTotal 也是 amount > 0 早退、但 calcXIRR 用的是无条件
+   Math.max(amount, shares*nav) —— 三份拼写 = 分叉在等着。抽出共享的
+   dividendValue(tx)（amount > 0 早退），三处都走它。注意不要把落地页改成
+   无条件 Math.max：那是第三种写法，与 calcDividendTotal 并不等价。
 
 2. 「待执行定投」在落地页看不到。卡片合计含今日应执行但尚未产生交易的定投，
    落地页只有真实交易 —— 当天只有定投没有手动买入时会显示「买入 0 笔 / ¥0.00」，

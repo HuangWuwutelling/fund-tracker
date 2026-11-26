@@ -239,18 +239,38 @@ if (!fundId) return;          // ← 只判空，不判存在
 
 | 卡片 | 卡片数字 | 落地页 | 筛选词 | 对齐 |
 |---|---|---|---|---|
-| 累计分红 | `calcDividendTotal` = 已确认分红的 `Math.max(amount, shares × nav)` | 分红统计条 | `?type=dividend&status=confirmed` | ✅ 需把落地页公式对齐（见下） |
-| 今日投入 | `todayInvested.txAmount` = 今天的买入（**含待确认**） | 买入统计条 | `?date=X&type=buy` | ✅ |
+| 累计分红 | `calcDividendTotal` = 已确认分红之和，单笔走 `dividendValue(tx)` | 分红统计条（同样走 `dividendValue(tx)`） | `?type=dividend&status=confirmed` | ✅ 三处同一个实现（见下） |
+| 今日投入 | 卡片**大字** = `todayInvested.total`（交易 + 待执行定投）；卡片**副标题的「交易」数** = `todayInvested.txAmount` | 买入统计条 = 今天的买入合计（**含待确认**） | `?date=X&type=buy` | ✅ 副标题的「交易」数 ≡ 落地页买入合计 |
 
-**落地页分红公式要显式对齐**：`Transactions.tsx:46` 现在写的是
-`tx.amount > 0 ? tx.amount : tx.shares * tx.nav`，而 `calcDividendTotal` 用的是
-`Math.max(tx.amount, tx.shares * tx.nav)`。真实数据上一致（红利再投资的
-`amount ≡ shares × nav`），但**写法不同**——将来若出现 `amount > 0` 且
-`shares × nav > amount` 的分红，两边会给出不同数字。改成逐字一致：
+**不变式（准确表述）**：
+
+> 卡片**副标题的「交易」数** ≡ 落地页买入合计；卡片**大字**是含待执行定投的当日
+> 总投入，落地页用一条提示说明差额。
+
+卡片大字**不能**等于落地页合计 —— 它含「今日应执行但尚未产生交易」的定投，
+落地页列表里没有那些记录。差额由落地页的提示条说清楚。
+
+**分红金额只有一个实现**：三处 —— 首页卡片的 `calcDividendTotal`
+（`src/utils/calculator.ts`）、年化的 `calcXIRR`（同文件）、落地页的分红统计条
+（`src/pages/Transactions.tsx`）—— 都走 `dividendValue(tx)`：
 
 ```ts
-dividendAmount += Math.max(tx.amount, tx.shares * tx.nav);
+// src/utils/calculator.ts
+export function dividendValue(tx: Transaction): number {
+  return tx.amount > 0 ? tx.amount : Math.max(tx.amount, tx.shares * tx.nav);
+}
 ```
+
+口径是 **`amount > 0` 早退**，不是无条件 `Math.max`。
+
+> ⚠️ `calcDividendTotal` 是 `amount > 0` 早退结构，**不是**无条件 `Math.max`。
+> 把落地页"改成无条件 `Math.max` 以对齐 `calcDividendTotal`"是**改错方向** ——
+> 那会造出第三种写法，正是本设计要消灭的分叉。正确做法是抽出共享的
+> `dividendValue(tx)`，三处都走它。
+
+`amount > 0` 早退的理由：`amount` 恒为**扣费前**的真实成交额，红利再投资的
+`amount` 由**未舍入**份额算出，比舍入到 4 位的 `shares × nav` 略大一点点 ——
+无条件 `Math.max` 会把那个舍入差也算进去。
 
 **「待执行定投」的差额在落地页也要说一句**：卡片合计含「今日应执行但尚未产生交易」的
 定投计划。若当天只有定投计划、没有手动买入，落地页会显示「买入 0 笔 / ¥0.00」——
@@ -342,5 +362,5 @@ UI 层（点击跳转、标签清除、Select 同步、待执行定投提示）�
 | 落地页对"待执行定投"一无所知，会显示「买入 0 笔」 | 落地页加提示，数据复用 `calcTodayInvested` |
 | `status=confirmed` 若写成 `=== 'confirmed'` 会漏掉 status 未设的记录 | 抽 `isPendingTx`，与 `onlyConfirmed` 逐字一致 |
 | `filters` 未规定 memo，会引入新的全量重渲染 | 明确 memo 写法 |
-| 落地页分红公式与 `calcDividendTotal` 写法不同 | 显式对齐 |
+| 落地页分红公式与 `calcDividendTotal` 写法不同 | 抽出共享的 `dividendValue(tx)`，三处都走它（**不是**把落地页改成无条件 `Math.max`） |
 | `noUncheckedIndexedAccess` 下索引取值判空不可靠 | 用 `hasOwnProperty` |
