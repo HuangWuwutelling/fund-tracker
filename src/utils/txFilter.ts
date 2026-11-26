@@ -101,6 +101,11 @@ export function filterTransactions(txs: Transaction[], f: TxFilters): Transactio
  *
  * 这是**重建式**写入：URL 里本模块不认识的参数（如 ?foo=1）会在用户动任何筛选后
  * 消失 —— "URL 词汇是封闭集合"的必然结果，不是 bug。
+ *
+ * ⚠️ 往返幂等**只对账本里存在的 fundId 成立**：`parseTxFilters` 会把账本里不存在的
+ * fund **丢弃**（当没传），这是**设计性**的 —— 未知 fund 会驱动「补登初始持仓」
+ * 入口，放行等于允许写出孤儿交易。所以 `parse(txFilterParams(f))` 对未知的
+ * `f.fundId` 不等于 `f`，而是等于 `{ ...f, fundId: '' }`。
  */
 export function txFilterParams(f: TxFilters): Record<string, string> {
   const out: Record<string, string> = {};

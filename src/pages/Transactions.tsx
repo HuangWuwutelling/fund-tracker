@@ -6,7 +6,7 @@ import { useStore } from '../stores';
 import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
 import { formatMoney, formatDate, pnlColor, today } from '../utils/formatter';
 import { confirmPendingTx } from '../utils/autoConfirm';
-import { calcTodayInvested } from '../utils/calculator';
+import { calcTodayInvested, dividendValue } from '../utils/calculator';
 import TransactionFormModal from '../components/TransactionFormModal';
 import InitialPositionModal from '../components/InitialPositionModal';
 import NavLink from '../components/NavLink';
@@ -50,16 +50,25 @@ export default function Transactions() {
   }, [transactions, filters]);
 
   /**
+   * 组件级的「今天」。**不能**在下面的 memo 内部调 `today()`：标签页跨零点
+   * 开着时，memo 里的 `today()` 是陈旧的（memo 不重算），`filters.date`
+   * （昨天）仍等于那个陈旧值 → 提示会对着昨天说"今日另有 ¥X 定投计划待执行"。
+   * 提到组件级 + 进 deps：跨零点后值变了 → memo 重算 → 提示正确地消失。
+   * （与 `Dashboard.tsx` 的 `todayStr` 同一手法。）
+   */
+  const todayStr = today();
+
+  /**
    * 「待执行定投」提示。首页「今日投入」卡片的合计含「今日应执行但尚未产生交易」的
    * 定投计划 —— 落地页只有真实交易，若当天只有定投没有手动买入，这里会显示
    * 「买入 0 笔 / ¥0.00」，用户会以为定投没跑。数据复用 calcTodayInvested 的
    * planAmount（与卡片同一份计算，不另写一遍）。
    */
   const pendingDcaHint = useMemo(() => {
-    if (!filters.date || filters.date !== today()) return null;
+    if (!filters.date || filters.date !== todayStr) return null;
     const { planAmount } = calcTodayInvested(transactions, dcaPlans);
     return planAmount > 0 ? planAmount : null;
-  }, [filters.date, transactions, dcaPlans]);
+  }, [filters.date, todayStr, transactions, dcaPlans]);
 
   // 汇总：用于表头上方的"本页统计"条（不区分 confirmed/pending，与过滤后列表口径一致）
   const summary = useMemo(() => {
@@ -68,10 +77,9 @@ export default function Transactions() {
     for (const tx of filteredTxs) {
       if (tx.type === 'buy') { buyCount++; buyAmount += tx.amount; }
       else if (tx.type === 'sell') { sellCount++; sellAmount += tx.amount - tx.fee; }
-      // 与 calcDividendTotal（calculator.ts:174）的表达式逐字一致：它 amount>0 早退，
-      // 只有 amount=0 才走 Math.max。落地页必须用同一个表达式，否则将来有人把其中
-      // 一边"简化"成无条件 Math.max，两边的分红合计就会分叉。
-      else { dividendCount++; dividendAmount += tx.amount > 0 ? tx.amount : Math.max(tx.amount, tx.shares * tx.nav); }
+      // 分红金额走 `dividendValue` —— 与首页卡片（calcDividendTotal）、年化 XIRR
+      // （calcXIRR）同一个实现（utils/calculator.ts）。三处各写一遍就等着分叉。
+      else { dividendCount++; dividendAmount += dividendValue(tx); }
     }
     return { buyCount, sellCount, dividendCount, buyAmount, sellAmount, dividendAmount, net: buyAmount - sellAmount };
   }, [filteredTxs]);
@@ -249,7 +257,7 @@ export default function Transactions() {
           placeholder="筛选基金"
           style={{ width: 160 }}
           value={filters.fundId || undefined}
-          onChange={(v) => updateFilters({ fundId: v ?? '' })}
+          onChange={(v: string | undefined) => updateFilters({ fundId: v ?? '' })}
         >
           {funds.map((f) => (
             <Select.Option key={f.id} value={f.id}>{f.name}</Select.Option>
@@ -260,7 +268,7 @@ export default function Transactions() {
           placeholder="筛选类型"
           style={{ width: 120 }}
           value={filters.type || undefined}
-          onChange={(v) => updateFilters({ type: (v ?? '') as TxFilters['type'] })}
+          onChange={(v: string | undefined) => updateFilters({ type: (v ?? '') as TxFilters['type'] })}
         >
           {Object.entries(TRANSACTION_TYPE_LABELS).map(([key, label]) => (
             <Select.Option key={key} value={key}>{label}</Select.Option>
@@ -273,7 +281,7 @@ export default function Transactions() {
           placeholder="确认状态"
           style={{ width: 120 }}
           value={filters.status || undefined}
-          onChange={(v) => updateFilters({ status: (v ?? '') as TxStatusFilter })}
+          onChange={(v: string | undefined) => updateFilters({ status: (v ?? '') as TxStatusFilter })}
         >
           <Select.Option value="confirmed">已确认</Select.Option>
           <Select.Option value="pending">未确认</Select.Option>

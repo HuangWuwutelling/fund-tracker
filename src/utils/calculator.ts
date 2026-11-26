@@ -6,9 +6,20 @@ import dayjs from 'dayjs';
 /**
  * 交易是否处于「待确认」状态。
  *
- * 全项目判断「已确认」的依据都走这里 —— **不要**写 `t.status === 'confirmed'`：
+ * 判断「**已确认**」的依据都走这里 —— **不要**写 `t.status === 'confirmed'`：
  * `Transaction.status` 是可选字段，初始持仓（InitialPositionModal 建的那笔）
  * 和旧数据都没有它，用 `=== 'confirmed'` 会把它们误判成未确认。
+ *
+ * 范围**只限「已确认」这一侧**：「待确认」那侧的展示判断仍直接读
+ * `tx.status === 'pending'`（`Dashboard.tsx` / `FundDetail.tsx` /
+ * `Transactions.tsx` / `TransactionFormModal.tsx` / `txAudit.ts` 共 5 处）——
+ * 那些地方读的就是字面状态，不涉及"未设 status 算不算已确认"的歧义。
+ *
+ * ⚠️ **不要**把那 5 处反过来换成 `isPendingTx`，也**不要**把
+ * `txFormModel.ts` 与 `TransactionFormModal.tsx` 里另外 3 处
+ * `status === 'pending'` 换掉 —— 那 3 处比的是**局部变量**
+ * （`buildTxDraft` 算出来的局部 `status`、以及 `draft.status`），
+ * 不是 `tx.status` —— 换掉会让份额 / 金额算错。
  */
 export function isPendingTx(tx: Transaction): boolean {
   return tx.status === 'pending';
@@ -166,19 +177,30 @@ export function calcLatestNavPnl(
 }
 
 /**
+ * 一笔分红折算成金额 —— 现金分红取 amount，红利再投资取 shares × nav。
+ *
+ * 全项目对「这笔分红值多少钱」只有这一个实现：首页「累计分红」卡片
+ * （calcDividendTotal）、年化 XIRR（calcXIRR）、交易记录页的分红统计条
+ * 都走它。写成三份就等着分叉。
+ *
+ * 口径是 `amount > 0` 早退（不是无条件 `Math.max`）：`amount` 恒为**扣费前**
+ * 的真实成交额，红利再投资的 amount 由**未舍入**份额算出，比舍入后的
+ * `shares × nav` 略大一点点 —— 无条件 `Math.max` 会把那个舍入差也算进去。
+ */
+export function dividendValue(tx: Transaction): number {
+  return tx.amount > 0 ? tx.amount : Math.max(tx.amount, tx.shares * tx.nav);
+}
+
+/**
  * 累计分红金额（所有 dividend 类型交易）
  * - 现金分红：amount = 现金金额, shares = 0
  * - 红利再投资：amount = 0, shares = 再投资份额（×nav 折算）
- * 取 amount 优先；amount=0 时用 shares × nav
+ * 单笔分红值多少 → `dividendValue()`（全项目唯一实现）
  */
 export function calcDividendTotal(transactions: Transaction[]): number {
   return onlyConfirmed(transactions)
     .filter((tx) => tx.type === 'dividend')
-    .reduce((sum, tx) => {
-      if (tx.amount > 0) return sum + tx.amount;
-      // 红利再投资：amount 在保存时已经 = shares × nav，所以这里 max(amount, shares) 都能命中
-      return sum + Math.max(tx.amount, tx.shares * tx.nav);
-    }, 0);
+    .reduce((sum, tx) => sum + dividendValue(tx), 0);
 }
 
 /**
@@ -186,7 +208,7 @@ export function calcDividendTotal(transactions: Transaction[]): number {
  * 约定（fee 内扣）:
  *   - 买入: 用户总付出 = amount，现金流 = -amount
  *   - 卖出: 用户净收入 = amount - fee，现金流 = +(amount - fee)
- *   - 分红: 现金流 = +amount（或 +shares，取较大值，兼容现金分红/红利再投资）
+ *   - 分红: 现金流 = +dividendValue(tx)（现金分红取 amount，红利再投资取 shares × nav）
  *   - currentValue 作为终值（正现金流）
  * 返回: 年化收益率(百分比,例如 12.5 表示 12.5%);无数据或不收敛返回 0
  */
@@ -199,8 +221,9 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
     let amount = 0;
     if (tx.type === 'buy') amount = -tx.amount; // fee 内扣：用户总付出就是 amount
     else if (tx.type === 'sell') amount = tx.amount - tx.fee;
-    // 分红：与 calcDividendTotal 对齐——amount=0 时用 shares × nav 折算红利再投资
-    else if (tx.type === 'dividend') amount = Math.max(tx.amount, tx.shares * tx.nav);
+    // 分红：与 calcDividendTotal 同一个实现（dividendValue）——现金分红取 amount，
+    // 红利再投资取 shares × nav
+    else if (tx.type === 'dividend') amount = dividendValue(tx);
     if (amount !== 0) {
       flows.push({ t: new Date(tx.date).getTime(), amount });
     }
