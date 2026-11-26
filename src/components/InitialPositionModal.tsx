@@ -97,7 +97,12 @@ export default function InitialPositionModal({ fundId, open, onClose }: Props) {
   );
 
   const handleOk = async () => {
-    if (!fundId) return;
+    // 基金必须真实存在 —— fundId 会从 URL 来（交易记录页的筛选参数），
+    // 未知 id 写进去就是一条孤儿交易：持仓计算、交易自检、平台对账全部对不上。
+    if (!fundId || !fund) {
+      message.error('基金不存在，无法设置初始持仓');
+      return;
+    }
     try {
       const values = await form.validateFields();
       const shares = values.shares as number;
