@@ -562,13 +562,16 @@ status 做成三态（'' / pending / confirmed）：此前 URL 无法表达「�
 Run: `npm run build`
 Expected: 构建成功（`fund` 已在组件作用域内，第 38 行）
 
-- [ ] **Step 3: 手工验证（无 DOM 测试基建）**
+- [ ] **Step 3: 确认守卫已就位（完整验证在 Task 4 之后）**
 
-Run: `npm run dev`，然后：
-1. 浏览器地址栏输入 `http://localhost:5173/fund-tracker/transactions?fund=999999`
-2. 预期：「补登初始持仓」按钮**不出现**（Task 4 的 `parseTxFilters` 会把未知 fundId 忽略 → `filters.fundId` 为空）
-3. 注：本步的真正防线在 Task 4 的 URL 校验；本步守的是「即使 fundId 从别的路径
-   变成未知值，也不写出孤儿交易」
+本任务的守卫是**写入路径**的防御（"即使 fundId 从哪来是未知值，也不写出孤儿
+交易"）。触发路径要等 Task 4 把 `fund` 变成 URL 参数后才存在 —— 完整的手工验证
+放在 Task 4 的验证清单第 10 条。
+
+本步只做一件事：确认改动没破坏现有调用方。
+
+Run: `npm run build && npm test`
+Expected: 全部通过（FundDetail / FundList 两个入口传的是真实 fundId，行为不变）
 
 - [ ] **Step 4: 提交**
 
@@ -818,6 +821,7 @@ Run: `npm run dev`，然后：
 7. 刷新页面 → 筛选保持
 8. 直接访问 `/fund-tracker/transactions?type=foo` → 「筛选类型」为空，列表显示全部（无效参数被忽略，不是 0 条死胡同）
 9. 直接访问 `/fund-tracker/transactions?date=2026-13-45` → 无「日期」标签，列表显示全部
+10. 直接访问 `/fund-tracker/transactions?fund=999999` → 「筛选基金」为空，「补登初始持仓」按钮**不出现**（Task 3 的写入守卫也守住了另一条路）
 
 - [ ] **Step 9: 提交**
 
