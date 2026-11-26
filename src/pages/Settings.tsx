@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import type { CSSProperties } from 'react';
-import { Card, Collapse, Table, Button, Input, Switch, Space, message, Popconfirm, Typography, Modal, Select } from 'antd';
+import { Alert, Card, Collapse, Table, Button, Input, Switch, Space, message, Popconfirm, Typography, Modal, Select } from 'antd';
 import { PlusOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, ReloadOutlined, SaveOutlined, AuditOutlined, ImportOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useStore } from '../stores';
+import { checkBackup, type CurrentBackupData } from '../utils/backupCheck';
 import type { Platform, Settings } from '../types';
 import type { UsQdiiFilterMode } from '../utils/navPair';
 import * as storage from '../utils/storage';
@@ -24,7 +25,7 @@ import {
 
 
 export default function Settings() {
-  const { platforms, funds, settings, addPlatform, removePlatform, updateSettings, exportData, importData, resetNavHistory, reclassifyFunds } = useStore();
+  const { platforms, funds, transactions, dcaPlans, snapshots, settings, addPlatform, removePlatform, updateSettings, exportData, importData, resetNavHistory, reclassifyFunds } = useStore();
   const [newPlatformName, setNewPlatformName] = useState('');
   const [resetTarget, setResetTarget] = useState<string | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -202,45 +203,6 @@ export default function Settings() {
     });
   };
 
-/** 校验导入的备份 JSON 是否结构合法；返回 ok=true 或错误描述 */
-function validateBackup(data: unknown): { ok: true } | { ok: false; error: string } {
-  if (typeof data !== 'object' || data === null) {
-    return { ok: false, error: '顶层必须是对象' };
-  }
-  const d = data as Record<string, unknown>;
-
-  if (!Array.isArray(d.platforms)) return { ok: false, error: 'platforms 必须是数组' };
-  if (!Array.isArray(d.funds)) return { ok: false, error: 'funds 必须是数组' };
-  if (!Array.isArray(d.transactions)) return { ok: false, error: 'transactions 必须是数组' };
-  if (!Array.isArray(d.dcaPlans)) return { ok: false, error: 'dca-plans 必须是数组' };
-
-  // 校验关键字段类型（snapshot/settings 可选，但若存在需正确）
-  for (const p of d.platforms) {
-    if (typeof p !== 'object' || p === null || typeof (p as Record<string, unknown>).id !== 'string' || typeof (p as Record<string, unknown>).name !== 'string') {
-      return { ok: false, error: 'platforms 中存在格式不正确的条目' };
-    }
-  }
-  for (const f of d.funds) {
-    if (typeof f !== 'object' || f === null || typeof (f as Record<string, unknown>).id !== 'string') {
-      return { ok: false, error: 'funds 中存在格式不正确的条目' };
-    }
-  }
-  for (const t of d.transactions) {
-    if (typeof t !== 'object' || t === null || typeof (t as Record<string, unknown>).id !== 'string') {
-      return { ok: false, error: 'transactions 中存在格式不正确的条目' };
-    }
-  }
-
-  if (d.snapshots !== undefined && !Array.isArray(d.snapshots)) {
-    return { ok: false, error: 'snapshots 必须是数组' };
-  }
-  if (d.navHistories !== undefined && (typeof d.navHistories !== 'object' || d.navHistories === null)) {
-    return { ok: false, error: 'navHistories 必须是对象' };
-  }
-
-  return { ok: true };
-}
-
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -255,25 +217,57 @@ function validateBackup(data: unknown): { ok: true } | { ok: false; error: strin
         message.error('文件解析失败：不是有效的 JSON');
         return;
       }
-      const validation = validateBackup(data);
-      if (!validation.ok) {
-        message.error(`无效的备份文件：${validation.error}`);
+      // 预检：版本 / 逐表结构 / 与当前数据的差异
+      const report = checkBackup(data, {
+        platforms, funds, transactions, dcaPlans, snapshots,
+      } satisfies CurrentBackupData);
+
+      const errors = report.issues.filter((i) => i.level === 'error');
+      if (!report.ok) {
+        const first = errors.slice(0, 3).map((i) => `${i.table}${i.index ? ` 第 ${i.index} 条` : ''}：${i.message}`);
+        message.error(`备份文件有问题，未导入：${first.join('；')}${errors.length > 3 ? ` 等 ${errors.length} 处` : ''}`, 8);
         return;
       }
-      // 二次确认：导入会覆盖所有现有数据
+      const warnings = report.issues.filter((i) => i.level === 'warn');
+      const diff = report.diff;
+
+      // 二次确认：导入会覆盖所有现有数据——**先告诉用户会冲掉什么**
       Modal.confirm({
         title: '确认导入数据？',
         icon: <ExclamationCircleOutlined />,
         content: (
           <div>
             <p>导入将覆盖当前所有数据：</p>
-            <ul>
-              <li>平台：{(data as { platforms?: unknown[] }).platforms?.length ?? 0} 个</li>
-              <li>基金：{(data as { funds?: unknown[] }).funds?.length ?? 0} 个</li>
-              <li>交易：{(data as { transactions?: unknown[] }).transactions?.length ?? 0} 笔</li>
-              <li>定投计划：{(data as { dcaPlans?: unknown[] }).dcaPlans?.length ?? 0} 个</li>
-              <li>快照：{(data as { snapshots?: unknown[] }).snapshots?.length ?? 0} 条</li>
-            </ul>
+            <table style={{ width: '100%', marginBottom: 8 }}>
+              <thead>
+                <tr><th style={{ textAlign: 'left' }}></th><th style={{ textAlign: 'right' }}>当前</th><th style={{ textAlign: 'right' }}>备份</th></tr>
+              </thead>
+              <tbody>
+                {diff?.tables.map((t) => (
+                  <tr key={t.table}>
+                    <td>{t.table}</td>
+                    <td style={{ textAlign: 'right' }}>{t.current}</td>
+                    <td style={{ textAlign: 'right' }}>{t.incoming}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {diff && diff.fundsLost.length > 0 && (
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginBottom: 8 }}
+                message={`${diff.fundsLost.length} 只基金不在备份里，导入后会消失`}
+                description={
+                  `基金 ${diff.fundsLost.join('、')}，连同它们的 ${diff.transactionsLostWithFunds} 笔交易` +
+                  `（以及净值历史、定投计划）都会从本设备消失。` +
+                  `如果这份备份不是最新的，先导出当前数据再导入。`
+                }
+              />
+            )}
+            {warnings.map((w, i) => (
+              <Alert key={i} type="warning" showIcon style={{ marginBottom: 8 }} message={w.message} />
+            ))}
             <p style={{ color: '#cf1322' }}>此操作不可撤销，建议先导出当前数据作为备份。</p>
           </div>
         ),

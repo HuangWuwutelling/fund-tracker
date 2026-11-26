@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { runRefreshCycle, type RefreshDeps } from './refreshCycle';
+import { today as localToday } from '../utils/formatter';
 import type { NavRecord, Transaction } from '../types';
 
 /**
@@ -147,7 +148,10 @@ describe('runRefreshCycle —— 顺序约束', () => {
 
 describe('runRefreshCycle —— 确认的判定', () => {
   it('当天的待确认不动（等用户手动确认）', async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    // 用应用自己的 today()（**本地时区**），不能用 toISOString（UTC）——
+    // UTC+8 的 00:00–08:00 两者差一天，会让"当天的待确认"变成"昨天的待确认"，
+    // 于是被当成可确认的旧交易。这个坑 CLAUDE.md 里点名记过。
+    const today = localToday();
     const { deps, log } = makeDeps({
       pendingTransactions: () => [pendingTx({ id: 'p2', date: today })],
       navOf: () => [{ date: today, nav: 1.048, accNav: 1.048 }],
