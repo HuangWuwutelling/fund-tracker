@@ -78,9 +78,12 @@ export default function Dashboard() {
     () => calcXIRR(transactions, totals.totalValue),
     [transactions, totals.totalValue]
   );
+  // deps 必须含 todayStr —— transactions 只在增删改时换引用（stores/index.ts:313），
+  // 30 分钟净值 tick 不动它。少了 todayStr，跨零点后卡片仍是昨天的数，
+  // 而链接指向今天 → 落地页 0 条。
   const todayInvested = useMemo(
     () => calcTodayInvested(transactions, dcaPlans),
-    [transactions, dcaPlans]
+    [transactions, dcaPlans, todayStr]
   );
 
   /* ============================================================
@@ -422,7 +425,11 @@ export default function Dashboard() {
       {/* ===== 次要指标（3 个，简化为一行小卡） ===== */}
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} sm={8}>
-          <Card size="small">
+          <Card
+            size="small"
+            hoverable
+            onClick={() => navigate('/transactions?type=dividend&status=confirmed')}
+          >
             <Statistic
               title="累计分红"
               value={totalDividend}
@@ -433,17 +440,25 @@ export default function Dashboard() {
           </Card>
         </Col>
         <Col xs={24} sm={8}>
-          <Tooltip title={`交易：${formatMoney(todayInvested.txAmount)}  +  定投预期：${formatMoney(todayInvested.planAmount)}`}>
-            <Card size="small">
-              <Statistic
-                title={`今日投入（${today()}）`}
-                value={todayInvested.total}
-                precision={2}
-                valueStyle={{ color: todayInvested.total > 0 ? '#1677ff' : undefined, fontWeight: 600 }}
-                prefix={<FundOutlined />}
-              />
-            </Card>
-          </Tooltip>
+          <Card
+            size="small"
+            hoverable
+            onClick={() => navigate(`/transactions?date=${todayStr}&type=buy`)}
+          >
+            <Statistic
+              title={`今日投入（${todayStr}）`}
+              value={todayInvested.total}
+              precision={2}
+              valueStyle={{ color: todayInvested.total > 0 ? '#1677ff' : undefined, fontWeight: 600 }}
+              prefix={<FundOutlined />}
+            />
+            {/* 卡片合计含「今日应执行但尚未发生的定投」—— 点进去的列表里没有对应
+                记录，差额必须自己说清楚，否则用户以为数字算错了。
+                formatMoney 不带 ¥，这里自己加。 */}
+            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+              交易 ¥{formatMoney(todayInvested.txAmount)} ｜ 待执行定投 ¥{formatMoney(todayInvested.planAmount)}
+            </div>
+          </Card>
         </Col>
         <Col xs={24} sm={8}>
           <Card
