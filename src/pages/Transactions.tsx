@@ -1,11 +1,12 @@
 import { useState, useMemo } from 'react';
-import { Card, Table, Button, Select, Tag, Space, message, Popconfirm, Statistic, Row, Col } from 'antd';
+import { Card, Table, Button, Select, Tag, Space, message, Popconfirm, Statistic, Row, Col, Alert } from 'antd';
 import { PlusOutlined, ImportOutlined } from '@ant-design/icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../stores';
 import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
-import { formatMoney, formatDate, pnlColor } from '../utils/formatter';
+import { formatMoney, formatDate, pnlColor, today } from '../utils/formatter';
 import { confirmPendingTx } from '../utils/autoConfirm';
+import { calcTodayInvested } from '../utils/calculator';
 import TransactionFormModal from '../components/TransactionFormModal';
 import InitialPositionModal from '../components/InitialPositionModal';
 import NavLink from '../components/NavLink';
@@ -20,7 +21,7 @@ import {
 import type { Transaction } from '../types';
 
 export default function Transactions() {
-  const { funds, transactions, getNavHistory, updateTransaction, removeTransaction } = useStore();
+  const { funds, transactions, dcaPlans, getNavHistory, updateTransaction, removeTransaction } = useStore();
   const navigate = useNavigate();
   const [modalOpen, setModalOpen] = useState(false);
   /** 正在编辑的交易（null = 新增）。弹窗本体在 components/TransactionFormModal.tsx */
@@ -48,6 +49,18 @@ export default function Transactions() {
     return filterTransactions(transactions, filters).sort((a, b) => b.date.localeCompare(a.date));
   }, [transactions, filters]);
 
+  /**
+   * 「待执行定投」提示。首页「今日投入」卡片的合计含「今日应执行但尚未产生交易」的
+   * 定投计划 —— 落地页只有真实交易，若当天只有定投没有手动买入，这里会显示
+   * 「买入 0 笔 / ¥0.00」，用户会以为定投没跑。数据复用 calcTodayInvested 的
+   * planAmount（与卡片同一份计算，不另写一遍）。
+   */
+  const pendingDcaHint = useMemo(() => {
+    if (!filters.date || filters.date !== today()) return null;
+    const { planAmount } = calcTodayInvested(transactions, dcaPlans);
+    return planAmount > 0 ? planAmount : null;
+  }, [filters.date, transactions, dcaPlans]);
+
   // 汇总：用于表头上方的"本页统计"条（不区分 confirmed/pending，与过滤后列表口径一致）
   const summary = useMemo(() => {
     let buyCount = 0, sellCount = 0, dividendCount = 0;
@@ -55,7 +68,10 @@ export default function Transactions() {
     for (const tx of filteredTxs) {
       if (tx.type === 'buy') { buyCount++; buyAmount += tx.amount; }
       else if (tx.type === 'sell') { sellCount++; sellAmount += tx.amount - tx.fee; }
-      else { dividendCount++; dividendAmount += tx.amount > 0 ? tx.amount : tx.shares * tx.nav; }
+      // 与 calcDividendTotal（calculator.ts:174）的表达式逐字一致：它 amount>0 早退，
+      // 只有 amount=0 才走 Math.max。落地页必须用同一个表达式，否则将来有人把其中
+      // 一边"简化"成无条件 Math.max，两边的分红合计就会分叉。
+      else { dividendCount++; dividendAmount += tx.amount > 0 ? tx.amount : Math.max(tx.amount, tx.shares * tx.nav); }
     }
     return { buyCount, sellCount, dividendCount, buyAmount, sellAmount, dividendAmount, net: buyAmount - sellAmount };
   }, [filteredTxs]);
@@ -164,6 +180,15 @@ export default function Transactions() {
         </Space>
       }
     >
+      {pendingDcaHint !== null && (
+        <Alert
+          type="info"
+          showIcon
+          message={`今日另有 ¥${formatMoney(pendingDcaHint)} 定投计划待执行，尚未产生交易记录`}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={12} sm={6} md={5}>
           <Card size="small">
