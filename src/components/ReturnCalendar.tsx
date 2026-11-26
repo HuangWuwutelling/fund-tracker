@@ -11,6 +11,7 @@ import {
 } from '../utils/reportGenerator';
 import { formatMoney, pnlColor, today } from '../utils/formatter';
 import { isNonTradingDay } from '../utils/chineseHolidays';
+import { isPendingTx } from '../utils/calculator';
 import HeatmapGrid, { type HeatmapCell } from './HeatmapGrid';
 import NavLink from './NavLink';
 import { useStore } from '../stores';
@@ -421,7 +422,7 @@ export default function ReturnCalendar() {
 
   // 用户最早一笔 confirmed 交易的日期；用于 DayView 把"建仓前"格子标 beforeHolding 隐藏 0
   const firstTxDate = useMemo(() => {
-    const confirmed = transactions.filter((t) => !t.status || t.status === 'confirmed');
+    const confirmed = transactions.filter((t) => !isPendingTx(t));
     if (confirmed.length === 0) return null;
     return confirmed.map((t) => t.date).sort()[0]!;
   }, [transactions]);

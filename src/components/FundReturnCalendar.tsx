@@ -7,6 +7,7 @@ import {
   generateMonthlyReturns,
   generateYearlyReturns,
 } from '../utils/reportGenerator';
+import { isPendingTx } from '../utils/calculator';
 import { DayView, MonthView, YearView } from './ReturnCalendar';
 import { useStore } from '../stores';
 
@@ -41,7 +42,7 @@ export default function FundReturnCalendar({ fund, transactions }: Props) {
 
   const firstTxDate = useMemo(() => {
     const confirmed = transactions.filter(
-      (t) => t.fundId === fund.id && (!t.status || t.status === 'confirmed')
+      (t) => t.fundId === fund.id && !isPendingTx(t)
     );
     if (confirmed.length === 0) return null;
     return confirmed.map((t) => t.date).sort()[0]!;

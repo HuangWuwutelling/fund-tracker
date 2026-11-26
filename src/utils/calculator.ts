@@ -3,9 +3,20 @@ import { latestNavPair, type UsQdiiFilterMode, DEFAULT_US_QDII_FILTER_MODE } fro
 import { isNonTradingDay } from './chineseHolidays';
 import dayjs from 'dayjs';
 
+/**
+ * 交易是否处于「待确认」状态。
+ *
+ * 全项目判断「已确认」的依据都走这里 —— **不要**写 `t.status === 'confirmed'`：
+ * `Transaction.status` 是可选字段，初始持仓（InitialPositionModal 建的那笔）
+ * 和旧数据都没有它，用 `=== 'confirmed'` 会把它们误判成未确认。
+ */
+export function isPendingTx(tx: Transaction): boolean {
+  return tx.status === 'pending';
+}
+
 /** 过滤掉 pending(待确认)交易;只保留 confirmed 或未设状态的(向后兼容) */
 export function onlyConfirmed(transactions: Transaction[]): Transaction[] {
-  return transactions.filter((t) => t.status !== 'pending');
+  return transactions.filter((t) => !isPendingTx(t));
 }
 
 /** 计算某只基金的持有份额（按日期排序，加法交换律保证结果正确） */

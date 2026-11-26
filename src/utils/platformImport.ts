@@ -1,4 +1,5 @@
 import type { Transaction } from '../types';
+import { isPendingTx } from './calculator';
 
 /**
  * 平台流水（对账单）解析与账本比对。
@@ -174,7 +175,7 @@ export function diffPlatformRows(
   const missing: PlatformRow[] = [];
   const mismatched: PlatformDiff['mismatched'] = [];
 
-  const ledger = transactions.filter((t) => t.fundId === fundId && t.status !== 'pending');
+  const ledger = transactions.filter((t) => t.fundId === fundId && !isPendingTx(t));
 
   for (const row of rows) {
     const candidates = ledger.filter(

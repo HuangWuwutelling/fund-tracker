@@ -11,6 +11,7 @@ import {
   calcReturn,
   calcReturnRate,
   onlyConfirmed,
+  isPendingTx,
 } from './calculator';
 import type { DcaPlan, Fund, NavRecord, Transaction } from '../types';
 
@@ -364,6 +365,26 @@ describe('calcShares —— 份额累计', () => {
       mkTx({ id: 'c', date: '2026-01-07' }), // 未设 status —— 旧数据，向后兼容
     ];
     expect(onlyConfirmed(txs).map((t) => t.id)).toEqual(['a', 'c']);
+  });
+
+  it('isPendingTx：只有 status === "pending" 才算待确认（未设 status = 已确认）', () => {
+    expect(isPendingTx(mkTx({ id: 'a', status: 'confirmed' }))).toBe(false);
+    expect(isPendingTx(mkTx({ id: 'b', status: 'pending' }))).toBe(true);
+    // 未设 status —— 初始持仓与旧数据，向后兼容
+    expect(isPendingTx(mkTx({ id: 'c' }))).toBe(false);
+  });
+
+  it('isPendingTx 与 onlyConfirmed 语义一致：判 confirmed 就是 !isPendingTx', () => {
+    // 这条是**漂移警报**不是独立验证：onlyConfirmed 本身就是用 isPendingTx 实现的，
+    // 两边不可能不一致（除非有人只改一边）。isPendingTx 自身的语义由上一条钉住。
+    const txs = [
+      mkTx({ id: 'a', date: '2026-01-05', status: 'confirmed' }),
+      mkTx({ id: 'b', date: '2026-01-06', status: 'pending' }),
+      mkTx({ id: 'c', date: '2026-01-07' }),
+    ];
+    expect(txs.filter((t) => !isPendingTx(t)).map((t) => t.id)).toEqual(
+      onlyConfirmed(txs).map((t) => t.id),
+    );
   });
 
   it('空交易列表 → 0', () => {

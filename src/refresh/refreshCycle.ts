@@ -3,6 +3,7 @@ import type { FetchFundResult } from '../api/fundApi';
 import { mergeNavTail } from '../utils/navHistoryMerge';
 import { confirmPendingTx } from '../utils/autoConfirm';
 import { today } from '../utils/formatter';
+import { isPendingTx } from '../utils/calculator';
 
 /**
  * 一轮刷新的执行体——顺序写在函数体里，不在注释里。
@@ -151,7 +152,7 @@ export async function runRefreshCycle(
   const todayStr = today();
   let confirmedCount = 0;
   for (const tx of deps.pendingTransactions()) {
-    if (tx.status !== 'pending') continue;
+    if (!isPendingTx(tx)) continue;
     // 当天与未来的待确认不动——T+1 净值还没发布，用户自己确认更稳
     if (tx.date >= todayStr) continue;
     const result = confirmPendingTx(tx, deps.navOf(tx.fundId));

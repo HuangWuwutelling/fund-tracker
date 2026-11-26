@@ -20,6 +20,7 @@ import { readFileSync, existsSync, readdirSync } from 'fs';
 // @ts-expect-error 同上
 import { resolve } from 'path';
 import dayjs from 'dayjs';
+import { isPendingTx } from './calculator';
 import {
   generateDailyReturns,
   generateMonthlyReturns,
@@ -94,7 +95,7 @@ function navHistoryFor(fundIdx: number): NavRecord[] {
  */
 function expectedCumAt(fundIdx: number, date: string): number {
   const fund = FUNDS[fundIdx]!;
-  const txs = TRANSACTIONS.filter((t) => t.fundId === fund.id && t.status === 'confirmed' && t.date <= date);
+  const txs = TRANSACTIONS.filter((t) => t.fundId === fund.id && !isPendingTx(t) && t.date <= date);
   let shares = 0;
   let totalBuy = 0;
   let totalSellNet = 0;
