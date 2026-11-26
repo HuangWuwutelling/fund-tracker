@@ -14,7 +14,8 @@
 
 - **只用 node 环境 vitest**（`vite.config.ts` 的 `include: ['src/**/*.test.ts']`、`environment: 'node'`）。不引入 jsdom / @testing-library。
 - **不碰 `Transaction` 类型与任何持久化结构**。
-- **不改任何金额计算口径**——只把「这笔分红值多少钱」收成**一个实现**：抽出共享的 `dividendValue(tx)`（`src/utils/calculator.ts`），三处（首页卡片的 `calcDividendTotal`、年化的 `calcXIRR`、落地页的分红统计条）都走它。**不要**把落地页改成无条件 `Math.max(...)` —— `calcDividendTotal` 是 `amount > 0` 早退结构，那会造出第三种写法，正是本计划要消灭的分叉。
+- **金额计算口径只允许一处改动** —— 把「这笔分红值多少钱」收成**一个实现**：抽出共享的 `dividendValue(tx)`（`src/utils/calculator.ts`），三处（首页卡片的 `calcDividendTotal`、年化的 `calcXIRR`、落地页的分红统计条）都走它。**不要**把落地页改成无条件 `Math.max(...)` —— `calcDividendTotal` 是 `amount > 0` 早退结构，那会造出第三种写法，正是本计划要消灭的分叉。
+  唯一的口径变化：`calcXIRR` 的分红取值统一到 `dividendValue` 后，在「`amount > 0` 且 `shares × nav > amount`」这一区间与改前相差约 `5e-5 × nav` ≈ 0.0001 元/笔 —— 两位小数不可见，且新值（`amount` = 真实成交额）更准确。
 - **`noUncheckedIndexedAccess: true`**（`tsconfig.app.json:18`）——判"某键是否存在"一律用 `Object.prototype.hasOwnProperty.call(...)`，不能靠索引取值判空。
 - **日期用本地时区**——用 `utils/formatter.ts` 的 `today()`，**不用** `toISOString()`（那是 UTC，UTC+8 早上 8 点前会算错一天）。
 - **「待确认」判定只有一个定义**——`isPendingTx()`（本计划 Task 1 抽出），任何地方判断 confirmed 都用 `!isPendingTx(tx)`，**不用** `t.status === 'confirmed'`（`Transaction.status` 是可选字段，初始持仓与旧数据没有它）。
