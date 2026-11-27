@@ -1,5 +1,5 @@
 import type { Fund, Transaction, DcaPlan, DailySnapshot, Platform, NavRecord } from '../types';
-import { calcShares, onlyConfirmed, isInPlanWindow } from './calculator';
+import { calcShares, onlyConfirmed, isInPlanWindow, roundShares } from './calculator';
 import { FUND_TYPE_LABELS } from '../types';
 import { countTradingDays } from './navLookup';
 import { buildNavIndex, navOnOrBefore, type NavIndex } from './navSeries';
@@ -90,15 +90,15 @@ export function generateFundDailyReturns(
     while (txIdx < sortedTxs.length && sortedTxs[txIdx]!.date <= date) {
       const tx = sortedTxs[txIdx]!;
       if (tx.type === 'buy') {
-        shares += tx.shares;
+        shares = roundShares(shares + tx.shares);
         totalBuy += tx.amount;
       } else if (tx.type === 'sell') {
-        shares -= tx.shares;
+        shares = roundShares(shares - tx.shares);
         totalSellNet += tx.amount - tx.fee;
       } else if (tx.type === 'dividend') {
         // 现金分红与红利再投资独立：amount > 0 视为现金；shares > 0 视为再投
         if (tx.amount > 0) totalCashDiv += tx.amount;
-        if (tx.shares > 0) shares += tx.shares;
+        if (tx.shares > 0) shares = roundShares(shares + tx.shares);
       }
       txIdx++;
     }

@@ -212,3 +212,73 @@ describe('fundPosition —— 单只基金的头寸', () => {
     expect(single).toEqual(positions[1]);
   });
 });
+
+/**
+ * 已清仓的基金 —— 界面层契约（真实事故 2026-11-27，账本 008163）。
+ *
+ * 用户报的现象：基金详情页的「持仓成本 / 当前市值 / 最新净值日盈亏」显示成
+ * `3.588240815588506e-13` 这种一长串数字。
+ *
+ * 机制：AntD 的 `Statistic` 内部格式化器（antd/es/statistic/Number.js:19-24）
+ * 对 `String(value)` 跑 `/^(-?)(\d*)(\.(\d+))?$/` —— **科学计数法匹配不上**，
+ * 于是原样把字符串吐出来。所以「极小但非零」的值会以原始科学计数法示人。
+ *
+ * 上游根因是份额/成本的浮点累加残差（见 calculator.test.ts 的同名用例）：
+ * 买入 12440.9467 + 红利再投 57.61 与分两笔卖出 12488.78 + 9.7767 十进制上
+ * 精确相等，浮点累加后却剩 3.4639e-13 份。
+ *
+ * 这条用例钉住**界面读的那几个数**必须是精确的 0 —— 否则 AntD 会把它们
+ * 以科学计数法原样显示出来。
+ */
+describe('已清仓的基金 —— 头寸各项必须精确为 0', () => {
+  /** 008163 的真实交易序列（金额/份额原样取自用户备份） */
+  const SOLD_OUT: Transaction[] = [
+    { ...buy({ id: 'b1', date: '2026-08-26', amount: 1575, shares: 1516.4645, nav: 0 }) },
+    { ...buy({ id: 'b2', date: '2026-09-01', amount: 200, shares: 189.9335, nav: 1.053 }) },
+    { ...buy({ id: 'b3', date: '2026-09-08', amount: 200, shares: 192.0123, nav: 1.0416 }) },
+    { ...buy({ id: 'b4', date: '2026-09-11', amount: 10000, shares: 9575.7924, nav: 1.0443 }) },
+    { ...buy({ id: 'b5', date: '2026-09-18', amount: 1000, shares: 966.744, nav: 1.0344 }) },
+    { id: 'd1', fundId: 'f1', type: 'dividend', date: '2026-11-06', amount: 62.898598, fee: 0, shares: 57.61, nav: 0 },
+    { id: 's1', fundId: 'f1', type: 'sell', date: '2026-11-19', amount: 14104.828132, fee: 0, shares: 12488.78, nav: 1.1294 },
+    { id: 's2', fundId: 'f1', type: 'sell', date: '2026-11-19', amount: 11.04180498, fee: 0, shares: 9.7767, nav: 1.1294 },
+  ];
+
+  const input = {
+    funds: [fund({ id: 'f1', currentNav: 1.1324 })],
+    transactions: SOLD_OUT,
+    navHistoryOf: () => A_SHARE_NAV,
+    mode: 'auto' as const,
+  };
+
+  it('份额 / 成本 / 市值 / 收益率 / 年化 全部精确为 0', () => {
+    const p = fundPosition(input, 'f1');
+    if (!p) throw new Error('基金 f1 应该存在');
+    expect(p.shares).toBe(0);
+    expect(p.cost).toBe(0);
+    expect(p.marketValue).toBe(0);
+    expect(p.totalReturn).toBe(0);
+    expect(p.returnRate).toBe(0);
+    expect(p.xirr).toBe(0);
+    expect(p.avgCost).toBe(0);
+  });
+
+  it('这些值不会以科学计数法示人（AntD Statistic 会原样输出）', () => {
+    const p = fundPosition(input, 'f1');
+    if (!p) throw new Error('基金 f1 应该存在');
+    // AntD 的内部格式化器匹配不上就原样输出 —— 所以值必须是普通十进制串
+    const ANT_PATTERN = /^(-?)(\d*)(\.(\d+))?$/;
+    for (const [name, v] of Object.entries({
+      shares: p.shares, cost: p.cost, marketValue: p.marketValue,
+      totalReturn: p.totalReturn, returnRate: p.returnRate, xirr: p.xirr,
+    })) {
+      expect(String(v), `${name} 不该以科学计数法示人`).toMatch(ANT_PATTERN);
+    }
+  });
+
+  it('组合合计不受这只基金影响', () => {
+    const { totals } = portfolioView(input);
+    expect(totals.totalValue).toBe(0);
+    expect(totals.totalCost).toBe(0);
+    expect(totals.totalReturnRate).toBe(0);
+  });
+});

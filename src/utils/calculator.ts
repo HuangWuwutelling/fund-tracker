@@ -30,10 +30,29 @@ export function onlyConfirmed(transactions: Transaction[]): Transaction[] {
   return transactions.filter((t) => !isPendingTx(t));
 }
 
+/**
+ * 份额按**数据精度**归一（4 位小数）。
+ *
+ * 为什么需要：份额在数据模型里就是 4 位小数 —— 建单时最后才把 `shares` 舍入到
+ * 4 位（`txFormModel.ts`），卖出超额校验的容差也是 `0.0001`。但二进制浮点累加
+ * 会留下 ~1e-13 的残差。
+ *
+ * 真实事故（2026-11-27，账本 008163 南方标普红利低波50ETF联接A）：买入
+ * 12440.9467 + 红利再投 57.61 = 12498.5567 份，11-19 分两笔卖出 12488.78 +
+ * 9.7767 = 12498.5567 份 —— **十进制上精确相等**，浮点累加后却剩 3.4639e-13 份。
+ * 于是「已清仓」没被识别成 0：成本也剩 3.59e-13，收益率 = 3.34e-14 / 3.59e-13
+ * = **+9.32%**（纯垃圾），市值残差被当成非零终值 → 年化 XIRR **58.88%**。
+ *
+ * 按数据精度归一**不是近似**：4 位小数的量累加完按 4 位归一 = 精确的十进制和。
+ */
+export function roundShares(shares: number): number {
+  return Math.round(shares * 1e4) / 1e4;
+}
+
 /** 计算某只基金的持有份额（按日期排序，加法交换律保证结果正确） */
 export function calcShares(transactions: Transaction[]): number {
   const sorted = [...transactions].sort((a, b) => a.date.localeCompare(b.date));
-  return sorted.reduce((sum, tx) => {
+  const sum = sorted.reduce((sum, tx) => {
     switch (tx.type) {
       case 'buy':
         return sum + tx.shares;
@@ -45,6 +64,7 @@ export function calcShares(transactions: Transaction[]): number {
         return sum;
     }
   }, 0);
+  return roundShares(sum);
 }
 
 /** 计算某只基金的持仓成本（卖出时按成本比例扣减）
@@ -63,7 +83,7 @@ export function calcCost(transactions: Transaction[]): number {
     switch (tx.type) {
       case 'buy':
         totalCost += tx.amount;
-        totalShares += tx.shares;
+        totalShares = roundShares(totalShares + tx.shares);
         break;
       case 'sell': {
         // 按平均成本比例扣减，卖出不超过实际持有
@@ -71,15 +91,19 @@ export function calcCost(transactions: Transaction[]): number {
           const actualSell = Math.min(tx.shares, totalShares);
           const avgCost = totalCost / totalShares;
           totalCost -= avgCost * actualSell;
-          totalShares -= actualSell;
+          totalShares = roundShares(totalShares - actualSell);
         }
         break;
       }
       case 'dividend':
-        totalShares += tx.shares;
+        totalShares = roundShares(totalShares + tx.shares);
         break;
     }
   }
+
+  // 已清仓 → 成本精确为 0。持 0 份时成本恒为 0；留着浮点残差会让收益率拿两个
+  // 极小数相除，得出 +9.32% 这种垃圾（见 roundShares 的说明）。
+  if (totalShares === 0) return 0;
 
   return Math.max(0, totalCost);
 }

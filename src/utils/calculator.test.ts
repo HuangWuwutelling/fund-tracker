@@ -10,6 +10,7 @@ import {
   calcMarketValue,
   calcReturn,
   calcReturnRate,
+  calcXIRR,
   onlyConfirmed,
   isPendingTx,
 } from './calculator';
@@ -473,5 +474,68 @@ describe('组合口径 —— 1000 元买入 / 卖 400 份 / 净值 1.2', () => 
     expect(marketValue).toBeCloseTo(720, 10);
     expect(totalReturn).toBeCloseTo(120, 10);
     expect(calcReturnRate(totalReturn, cost)).toBeCloseTo(20, 10);
+  });
+});
+
+/**
+ * 浮点残差 —— 全部卖出后必须精确归零。
+ *
+ * 真实事故（2026-11-27，用户账本 008163 南方标普红利低波50ETF联接A）：
+ * 买入 12440.9467 份 + 红利再投 57.61 份 = 12498.5567 份，
+ * 11-19 分两笔卖出 12488.78 + 9.7767 = 12498.5567 份 —— **十进制上精确相等**。
+ *
+ * 但二进制浮点累加后剩下 3.4639e-13 份，于是「已清仓」没被识别成 0：
+ *   成本残差 3.5882e-13 → 收益率 = 3.34e-14 / 3.5882e-13 = **+9.32%**（纯垃圾）
+ *   市值残差 3.9225e-13 → 年化 XIRR 拿它当终值 → **58.88%**
+ *
+ * 而市值/收益本身被格式化到两位小数，显示成 0.00 —— 于是界面看起来"持仓是个
+ * 很小但不是 0 的值"，比例类指标却是彻底错误的。
+ *
+ * 修法不是加 epsilon，而是**按数据精度归一**：份额在数据模型里就是 4 位小数
+ * （建单时最后才把 shares 舍入到 4 位；卖出超额校验的容差也是 0.0001），
+ * 所以 4 位小数的量累加完按 4 位归一 = 精确的十进制和，不是近似。
+ */
+describe('浮点残差 —— 全部卖出后份额与成本精确归零', () => {
+  /** 008163 的真实交易序列（金额/份额原样取自用户备份） */
+  const SOLD_OUT: Transaction[] = [
+    mkTx({ id: 'b1', type: 'buy', date: '2026-08-26', amount: 1575, shares: 1516.4645, nav: 0 }),
+    mkTx({ id: 'b2', type: 'buy', date: '2026-09-01', amount: 200, shares: 189.9335, nav: 1.053 }),
+    mkTx({ id: 'b3', type: 'buy', date: '2026-09-08', amount: 200, shares: 192.0123, nav: 1.0416 }),
+    mkTx({ id: 'b4', type: 'buy', date: '2026-09-11', amount: 10000, shares: 9575.7924, nav: 1.0443 }),
+    mkTx({ id: 'b5', type: 'buy', date: '2026-09-18', amount: 1000, shares: 966.744, nav: 1.0344 }),
+    mkTx({ id: 'd1', type: 'dividend', date: '2026-11-06', amount: 62.898598, shares: 57.61, nav: 0 }),
+    mkTx({ id: 's1', type: 'sell', date: '2026-11-19', amount: 14104.828132, shares: 12488.78, nav: 1.1294 }),
+    mkTx({ id: 's2', type: 'sell', date: '2026-11-19', amount: 11.04180498, shares: 9.7767, nav: 1.1294 }),
+  ];
+
+  it('份额精确为 0（不是 3.46e-13）', () => {
+    expect(calcShares(SOLD_OUT)).toBe(0);
+  });
+
+  it('成本精确为 0（不是 3.59e-13）', () => {
+    expect(calcCost(SOLD_OUT)).toBe(0);
+  });
+
+  it('派生指标不再出现垃圾数字：收益率 0%、年化 0%', () => {
+    const shares = calcShares(SOLD_OUT);
+    const cost = calcCost(SOLD_OUT);
+    const marketValue = calcMarketValue(shares, 1.1324);
+    const totalReturn = calcReturn(marketValue, cost);
+    // 修复前：收益率 = 3.34e-14 / 3.5882e-13 = +9.3158…%
+    expect(calcReturnRate(totalReturn, cost)).toBe(0);
+    // 修复前：市值残差 3.92e-13 被当成非零终值 → 58.88%
+    expect(calcXIRR(SOLD_OUT, marketValue)).toBe(0);
+  });
+
+  it('未清仓的持仓不受影响 —— 归一不是近似', () => {
+    // 4 位小数的份额累加后按 4 位归一 = 精确十进制和
+    const txs = [
+      mkTx({ id: 'x1', type: 'buy', date: '2026-01-05', amount: 1000, shares: 800.0001, nav: 1 }),
+      mkTx({ id: 'x2', type: 'buy', date: '2026-01-06', amount: 500, shares: 400.0002, nav: 1 }),
+      mkTx({ id: 'x3', type: 'sell', date: '2026-01-10', amount: 300, shares: 200.0001, nav: 1 }),
+    ];
+    expect(calcShares(txs)).toBe(1000.0002);
+    // 比例成本法：剩 1000.0002/1200.0003 份 → 剩 1500 × 0.83333…% ≈ 1250
+    expect(calcCost(txs)).toBeCloseTo(1250, 2);
   });
 });
