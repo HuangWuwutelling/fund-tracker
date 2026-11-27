@@ -6,7 +6,7 @@ import dayjs from 'dayjs';
 import { v4 as uuid } from 'uuid';
 import { useStore } from '../stores';
 import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
-import { formatMoney, formatDate } from '../utils/formatter';
+import { formatMoney, formatDate, moneyStatFormatter } from '../utils/formatter';
 import { isInPlanWindow } from '../utils/calculator';
 import { FREQUENCY_LABELS } from '../types';
 import NavLink from '../components/NavLink';
@@ -252,7 +252,7 @@ export default function DcaPlans() {
               <Statistic
                 title="累计投入"
                 value={stats.totalInvested}
-                precision={2}
+                formatter={moneyStatFormatter}
                 prefix="💰"
                 valueStyle={{ color: '#1677ff', fontWeight: 600 }}
               />

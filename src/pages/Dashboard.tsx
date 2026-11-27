@@ -6,16 +6,17 @@ import dayjs from 'dayjs';
 import { useStore } from '../stores';
 import { calcXIRR, calcDividendTotal, calcTodayInvested } from '../utils/calculator';
 import { portfolioView } from '../utils/portfolio';
-import { today } from '../utils/formatter';
 import { isNonTradingDay } from '../utils/chineseHolidays';
 import ReturnCalendar from '../components/ReturnCalendar';
 import MarketIndices from '../components/MarketIndices';
 import {
   formatMoney,
   formatPercent,
+  moneyStatFormatter,
   pnlColor,
   pnlBg,
   formatMoneyShortWithSign,
+  today,
 } from '../utils/formatter';
 import { computeFundIndicators } from '../utils/indicators';
 import {
@@ -433,7 +434,7 @@ export default function Dashboard() {
             <Statistic
               title="累计分红"
               value={totalDividend}
-              precision={2}
+              formatter={moneyStatFormatter}
               valueStyle={{ color: totalDividend > 0 ? pnlColor(totalDividend) : undefined, fontWeight: 600 }}
               prefix="💰"
             />
@@ -448,7 +449,7 @@ export default function Dashboard() {
             <Statistic
               title={`今日投入（${todayStr}）`}
               value={todayInvested.total}
-              precision={2}
+              formatter={moneyStatFormatter}
               valueStyle={{ color: todayInvested.total > 0 ? '#1677ff' : undefined, fontWeight: 600 }}
               prefix={<FundOutlined />}
             />

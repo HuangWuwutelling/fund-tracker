@@ -8,6 +8,8 @@ import {
   pnlBg,
   formatMoneyShort,
   formatMoneyShortWithSign,
+  moneyStatFormatter,
+  percentStatFormatter,
 } from './formatter';
 
 /*
@@ -268,5 +270,50 @@ describe('formatMoneyShortWithSign —— 简写 + ¥ 前缀', () => {
     // 现状锁定：前缀是无条件拼上去的，脏值会渲染成 "¥—"。
     // 重构若改成非法值返回 "—"，本用例会失败 —— 那属于展示口径变更。
     expect(formatMoneyShortWithSign(NaN)).toBe('¥—');
+  });
+});
+
+/**
+ * Statistic 的 formatter —— 统一四舍五入，不走 AntD 自带的 precision。
+ *
+ * AntD 内部对精度是**截断**（antd/es/statistic/Number.js:30）：
+ *   decimal = decimal.padEnd(precision,'0').slice(0, precision)
+ * 而 formatMoney / toFixed 是四舍五入。同一笔「累计分红 72.238598」在 Dashboard
+ * 显示 72.24、在基金详情页显示 72.23 —— 差 1 分钱。金额按四舍五入显示才是对的。
+ */
+describe('Statistic 的 formatter —— 统一四舍五入', () => {
+  /** 复刻 antd/es/statistic/Number.js 的截断行为，用作对照 */
+  const antdTruncate = (v: number | string, precision = 2): string => {
+    const val = String(v);
+    const cells = val.match(/^(-?)(\d*)(\.(\d+))?$/);
+    if (!cells || val === '-') return val;
+    let decimal = cells[4] || '';
+    decimal = decimal.padEnd(precision, '0').slice(0, precision > 0 ? precision : 0);
+    return `${cells[1]}${cells[2] || '0'}${decimal ? `.${decimal}` : ''}`;
+  };
+
+  it('moneyStatFormatter：四舍五入 + 千分位', () => {
+    expect(moneyStatFormatter(72.238598)).toBe('72.24');
+    expect(moneyStatFormatter(1234.5678)).toBe('1,234.57');
+    expect(moneyStatFormatter(0)).toBe('0.00');
+    expect(moneyStatFormatter(-1234.5678)).toBe('-1,234.57');
+  });
+
+  it('moneyStatFormatter：非数字原样透传（Statistic 用 "—" 表示无数据）', () => {
+    expect(moneyStatFormatter('—')).toBe('—');
+    expect(moneyStatFormatter(NaN)).toBe('NaN');
+  });
+
+  it('percentStatFormatter：四舍五入到 2 位，不带符号（% 由 suffix 补）', () => {
+    expect(percentStatFormatter(5.678)).toBe('5.68');
+    expect(percentStatFormatter(-3.456)).toBe('-3.46');
+    expect(percentStatFormatter('—')).toBe('—');
+  });
+
+  it('对照：AntD 的 precision 会截断，同一数值两者差一分 —— 这就是不能用它的原因', () => {
+    expect(antdTruncate(72.238598)).toBe('72.23');
+    expect(moneyStatFormatter(72.238598)).toBe('72.24');
+    expect(antdTruncate(5.678)).toBe('5.67');
+    expect(percentStatFormatter(5.678)).toBe('5.68');
   });
 });

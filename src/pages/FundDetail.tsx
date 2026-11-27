@@ -13,7 +13,7 @@ import { useStore } from '../stores';
 import { onlyConfirmed } from '../utils/calculator';
 import { fundPosition } from '../utils/portfolio';
 import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
-import { pnlColor, formatDate, formatMoney, formatPercent } from '../utils/formatter';
+import { pnlColor, formatDate, formatMoney, formatPercent, moneyStatFormatter, percentStatFormatter } from '../utils/formatter';
 import { lookupNavOnOrBefore } from '../utils/navLookup';
 import { confirmPendingTx } from '../utils/autoConfirm';
 import { usableNavSeries } from '../utils/navPair';
@@ -425,17 +425,16 @@ export default function FundDetail() {
 
       <Row gutter={16} style={{ marginTop: 16 }}>
         <Col xs={12} sm={12} md={8}>
-          <Card><Statistic title="持仓成本" value={summary.cost} precision={2} /></Card>
+          <Card><Statistic title="持仓成本" value={summary.cost} formatter={moneyStatFormatter} /></Card>
         </Col>
         <Col xs={12} sm={12} md={8}>
-          <Card><Statistic title="当前市值" value={summary.marketValue} precision={2} /></Card>
+          <Card><Statistic title="当前市值" value={summary.marketValue} formatter={moneyStatFormatter} /></Card>
         </Col>
         <Col xs={12} sm={12} md={8}>
           <Card>
             <Statistic
               title="收益/收益率"
               value={summary.totalReturn}
-              precision={2}
               valueStyle={{ color: pnlColor(summary.totalReturn) }}
               formatter={(value) => (
                 <span>
@@ -460,7 +459,7 @@ export default function FundDetail() {
               <Statistic
                 title={LATEST_NAV_PNL_LABEL}
                 value={summary.dailyPnl ?? '—'}
-                precision={2}
+                formatter={moneyStatFormatter}
                 valueStyle={{ color: summary.dailyPnl !== null ? pnlColor(summary.dailyPnl) : undefined }}
               />
               {summary.dailyPnl !== null ? (
@@ -477,7 +476,7 @@ export default function FundDetail() {
               title="年化收益率（XIRR）"
               value={summary.xirr}
               suffix="%"
-              precision={2}
+              formatter={percentStatFormatter}
               valueStyle={{ color: pnlColor(summary.xirr) }}
             />
           </Card>
@@ -487,7 +486,7 @@ export default function FundDetail() {
             <Statistic
               title="累计分红"
               value={summary.dividend}
-              precision={2}
+              formatter={moneyStatFormatter}
               valueStyle={{ color: summary.dividend > 0 ? pnlColor(summary.dividend) : undefined }}
             />
           </Card>
@@ -508,7 +507,7 @@ export default function FundDetail() {
                     </span>
                   }
                   value={indicators.ma250Deviation ?? '—'}
-                  precision={2}
+                  formatter={percentStatFormatter}
                   suffix={indicators.ma250Deviation !== null ? '%' : ''}
                   valueStyle={{
                     color: ma250Level ? TEMPERATURE_COLORS[ma250Level] : '#999',

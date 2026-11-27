@@ -16,6 +16,34 @@ export function formatPercent(value: number, decimals = 2): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(decimals)}%`;
 }
 
+/**
+ * AntD `<Statistic>` 的**金额** formatter —— 统一走 `formatMoney`（四舍五入 + 千分位）。
+ *
+ * 为什么不用 Statistic 自带的 `precision`：AntD 内部对精度是**截断**而非四舍五入
+ * （`antd/es/statistic/Number.js:30` —— `decimal.padEnd(precision,'0').slice(0, precision)`）。
+ * 同一笔「累计分红 72.238598」在 Dashboard 显示 72.24、在基金详情页显示 72.23 —— 差 1 分钱。
+ * 金额按四舍五入显示才是对的，所以所有金额类 Statistic 都走这里。
+ *
+ * 注意：给了 `formatter` 之后 AntD 会**忽略** `precision`，两者不要同时写。
+ */
+export function moneyStatFormatter(value: number | string): string {
+  const n = Number(value);
+  // 非数字（'—' 之类）原样透传 —— formatMoney 只接受数字
+  return Number.isFinite(n) ? formatMoney(n) : String(value);
+}
+
+/**
+ * AntD `<Statistic>` 的**纯数字** formatter —— 四舍五入到 2 位小数，不带符号、不带千分位。
+ *
+ * 给已经带 `suffix="%"` 的百分比场景用（收益率、MA250 偏离度）：AntD 把 suffix 渲染在
+ * formatter **之外**（`antd/es/statistic/Statistic.js:84-87`），所以这里只出数字，
+ * "%" 由 suffix 补上。
+ */
+export function percentStatFormatter(value: number | string): string {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(2) : String(value);
+}
+
 /** 格式化日期 */
 export function formatDate(date: string): string {
   if (!date) return '—';

@@ -16,7 +16,7 @@ import {
   type NavHistorySource,
 } from '../utils/reportGenerator';
 import type { UsQdiiFilterMode } from '../utils/navPair';
-import { formatMoney, formatPercent, pnlColor } from '../utils/formatter';
+import { formatMoney, formatPercent, pnlColor, moneyStatFormatter, percentStatFormatter } from '../utils/formatter';
 import { FREQUENCY_LABELS } from '../types';
 import type { Fund, Transaction } from '../types';
 import NavLink from '../components/NavLink';
@@ -74,7 +74,7 @@ function WeeklyReportView() {
             <Statistic
               title="本周收益"
               value={report.totalReturn}
-              precision={2}
+              formatter={moneyStatFormatter}
               valueStyle={{ color: pnlColor(report.totalReturn), fontWeight: 600, fontSize: 24 }}
             />
           </Card>
@@ -85,7 +85,7 @@ function WeeklyReportView() {
               title="本周收益率"
               value={report.returnRate}
               suffix="%"
-              precision={2}
+              formatter={percentStatFormatter}
               valueStyle={{ color: pnlColor(report.returnRate), fontWeight: 600, fontSize: 24 }}
             />
           </Card>
@@ -190,7 +190,7 @@ function MonthlyReportView() {
             <Statistic
               title="本月收益"
               value={report.totalReturn}
-              precision={2}
+              formatter={moneyStatFormatter}
               valueStyle={{ color: pnlColor(report.totalReturn) }}
             />
           </Card>
@@ -201,7 +201,7 @@ function MonthlyReportView() {
               title="本月收益率"
               value={report.returnRate}
               suffix="%"
-              precision={2}
+              formatter={percentStatFormatter}
               valueStyle={{ color: pnlColor(report.returnRate) }}
             />
           </Card>

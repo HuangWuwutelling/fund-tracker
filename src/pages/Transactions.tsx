@@ -4,7 +4,7 @@ import { PlusOutlined, ImportOutlined } from '@ant-design/icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../stores';
 import { STORAGE_WRITE_FAILED_MSG } from '../utils/storage';
-import { formatMoney, formatDate, pnlColor, today } from '../utils/formatter';
+import { formatMoney, formatDate, pnlColor, today, moneyStatFormatter } from '../utils/formatter';
 import { confirmPendingTx } from '../utils/autoConfirm';
 import { calcTodayInvested, dividendValue } from '../utils/calculator';
 import TransactionFormModal from '../components/TransactionFormModal';
@@ -234,7 +234,7 @@ export default function Transactions() {
               title="净投入（买 - 卖）"
               value={summary.net}
               prefix="¥"
-              precision={2}
+              formatter={moneyStatFormatter}
               valueStyle={{ fontSize: 16, color: pnlColor(summary.net) === '#666' ? undefined : pnlColor(summary.net) }}
             />
           </Card>
