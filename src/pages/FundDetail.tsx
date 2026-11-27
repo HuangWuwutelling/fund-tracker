@@ -57,6 +57,11 @@ echarts.use([
 const EMPTY_POSITION = {
   shares: 0, cost: 0, avgCost: 0, marketValue: 0, totalReturn: 0, returnRate: 0,
   dailyPnl: null, currNavDate: '', prevNavDate: '', xirr: 0, dividend: 0,
+  history: {
+    invested: 0, proceeds: 0, cashDividend: 0, reinvested: 0,
+    consumedCost: 0, realized: 0, realizedRate: 0,
+  },
+  isClosed: false,
 };
 
 export default function FundDetail() {
@@ -489,6 +494,35 @@ export default function FundDetail() {
               formatter={moneyStatFormatter}
               valueStyle={{ color: summary.dividend > 0 ? pnlColor(summary.dividend) : undefined }}
             />
+          </Card>
+        </Col>
+        {/* 累计已实现收益 —— 清仓后持仓归零，上面那些卡全是 0，历史赚的钱就
+            看不见了（真实事故 2026-11-27，账本 008163 清仓后只剩「累计分红」）。
+            这张卡任何时候都在：持有中时它是「已经落袋的那部分」，清仓后它就是
+            全部历史收益。口径见 utils/calculator.ts 的 positionHistory。 */}
+        <Col xs={12} sm={12} md={8}>
+          <Card>
+            <Statistic
+              title="累计已实现收益"
+              value={summary.history.realized}
+              formatter={(value) => (
+                <span>
+                  {moneyStatFormatter(Number(value))}
+                  {/* 收益率的分母是「已卖出那部分消耗的成本」—— 没卖过时没有分母，
+                      显示 0.00% 会让人以为收益率是零（明明收到了现金分红） */}
+                  {summary.history.consumedCost > 0 && (
+                    <span style={{ fontSize: 14, marginLeft: 8, color: pnlColor(summary.history.realized) }}>
+                      {summary.history.realizedRate.toFixed(2)}%
+                    </span>
+                  )}
+                </span>
+              )}
+              valueStyle={{ color: pnlColor(summary.history.realized), fontWeight: 600 }}
+            />
+            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+              累计投入 ¥{formatMoney(summary.history.invested)}
+              {summary.isClosed && <Tag style={{ marginLeft: 6 }}>已清仓</Tag>}
+            </div>
           </Card>
         </Col>
       </Row>

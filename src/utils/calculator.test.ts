@@ -11,6 +11,8 @@ import {
   calcReturn,
   calcReturnRate,
   calcXIRR,
+  calcClosedXIRR,
+  positionHistory,
   onlyConfirmed,
   isPendingTx,
 } from './calculator';
@@ -537,5 +539,92 @@ describe('浮点残差 —— 全部卖出后份额与成本精确归零', () =>
     expect(calcShares(txs)).toBe(1000.0002);
     // 比例成本法：剩 1000.0002/1200.0003 份 → 剩 1500 × 0.83333…% ≈ 1250
     expect(calcCost(txs)).toBeCloseTo(1250, 2);
+  });
+});
+
+/**
+ * 历史已实现盈亏 —— 「清仓后又买回」必须扛得住。
+ *
+ * 用户场景（2026-11-27）：008163 清仓后若过一段时间又开始投资，第一轮赚的钱
+ * 不能被第二轮的投入冲掉。
+ *
+ * 为什么不用「累计收回 − 累计投入」：第二轮的投入还没卖回来，那个公式会算出
+ * **负数**（把还没实现的投入当成了亏损）。分摊法只看「已卖出那部分份额的
+ * 成本」，所以两轮互不干扰。
+ */
+describe('positionHistory —— 清仓后又买回，已实现收益不被新一轮投入冲掉', () => {
+  /** 008163 的真实交易序列（金额/份额原样取自用户备份） */
+  const ROUND_1: Transaction[] = [
+    mkTx({ id: 'b1', type: 'buy', date: '2026-08-26', amount: 1575, shares: 1516.4645, nav: 0 }),
+    mkTx({ id: 'b2', type: 'buy', date: '2026-09-01', amount: 200, shares: 189.9335, nav: 1.053 }),
+    mkTx({ id: 'b3', type: 'buy', date: '2026-09-08', amount: 200, shares: 192.0123, nav: 1.0416 }),
+    mkTx({ id: 'b4', type: 'buy', date: '2026-09-11', amount: 10000, shares: 9575.7924, nav: 1.0443 }),
+    mkTx({ id: 'b5', type: 'buy', date: '2026-09-18', amount: 1000, shares: 966.744, nav: 1.0344 }),
+    mkTx({ id: 'd0', type: 'dividend', date: '2026-08-07', amount: 2.55, shares: 0, nav: 1.0322 }),
+    mkTx({ id: 'd1', type: 'dividend', date: '2026-09-07', amount: 6.79, shares: 0, nav: 1.0412 }),
+    mkTx({ id: 'd2', type: 'dividend', date: '2026-11-06', amount: 62.898598, shares: 57.61, nav: 0 }),
+    mkTx({ id: 's1', type: 'sell', date: '2026-11-19', amount: 14104.828132, shares: 12488.78, nav: 1.1294 }),
+    mkTx({ id: 's2', type: 'sell', date: '2026-11-19', amount: 11.04180498, shares: 9.7767, nav: 1.1294 }),
+  ];
+
+  it('刚清仓：已实现收益 = 卖出净额 + 现金分红 − 已消耗成本', () => {
+    const h = positionHistory(ROUND_1);
+    expect(h.invested).toBeCloseTo(12975, 6);
+    expect(h.proceeds).toBeCloseTo(14115.869937, 6);
+    expect(h.cashDividend).toBeCloseTo(9.34, 6);
+    // 红利再投不是现金 —— 价值已在卖出所得里，不能再加一次
+    expect(h.reinvested).toBeCloseTo(62.898598, 6);
+    expect(h.consumedCost).toBeCloseTo(12975, 6);
+    expect(h.realized).toBeCloseTo(1150.209937, 4);
+    expect(h.realizedRate).toBeCloseTo(8.8648, 3);
+  });
+
+  it('清仓后又开始投资：已实现收益不变（第二轮的投入不算进已实现）', () => {
+    const withRound2 = [
+      ...ROUND_1,
+      mkTx({ id: 'b6', type: 'buy', date: '2026-12-01', amount: 5000, shares: 4424.77876, nav: 1.13 }),
+    ];
+    const h = positionHistory(withRound2);
+    // 第一轮赚的 1150.21 一点没少
+    expect(h.realized).toBeCloseTo(1150.209937, 4);
+    expect(h.realizedRate).toBeCloseTo(8.8648, 3);
+    // 累计投入变了（第二轮的 5000 在里面），但已消耗成本没变
+    expect(h.invested).toBeCloseTo(17975, 6);
+    expect(h.consumedCost).toBeCloseTo(12975, 6);
+    // 当前持仓是第一轮的残余 0 + 第二轮的份额 → 与已实现收益互不干扰
+    expect(calcShares(withRound2)).toBeCloseTo(4424.77876, 4);
+  });
+
+  it('没卖过时：已实现收益 = 收到的现金分红（分母为 0 → 收益率不显示）', () => {
+    const h = positionHistory([
+      mkTx({ id: 'x1', type: 'buy', date: '2026-01-05', amount: 5500, shares: 5000, nav: 1.1 }),
+      mkTx({ id: 'x2', type: 'dividend', date: '2026-06-05', amount: 234.85, shares: 0, nav: 1.2 }),
+    ]);
+    expect(h.realized).toBeCloseTo(234.85, 6);
+    expect(h.consumedCost).toBeCloseTo(0, 6);
+    expect(h.realizedRate).toBe(0); // 没有分母 —— 界面上不显示这个百分比
+  });
+});
+
+/**
+ * 已清仓仓位的年化 —— 修复前被 `currentValue <= 0` 的早退直接干掉（返回 0），
+ * 于是「我在清仓的这只基金上年化多少」在界面上完全看不见。
+ */
+describe('calcClosedXIRR —— 已清仓也能算年化', () => {
+  it('投入 → 清仓的现金流算出年化（无终值，终点是最后一笔现金流）', () => {
+    const txs = [
+      mkTx({ id: 'b1', type: 'buy', date: '2026-01-05', amount: 10000, shares: 10000, nav: 1 }),
+      mkTx({ id: 's1', type: 'sell', date: '2026-07-05', amount: 11000, shares: 10000, nav: 1.1 }),
+    ];
+    const closed = calcClosedXIRR(txs);
+    expect(closed).not.toBe(0);
+    // 半年赚 10% → 年化约 21%（(1.1)^2 − 1）
+    expect(closed).toBeCloseTo(21, 0);
+    // 终值口径下（持仓还在）走的是另一个入口
+    expect(calcXIRR(txs, 11000)).not.toBe(0);
+  });
+
+  it('没有交易 → 0', () => {
+    expect(calcClosedXIRR([])).toBe(0);
   });
 });

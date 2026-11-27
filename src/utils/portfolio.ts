@@ -1,5 +1,6 @@
 import type { Fund, Transaction, NavRecord } from '../types';
 import {
+  calcClosedXIRR,
   calcCost,
   calcDividendTotal,
   calcLatestNavPnl,
@@ -9,6 +10,8 @@ import {
   calcShares,
   calcXIRR,
   onlyConfirmed,
+  positionHistory,
+  type PositionHistory,
 } from './calculator';
 import type { UsQdiiFilterMode } from './navPair';
 
@@ -38,6 +41,16 @@ export interface FundPosition {
   prevNavDate: string;
   xirr: number;
   dividend: number;
+  /**
+   * 历史（**已实现**）盈亏 —— 清仓后持仓归零时，这是唯一还看得到收益的地方。
+   * 口径见 utils/calculator.ts 的 positionHistory。
+   */
+  history: PositionHistory;
+  /**
+   * 已清仓 = 当前没有持仓（份额 0）但**曾经持有过**（有已确认的买入历史）。
+   * 「从未建仓」（只添加未买入 / 买入待确认）不算清仓。
+   */
+  isClosed: boolean;
 }
 
 export interface PortfolioTotals {
@@ -82,6 +95,9 @@ function positionOf(
   const totalReturn = calcReturn(marketValue, cost);
   const returnRate = calcReturnRate(totalReturn, cost);
   const latest = calcLatestNavPnl(fund, navHistory, fundTransactions, mode);
+  const history = positionHistory(fundTransactions);
+  // 已清仓 = 份额 0 且曾经持有过（invested > 0）。「从未建仓」不算。
+  const isClosed = shares === 0 && history.invested > 0;
 
   return {
     fund,
@@ -94,8 +110,12 @@ function positionOf(
     dailyPnl: latest.pnl,
     currNavDate: latest.currDate,
     prevNavDate: latest.prevDate,
-    xirr: calcXIRR(fundTransactions, marketValue),
+    // 已清仓 → 终值是 0，按「投入 → 清仓」的现金流算年化（calcClosedXIRR）；
+    // 否则按「持仓 + 终值」的口径。两者共享同一个求解器。
+    xirr: isClosed ? calcClosedXIRR(fundTransactions) : calcXIRR(fundTransactions, marketValue),
     dividend: calcDividendTotal(fundTransactions),
+    history,
+    isClosed,
   };
 }
 

@@ -238,7 +238,11 @@ describe('已清仓的基金 —— 头寸各项必须精确为 0', () => {
     { ...buy({ id: 'b3', date: '2026-09-08', amount: 200, shares: 192.0123, nav: 1.0416 }) },
     { ...buy({ id: 'b4', date: '2026-09-11', amount: 10000, shares: 9575.7924, nav: 1.0443 }) },
     { ...buy({ id: 'b5', date: '2026-09-18', amount: 1000, shares: 966.744, nav: 1.0344 }) },
-    { id: 'd1', fundId: 'f1', type: 'dividend', date: '2026-11-06', amount: 62.898598, fee: 0, shares: 57.61, nav: 0 },
+    // 现金分红（shares = 0 → 真拿到手的现金）
+    { id: 'd0', fundId: 'f1', type: 'dividend', date: '2026-08-07', amount: 2.55, fee: 0, shares: 0, nav: 1.0322 },
+    { id: 'd1', fundId: 'f1', type: 'dividend', date: '2026-09-07', amount: 6.79, fee: 0, shares: 0, nav: 1.0412 },
+    // 红利再投（shares = 57.61 → 拿到的是份额，价值已含在卖出所得里）
+    { id: 'd2', fundId: 'f1', type: 'dividend', date: '2026-11-06', amount: 62.898598, fee: 0, shares: 57.61, nav: 0 },
     { id: 's1', fundId: 'f1', type: 'sell', date: '2026-11-19', amount: 14104.828132, fee: 0, shares: 12488.78, nav: 1.1294 },
     { id: 's2', fundId: 'f1', type: 'sell', date: '2026-11-19', amount: 11.04180498, fee: 0, shares: 9.7767, nav: 1.1294 },
   ];
@@ -258,8 +262,26 @@ describe('已清仓的基金 —— 头寸各项必须精确为 0', () => {
     expect(p.marketValue).toBe(0);
     expect(p.totalReturn).toBe(0);
     expect(p.returnRate).toBe(0);
-    expect(p.xirr).toBe(0);
     expect(p.avgCost).toBe(0);
+    // 年化不再是 0 —— 已清仓的年化按「投入 → 清仓」的现金流算（无终值）。
+    // 修复前：calcXIRR 的 `currentValue <= 0` 早退把它直接干掉了 → 年化 0，
+    // 于是「我在这只基金上赚了多少」在界面上完全看不见。
+    expect(p.isClosed).toBe(true);
+    expect(p.xirr).not.toBe(0);
+  });
+
+  it('历史已实现盈亏：卖出所得 + 现金分红 − 已消耗成本', () => {
+    const p = fundPosition(input, 'f1');
+    if (!p) throw new Error('基金 f1 应该存在');
+    // 投入 1575+200+200+10000+1000 = 12975；卖出净额 14104.828132+11.04180498；
+    // 现金分红 2.55+6.79（2026-11-06 那笔 shares=57.61 是红利再投，不是现金）
+    expect(p.history.invested).toBeCloseTo(12975, 6);
+    expect(p.history.proceeds).toBeCloseTo(14115.869937, 6);
+    expect(p.history.cashDividend).toBeCloseTo(9.34, 6);
+    expect(p.history.reinvested).toBeCloseTo(62.898598, 6);
+    expect(p.history.consumedCost).toBeCloseTo(12975, 6);
+    expect(p.history.realized).toBeCloseTo(1150.209937, 4);
+    expect(p.history.realizedRate).toBeCloseTo(8.8648, 3);
   });
 
   it('这些值不会以科学计数法示人（AntD Statistic 会原样输出）', () => {

@@ -108,6 +108,72 @@ export function calcCost(transactions: Transaction[]): number {
   return Math.max(0, totalCost);
 }
 
+/**
+ * 一只基金的历史（**已实现**）盈亏。
+ *
+ * 为什么需要：清仓后持仓归零，界面上的「持仓成本 / 当前市值 / 持仓收益」全是 0，
+ * 历史赚的钱就看不见了 —— 而账本里的买卖记录都还在（真实事故 2026-11-27，
+ * 账本 008163 清仓后只剩「累计分红」有数）。
+ *
+ * 口径（与 calcCost 的比例成本法同一套，所以「浮动 + 已实现」恒等于日历里的
+ * 累计收益）：
+ *   已消耗成本 = 累计买入金额 − 当前剩余成本      ← 已卖出那部分份额对应的成本
+ *   已实现收益 = 累计卖出净额 + 累计现金分红 − 已消耗成本
+ *
+ * 为什么不用「累计收回 − 累计投入」：那个公式只在**完全清仓**时成立。清仓后
+ * 又开始投资时，第二轮的投入还没卖回来，它会算出负数 —— 把还没实现的投入
+ * 当成了亏损。分摊法只看「已卖出那部分份额的成本」，所以第一轮赚的钱不会
+ * 被第二轮的投入冲掉。
+ *
+ * 红利再投**不是现金**：用户拿到的是份额，价值已经含在之后的卖出所得里，
+ * 所以不计入已实现收益（否则同一笔钱算两遍）。
+ */
+export interface PositionHistory {
+  /** 累计买入金额（用户实际付出的钱，fee 内扣口径） */
+  invested: number;
+  /** 累计卖出净额（成交额 − 手续费） */
+  proceeds: number;
+  /** 累计现金分红（真拿到手的现金） */
+  cashDividend: number;
+  /** 累计红利再投（份额 × 净值）—— 不是现金，价值已含在卖出所得里 */
+  reinvested: number;
+  /** 已卖出那部分份额消耗的成本 = 累计买入 − 当前剩余成本 */
+  consumedCost: number;
+  /** 已实现收益 = 卖出净额 + 现金分红 − 已消耗成本 */
+  realized: number;
+  /** 已实现收益率 %（已消耗成本为 0 时 0） */
+  realizedRate: number;
+}
+
+export function positionHistory(transactions: Transaction[]): PositionHistory {
+  const txs = onlyConfirmed(transactions);
+  let invested = 0;
+  let proceeds = 0;
+  let cashDividend = 0;
+  let reinvested = 0;
+  for (const tx of txs) {
+    if (tx.type === 'buy') invested += tx.amount;
+    else if (tx.type === 'sell') proceeds += tx.amount - tx.fee;
+    else if (tx.type === 'dividend') {
+      // 分红方式推断的判据只有一个：shares > 0 → 红利再投（见 CLAUDE.md）
+      if (tx.shares > 0) reinvested += dividendValue(tx);
+      else cashDividend += dividendValue(tx);
+    }
+  }
+  // 剩余成本用 calcCost —— 与「持仓成本」同一份实现，两处不可能对不上
+  const consumedCost = Math.max(0, invested - calcCost(txs));
+  const realized = proceeds + cashDividend - consumedCost;
+  return {
+    invested,
+    proceeds,
+    cashDividend,
+    reinvested,
+    consumedCost,
+    realized,
+    realizedRate: consumedCost > 0 ? (realized / consumedCost) * 100 : 0,
+  };
+}
+
 /** 计算当前市值 */
 export function calcMarketValue(shares: number, currentNav: number): number {
   // 防御：刚 addFund 还未拉到 NAV 时 currentNav === undefined，
@@ -228,59 +294,74 @@ export function calcDividendTotal(transactions: Transaction[]): number {
 }
 
 /**
- * 计算 XIRR（不规则现金流的年化收益率）
- * 约定（fee 内扣）:
+ * 交易 → 现金流序列（按日期升序）。
+ *
+ * 口径（fee 内扣）：
  *   - 买入: 用户总付出 = amount，现金流 = -amount
  *   - 卖出: 用户净收入 = amount - fee，现金流 = +(amount - fee)
- *   - 分红: 现金流 = +dividendValue(tx)（现金分红取 amount，红利再投资取 shares × nav）
- *   - currentValue 作为终值（正现金流）
- * 返回: 年化收益率(百分比,例如 12.5 表示 12.5%);无数据或不收敛返回 0
+ *   - **现金分红**: 现金流 = +dividendValue(tx)
+ *   - **红利再投不算现金流** —— 用户拿到的是份额，价值已经体现在持仓市值
+ *     （或之后的卖出所得）里，当成现金再加一次就是双重计算。
+ *     分红方式推断的判据只有一个：shares > 0 → 红利再投（见 CLAUDE.md）。
  */
-export function calcXIRR(transactions: Transaction[], currentValue: number): number {
-  if (transactions.length === 0 || currentValue <= 0) return 0;
-  transactions = onlyConfirmed(transactions);
-
+function buildCashFlows(transactions: Transaction[]): { t: number; amount: number }[] {
   const flows: { t: number; amount: number }[] = [];
-  for (const tx of transactions) {
+  for (const tx of onlyConfirmed(transactions)) {
     let amount = 0;
     if (tx.type === 'buy') amount = -tx.amount; // fee 内扣：用户总付出就是 amount
     else if (tx.type === 'sell') amount = tx.amount - tx.fee;
-    // 分红：与 calcDividendTotal 同一个实现（dividendValue）——现金分红取 amount，
-    // 红利再投资取 shares × nav
-    else if (tx.type === 'dividend') amount = dividendValue(tx);
+    else if (tx.type === 'dividend') {
+      // 只有**现金**分红（shares === 0）才是现金流。红利再投的价值已经含在
+      // 持仓市值 / 卖出所得里 —— 再当现金加一次就是双重计算。
+      amount = tx.shares > 0 ? 0 : dividendValue(tx);
+    }
     if (amount !== 0) {
       flows.push({ t: new Date(tx.date).getTime(), amount });
     }
   }
-  if (flows.length === 0) return 0;
-
   flows.sort((a, b) => a.t - b.t);
-  flows.push({ t: Date.now(), amount: currentValue });
+  return flows;
+}
 
-  const t0 = flows[0]!.t;
-  const tEnd = flows[flows.length - 1]!.t;
+/**
+ * 年化收益率求解器（Newton-Raphson + 二分兜底）。
+ *
+ * @param flows 现金流序列（已按时间升序）
+ * @param terminal 期末终值（可选）。**不给** = 没有终值 —— 已清仓仓位的口径，
+ *   终点就是最后一笔现金流的时间（而不是今天）。
+ */
+function solveAnnualized(
+  flows: { t: number; amount: number }[],
+  terminal?: { t: number; amount: number }
+): number {
+  if (flows.length === 0) return 0;
+  // 有终值时终值排在最后（t = now，最大）；没有终值时终点就是最后一笔现金流
+  const all = terminal ? [...flows, terminal] : flows;
+
+  const t0 = all[0]!.t;
+  const tEnd = all[all.length - 1]!.t;
   const totalDays = (tEnd - t0) / (24 * 60 * 60 * 1000);
 
   // 持仓不足 7 天：年化收益率无实际参考意义，返回 0
   if (totalDays < 7) return 0;
 
   // 必须有负现金流（投入），否则方程无解
-  if (!flows.some((f) => f.amount < 0)) return 0;
+  if (!all.some((f) => f.amount < 0)) return 0;
 
-  const years = flows.map((f) => (f.t - t0) / (365.25 * 24 * 60 * 60 * 1000));
+  const years = all.map((f) => (f.t - t0) / (365.25 * 24 * 60 * 60 * 1000));
 
   const npv = (r: number): number => {
     let sum = 0;
-    for (let i = 0; i < flows.length; i++) {
-      sum += flows[i]!.amount / Math.pow(1 + r, years[i]!);
+    for (let i = 0; i < all.length; i++) {
+      sum += all[i]!.amount / Math.pow(1 + r, years[i]!);
     }
     return sum;
   };
   const dnpv = (r: number): number => {
     let sum = 0;
-    for (let i = 0; i < flows.length; i++) {
+    for (let i = 0; i < all.length; i++) {
       const y = years[i]!;
-      sum -= flows[i]!.amount * y / Math.pow(1 + r, y + 1);
+      sum -= all[i]!.amount * y / Math.pow(1 + r, y + 1);
     }
     return sum;
   };
@@ -330,6 +411,36 @@ export function calcXIRR(transactions: Transaction[], currentValue: number): num
   }
 
   return r * 100;
+}
+
+/**
+ * 计算 XIRR（不规则现金流的年化收益率）—— **持仓还在**时的口径。
+ *
+ * 终值 = 当前市值。红利再投不算现金流（见 buildCashFlows）。
+ * 返回: 年化收益率(百分比,例如 12.5 表示 12.5%);无数据或不收敛返回 0
+ */
+export function calcXIRR(transactions: Transaction[], currentValue: number): number {
+  if (transactions.length === 0 || currentValue <= 0) return 0;
+  const flows = buildCashFlows(transactions);
+  if (flows.length === 0) return 0;
+  return solveAnnualized(flows, { t: Date.now(), amount: currentValue });
+}
+
+/**
+ * 已清仓仓位的年化收益率 —— **没有终值**（没有持仓了），按「投入 → 清仓」的
+ * 现金流算：投入是负、卖出净额与现金分红是正。
+ *
+ * 为什么要有这个：calcXIRR 的终值是当前市值，清仓后市值为 0 —— 而 0 作为终值
+ * 既算不出东西，也不该被当成「没有年化」。已清仓仓位的现金流本身是完整的
+ * （投入 → 收回），年化完全算得出来。
+ *
+ * 与 calcXIRR 共享同一个求解器（solveAnnualized），不重复实现。
+ */
+export function calcClosedXIRR(transactions: Transaction[]): number {
+  const flows = buildCashFlows(transactions);
+  if (flows.length === 0) return 0;
+  // 不给终值 —— 终点就是最后一笔现金流（清仓那天），不是今天
+  return solveAnnualized(flows);
 }
 
 /**

@@ -64,6 +64,11 @@ export default function Dashboard() {
     [funds, transactions, getNavHistory, usQdiiFilterMode],
   );
 
+  // 已清仓的基金（份额 0 但曾经持有过）不算持仓 —— 留在「持仓列表」里是噪声，
+  // 而且那一行的成本/市值/收益全是 0，看着像亏了。历史收益去各基金详情页看。
+  const heldPositions = useMemo(() => positions.filter((p) => !p.isClosed), [positions]);
+  const closedCount = positions.length - heldPositions.length;
+
   // 本轮刷新是否"一无所获"：跑过刷新、但没有一只基金拿到新净值。
   // 非交易日不算（休市时本来就该没有新净值，提示反而误导）。
   const freshNavCount = funds.filter((f) => freshNavFundIds.has(f.id)).length;
@@ -305,7 +310,7 @@ export default function Dashboard() {
               ¥{formatMoney(totals.totalValue)}
             </div>
             <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 8 }}>
-              持仓 {funds.length} 只 ｜ 成本 ¥{formatMoney(totals.totalCost)}
+              持仓 {heldPositions.length} 只 ｜ 成本 ¥{formatMoney(totals.totalCost)}
             </div>
           </Card>
         </Col>
@@ -624,7 +629,7 @@ export default function Dashboard() {
         extra={
           <Space>
             <span style={{ color: '#999', fontSize: 12 }}>
-              共 {funds.length} 只 ｜ 合计市值 {formatMoneyShortWithSign(totals.totalValue)}
+              共 {heldPositions.length} 只 ｜ 合计市值 {formatMoneyShortWithSign(totals.totalValue)}
             </span>
             <Button type="link" onClick={() => navigate('/funds')}>
               管理基金 →
@@ -633,7 +638,7 @@ export default function Dashboard() {
         }
       >
         <Table
-          dataSource={positions}
+          dataSource={heldPositions}
           columns={columns}
           rowKey={(record) => record.fund.id}
           pagination={false}
@@ -673,6 +678,11 @@ export default function Dashboard() {
             </Table.Summary>
           )}
         />
+        {closedCount > 0 && (
+          <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+            另有 {closedCount} 只已清仓的基金（历史收益见各基金详情页）
+          </div>
+        )}
       </Card>
     </div>
   );

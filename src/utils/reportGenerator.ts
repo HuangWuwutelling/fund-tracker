@@ -97,7 +97,10 @@ export function generateFundDailyReturns(
         totalSellNet += tx.amount - tx.fee;
       } else if (tx.type === 'dividend') {
         // 现金分红与红利再投资独立：amount > 0 视为现金；shares > 0 视为再投
-        if (tx.amount > 0) totalCashDiv += tx.amount;
+        // 只有**现金**分红才是流入。红利再投（shares > 0）用户拿到的是份额，
+        // 价值已经含在下方 `shares × nav` 里 —— 再加一次就是双重计算。
+        // 判据与 CLAUDE.md 的分红方式推断一致：shares > 0 → 红利再投。
+        if (tx.amount > 0 && tx.shares === 0) totalCashDiv += tx.amount;
         if (tx.shares > 0) shares = roundShares(shares + tx.shares);
       }
       txIdx++;

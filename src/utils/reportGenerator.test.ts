@@ -104,6 +104,32 @@ describe('generateFundDailyReturns - wealth change', () => {
     expect(out[1]!.totalReturn).toBeCloseTo(100, 6);
   });
 
+  it('红利再投 → 只算一次：份额进市值、分红不重复计', () => {
+    // 9/8 买 1000 @ 1.0 → 1000 份
+    // 9/9 红利再投：amount=100（= 100 份 × 1.0），shares=100 → 持 1100 份
+    // 9/10 全部卖出 1100 份 @ 1.0 → 收回 1100
+    // 真实收益 = 1100 − 1000 = 100（那笔 100 的分红价值已经在卖出所得里）
+    const navs = [nav('2025-09-08', 1.0), nav('2025-09-09', 1.0), nav('2025-09-10', 1.0)];
+    navOf = () => navs;
+    const txs = [
+      buy('2025-09-08', 1000, 1000, 1.0),
+      { id: 'd1', fundId: 'f1', type: 'dividend' as const, date: '2025-09-09', amount: 100, fee: 0, shares: 100, nav: 1.0 },
+      { id: 's1', fundId: 'f1', type: 'sell' as const, date: '2025-09-10', amount: 1100, fee: 0, shares: 1100, nav: 1.0 },
+    ];
+
+    const out = generateFundDailyReturns(fund('f1'), txs, navOf, '2025-09-10');
+
+    // totalReturn 是**当日增量**（cumReturn 的差）：
+    //   9/9  cumReturn = 1100×1.0 − 1000 + 0 = 100（红利再投不计入现金分红）→ 增量 100
+    //   9/10 cumReturn = 0 − 1000 + 1100 = 100 → 增量 0（按原值卖出，无新增收益）
+    // 修复前：totalCashDiv 把 amount=100 也加了 → 9/9 的 cumReturn = 200（同一笔钱算两遍）
+    expect(out[1]!.totalReturn).toBeCloseTo(100, 6);
+    expect(out[1]!.perFund[0]!.returnAmount).toBeCloseTo(100, 6);
+    expect(out[2]!.totalReturn).toBeCloseTo(0, 6);
+    // 累计（增量之和 = cumReturn 末值）= 100 —— 修复前是 200
+    expect(out.reduce((sum, d) => sum + d.totalReturn, 0)).toBeCloseTo(100, 6);
+  });
+
   it('cash dividend → cumReturn bumps by amount on dividend date', () => {
     // 9/8 buy 1000 @ 1.0，9/9 现金分红 amount=50，shares=0
     // cumReturn(9/8) = 0
